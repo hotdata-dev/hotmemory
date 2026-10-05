@@ -1,74 +1,96 @@
-# Plan: phase 0, documents and measurements
+# Plan: phase 1, the storage contract, offline
 
-Status: open, 2026-10-05. This file holds the current phase only and is replaced when the
-phase closes. The phases themselves are in `roadmap.md`. Section numbers below refer to
-`brief.md`.
+Status: open, 2026-10-05. This file holds the current phase only. The next phase replaces it. The phases themselves are in `roadmap.md`. Section numbers below refer to
+`brief.md`. Phase 0 closed with PR #2, and its results are in `docs/guarantees.md`.
 
 ## Goal
 
-When this phase closes, a reader can learn the contracts and the guarantees from two public
-files, a contributor can run one command that checks the documents, an engineer can run the
-library's target against a RuntimeDB container on a laptop, agents working here have one
-instruction file, and every guarantee marked to measure in the brief has a number and a
-date.
+When this phase closes, the record and the `Store` protocol exist as typed Python. The
+in-memory driver passes one conformance suite that proves each answered storage
+guarantee. The four frozen surfaces and the ledger are guarded by tests. `make verify`
+runs the full offline check in under five seconds, and CI runs the same target on every
+pull request. Nothing in this phase touches the network.
+
+## Decisions this plan takes
+
+The brief leaves these open. The plan takes a default for each, and the owner can change a
+default before the issue opens.
+
+- `MemoryStore` takes an embedder at construction: a callable from a list of texts to a
+  list of vectors. `search` with query text and no embedder raises. The tests pass a
+  deterministic fake embedder. This matches phase 0, which showed that fused retrieval on
+  Hotdata needs an embedder from the caller.
+- The store takes a clock at construction, a callable that returns the current UTC time.
+  The default reads the system clock. The tests pass a fixed clock, so the suite needs no
+  real time (section 6).
+- The filter is a frozen dataclass with one optional field per allowed key. An unknown key
+  cannot be expressed, and an unsupported value type raises.
+- The package uses a `src/` layout with `py.typed`. It builds with hatchling, but this
+  phase does not publish it. PyPI publishing comes after a working initial version.
 
 ## Tasks
 
-GitHub issue #1 holds these tasks as a checklist. They are worked in order on one branch,
-and one pull request closes the issue.
+Worked in order on one branch. Each task is one commit or a few.
 
-1. `docs/contracts.md`: sections 3 and 4 of the brief in public form, with the measured
-   platform facts kept and no private name.
-2. `docs/guarantees.md`: every row of section 5 with its state, and placeholders M1 to M6.
-3. `README.md` revised to point at both files, and `CONTRIBUTING.md` with the one command
-   and the rules from section 6. The make targets are named `verify` and `local-up`.
-4. `Makefile` with `verify` running a link check over `README.md` and `docs/`, and a
-   minimal `pyproject.toml` holding only the development tools so `verify` has something
-   to run.
-5. `docs/local.md` and `make local-up`: the container command from the RuntimeDB README,
-   the three environment variables (`HOTDATA_API_URL`, `HOTDATA_WORKSPACE`, and the
-   container's `RUNTIMEDB_AUTH__ALLOW_UNAUTHENTICATED=true`), and how to point the library
-   at it.
-6. `scripts/measure_cloud.py`: creates a throwaway database named by an environment
-   variable, runs M1, M2, and M3, prints the numbers, deletes the database. Inline script
-   metadata (PEP 723) so `uv run scripts/measure_cloud.py` works on its own.
-7. `scripts/measure_local.py`: against a running container whose URL comes from the
-   environment, runs M4, M5, and M6, prints the numbers. Same inline metadata. The script
-   does not start the container.
-8. `AGENTS.md` with the commands, the rules, and pointers to `plan.md`, `roadmap.md`,
-   `contracts.md`, and `guarantees.md`, restating nothing they say. `CLAUDE.md` is one
-   `@AGENTS.md` line plus any Claude-only note.
-9. The numbers and dates written into `docs/guarantees.md`, and any guarantee the numbers
-   contradict rewritten in the brief. The scripts are run by the repository owner: the
-   cloud script needs an API key and a workspace, the local script needs Docker Desktop.
+1. Package layout: `src/hotmemory/` with `__init__.py` and `py.typed`. `pyproject.toml`
+   turns packaging on, at version `0.0.0`, with no runtime dependencies. `mypy`, `pytest`,
+   and `pytest-socket` join the dev group.
+2. `make verify` runs ruff, ruff format in check mode, strict mypy over `src/` and
+   `tests/`, the offline suite, and the link check, in that order (section 6.1).
+   `CONTRIBUTING.md` lists the five steps.
+3. The record: a frozen dataclass for schema version 1, with the fields and types in
+   `docs/contracts.md`. It refuses a namespace label that contains `.`, derives `id`, and
+   exposes the normalization that deduplication uses.
+4. The `Store` protocol and the filter: `put`, `get`, `history`, `list`, `search`,
+   `delete`, `list_namespaces`, and `writer`, with the filter keys in
+   `docs/contracts.md`.
+5. `MemoryStore`: revisions and supersession, exact deduplication on normalized content,
+   whole-label namespace matching, `forget_after` hiding, cosine distance through the
+   embedder, and a buffered `writer` that returns the ids it flushed (section 3.3).
+6. The conformance suite: one test for each answered guarantee in `docs/guarantees.md`
+   that concerns the storage contract, parametrized over drivers. Today the only driver is
+   `MemoryStore`. Guarantees of the memory contract wait for phase 3.
+7. The frozen surfaces: four tests that compare `__all__`, the `Store` method set, the
+   record fields and types, and the filter keys against literal sets (section 6.3). Each
+   failure message says that the change needs a changelog entry. `CHANGELOG.md` starts
+   here, with an Unreleased section.
+8. The ledger test: it reads `docs/guarantees.md`. A test named in the Test column that
+   does not exist makes it fail (section 6.4). The Test column gets a name for each row that task
+   6 proves. The other rows say which phase proves them.
+9. CI: a GitHub Actions workflow that installs uv and runs `make verify` on each pull
+   request and on each push to `main`.
+10. Docs: `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `docs/contracts.md` audited
+    against the code, with any decision above that changes a public statement written
+    into `docs/contracts.md`.
 
 ## Acceptance criteria
 
-- AC1. M1 to M6 have numbers and dates in `docs/guarantees.md`. Proven by reading the
-  file.
-- AC2. `make verify` passes on a clean tree and fails when a link in `README.md` or under
-  `docs/` is broken. Proven by breaking one link by hand and recording the failure in the
-  pull request.
-- AC3. `make local-up` starts a container that answers a query, with no API key and no
-  control plane. Proven by the M6 script's first call.
-- AC4. No file under `docs/` or at the root names a private repository, a customer, or a
-  deployment detail. Proven by a grep for the known names, recorded in the pull request.
-- AC5. `AGENTS.md` and `CLAUDE.md` exist, and `AGENTS.md` contains no sentence that
-  `plan.md`, `roadmap.md`, `contracts.md`, or `guarantees.md` already contains. Proven by
-  review.
+- AC1. `make verify` passes on a clean tree in under five seconds and runs the five steps
+  in order. Proven by its timed output in the pull request.
+- AC2. A change to a frozen surface makes its test fail. Proven by removing one
+  element from each surface by hand and recording the four failures in the pull request.
+- AC3. A rename of a named test makes the ledger test fail. Proven by hand, recorded in
+  the pull request.
+- AC4. Every answered storage-contract row in `docs/guarantees.md` names a test that
+  passes.
+- AC5. The offline suite passes with sockets disabled. Proven by `pytest-socket`'s
+  `--disable-socket` flag in `make verify`.
+- AC6. CI runs `make verify` on the pull request and passes.
+- AC7. No committed file names a private repository, a customer, or a deployment detail.
+  Proven by a grep for the known names, recorded in the pull request.
 
 ## Verification
 
 - Per commit: `make verify`.
-- Before the pull request: the two measurement scripts, once each, with their output
-  pasted into `docs/guarantees.md`.
-- The cloud script costs a throwaway database for a few minutes. The local script costs
-  nothing but time.
+- Before the pull request: the hand checks for AC2 and AC3, and the name grep for AC7.
+- This phase needs no credentials and no Docker.
 
 ## Stop and ask if
 
-- M1 shows an index does not serve rows loaded after its build. That changes section 3.4
-  of the brief before phase 2 can start.
-- M6 shows a managed-table call the driver needs does not work against the bare container.
-  That decides whether local use needs a code path or only configuration.
-- M5 shows the three-stage query is slower than a scan at every size.
+- A guarantee marked answered cannot be given a test that observes it against
+  `MemoryStore`.
+- A frozen surface needs to differ from `docs/contracts.md`.
+- `docs/contracts.md` leaves an operation's behavior ambiguous, for example whether `list`
+  takes an as-of time, and the choice changes a public statement.
+- `MemoryStore` needs a field that is not in the record.
+- `make verify` cannot stay under five seconds without tiers.
