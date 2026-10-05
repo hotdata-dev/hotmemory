@@ -13,7 +13,7 @@ pull request. Nothing in this phase touches the network.
 
 ## Decisions this plan takes
 
-The brief leaves these open. The owner confirmed each one on 2026-10-05, and issue #4
+The brief leaves these open. The owner agreed to each one on 2026-10-05, and issue #4
 repeats them.
 
 - `MemoryStore` takes an embedder at construction: a callable from a list of texts to a
