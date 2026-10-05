@@ -44,8 +44,9 @@ API owns and loads from files. The facts below shape the contracts. A fact marke
 - A provider-backed vector index cannot share its table with any other index. The engine
   refuses the second index. A plain vector index and a BM25 index can share a table.
   [measured 2026-08-18]
-- RuntimeDB, the Hotdata query engine, runs from a container image on a laptop. The
-  driver can use it for development. [local.md](local.md) tells you how.
+- RuntimeDB, the Hotdata query engine, runs from a container image on a laptop. The bare
+  image refuses to create a managed database until a Postgres metadata catalog is
+  configured. [measured 2026-10-05] [local.md](local.md) gives the state of local use.
 
 The contracts take these decisions from the facts:
 
@@ -140,7 +141,7 @@ Version 1 ships two drivers.
   filter that it does not model. The offline test suite runs against it, and it is the
   reference for the other driver.
 - `HotdataStore` uses one managed database, two tables per schema version, keyed loads, a
-  serialized writer, and the retrieval query below. With a local RuntimeDB container, it
+  serialized writer, and the retrieval query below. If a local RuntimeDB serves managed tables, it
   is also the development driver.
 
 ### Tables and retrieval
@@ -227,5 +228,6 @@ These three rules apply to every operation:
   language, for extraction that must run centrally, or for scope enforcement above the API
   key.
 - Extraction on the server. `capture` takes a callable and does nothing more.
-- A third driver. A local RuntimeDB container covers offline development.
+- A third driver. Offline development uses a local RuntimeDB, if measurement M6 shows that
+  it serves managed tables.
 - Access control beyond scope filtering.

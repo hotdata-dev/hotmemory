@@ -1,8 +1,9 @@
 # Run against a local RuntimeDB
 
 RuntimeDB is the Hotdata query engine. It runs from a container image on a laptop, with a
-SQLite catalog and filesystem storage, and with no cloud service. The library can use a
-local container in place of a cloud workspace. This page tells you how.
+SQLite catalog and filesystem storage, and with no cloud service. This page tells you how
+to start it and how to point the library at it. The bare image does not serve managed
+tables yet. The last section gives the details.
 
 ## Start the container
 
@@ -62,7 +63,16 @@ export HOTDATA_API_KEY=local
 
 ## What works locally
 
-Measurement M6 in [guarantees.md](guarantees.md) records which framework calls work
-against a bare container. Until M6 runs, treat each of these as unknown: managed databases,
-keyed loads, BM25 indexes, and vector indexes. A provider-backed vector index needs an
-embedding provider, and the bare container configures none.
+The bare container answers `GET /health`. It refuses a query that names no database. It
+refuses to create a managed database, with this error:
+
+```text
+managed catalogs require `ducklake.metadata_pg_url` to be configured
+```
+
+This result is from 2026-10-05, with the `latest` image pulled on that day
+(digest `sha256:302371bb1923`). The library writes
+only to managed tables, so it cannot use the bare container. A managed table needs a
+Postgres database for the DuckLake metadata. Measurement M6 in
+[guarantees.md](guarantees.md) records each call. A provider-backed vector index also
+needs an embedding provider, and the bare container configures none.
