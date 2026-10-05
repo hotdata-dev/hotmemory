@@ -4,7 +4,8 @@
 # inside runtimedb and on the host. Presigned upload URLs carry that address, so a
 # client on the host can upload.
 #
-# Nothing is kept in a volume. `make local-down` removes every container and its data.
+# No named volume. `make local-down` removes every container and its anonymous volumes, so
+# the data is gone.
 
 name: hotmemory
 

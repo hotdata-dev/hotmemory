@@ -275,7 +275,7 @@ def writer_process(process: int, db_id: str, barrier: Any, results: Any) -> None
             )
             for n in range(M3_LOADS_PER_PROCESS)
         ]
-        barrier.wait()
+        barrier.wait(timeout=60)
         started = time.perf_counter()
         for path in paths:
             serialized_load(client, db, path, stats)
@@ -294,7 +294,8 @@ def measure_lock(client: HotdataClient, db: ManagedDatabase, work: Path) -> list
     barrier = context.Barrier(2)
     results = context.Queue()
     processes = [
-        context.Process(target=writer_process, args=(n, db.id, barrier, results)) for n in (1, 2)
+        context.Process(target=writer_process, args=(n, db.id, barrier, results), daemon=True)
+        for n in (1, 2)
     ]
     for process in processes:
         process.start()

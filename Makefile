@@ -29,7 +29,7 @@ local-up:
 	exit 1
 
 local-down:
-	docker compose down
+	docker compose down -v
 
 local-pull:
 	docker compose pull
