@@ -17,15 +17,15 @@ make verify
 `make verify` is the full check. CI runs the same target. If it passes on your machine, it
 passes in CI. It has no tiers, because the full check takes less than five seconds.
 
-Today, `make verify` runs these checks, in this order:
+`make verify` runs these checks, in this order:
 
 1. `ruff check` over the Python files.
 2. `ruff format --check` over the Python files and the Python code blocks in Markdown.
-3. The link check. It reads each relative link in the Markdown files at the root and
+3. Strict `mypy` over `src/` and `tests/`.
+4. The offline test suite, with `pytest --disable-socket`. A test that opens a network
+   socket fails.
+5. The link check. It reads each relative link in the Markdown files at the root and
    under `docs/`. A link to a file that does not exist makes it fail.
-
-When the library exists, strict `mypy` and the offline test suite join `make verify`
-before the link check.
 
 ## The other targets
 
