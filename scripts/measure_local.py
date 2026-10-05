@@ -426,7 +426,7 @@ def measure_scale(
                 try:
                     seconds = timed(
                         lambda kwargs=kwargs, table=table: client.create_index(
-                            db, table, timeout_s=1800, **kwargs
+                            db, table, timeout_s=1800, poll_interval_s=0.2, **kwargs
                         )
                     )
                     builds[label] = f"{seconds:.1f} s"

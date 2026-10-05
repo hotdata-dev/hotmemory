@@ -7,11 +7,11 @@ rules, and points to the files that hold everything else.
 
 ```sh
 make verify       # the full check; run it before each commit
-make local-up     # start a local RuntimeDB container
-make local-down   # stop it
+make local-up     # start the local RuntimeDB stack (Postgres, RustFS, engine)
+make local-down   # stop it and delete its data
 cp .env.template .env            # then fill in .env; it is ignored by git
 uv run --env-file .env scripts/measure_cloud.py   # M1 to M3
-uv run --env-file .env scripts/measure_local.py   # M4 to M6; needs a running container
+uv run --env-file .env scripts/measure_local.py   # M4 to M6; needs make local-up
 uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the cloud
 ```
 

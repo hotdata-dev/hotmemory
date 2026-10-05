@@ -4,7 +4,7 @@
 
 - [uv](https://docs.astral.sh/uv/) installs the development tools and runs the scripts.
 - GNU Make runs the targets below.
-- Docker Desktop runs the local RuntimeDB container. You need it only for `make local-up`.
+- Docker Desktop runs the local RuntimeDB stack. You need it only for `make local-up`.
 
 ## The one command
 
@@ -32,8 +32,9 @@ before the link check.
 | Target | What it does |
 |---|---|
 | `make verify` | Runs every check above. |
-| `make local-up` | Starts a local RuntimeDB container. [docs/local.md](docs/local.md) tells you how to point the library at it. |
-| `make local-down` | Stops the local container. |
+| `make local-up` | Starts the local RuntimeDB stack: Postgres, RustFS, and the engine. [docs/local.md](docs/local.md) tells you how to point the library at it. |
+| `make local-down` | Stops the stack and deletes its data. |
+| `make local-pull` | Downloads newer images for the stack. |
 
 ## Rules of the harness
 
