@@ -20,7 +20,7 @@ passes in CI. It has no tiers, because the full check takes less than five secon
 Today, `make verify` runs these checks, in this order:
 
 1. `ruff check` over the Python files.
-2. `ruff format --check` over the Python files.
+2. `ruff format --check` over the Python files and the Python code blocks in Markdown.
 3. The link check. It reads each relative link in `README.md`, in `CONTRIBUTING.md`, and
    under `docs/`. A link to a file that does not exist makes it fail.
 
@@ -32,7 +32,8 @@ before the link check.
 | Target | What it does |
 |---|---|
 | `make verify` | Runs every check above. |
-| `make local-up` | Starts a local RuntimeDB container. |
+| `make local-up` | Starts a local RuntimeDB container. [docs/local.md](docs/local.md) tells you how to point the library at it. |
+| `make local-down` | Stops the local container. |
 
 ## Rules of the harness
 

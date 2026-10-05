@@ -30,6 +30,8 @@ LangGraph agent, or any process with a Hotdata API key can use it.
   operations, and the platform facts behind them.
 - [docs/guarantees.md](docs/guarantees.md): each behavior that a consumer can rely on, its
   state, and its proof.
+- [docs/local.md](docs/local.md): how to run the library against a local RuntimeDB
+  container.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the one command that checks a change, and the rules
   of the test suite.
 - [docs/internal/](docs/internal/brief.md): the design brief, the survey, the roadmap, and
