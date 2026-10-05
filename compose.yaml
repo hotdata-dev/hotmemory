@@ -1,0 +1,57 @@
+# Local RuntimeDB for development and measurements. Started by `make local-up`.
+#
+# runtimedb shares the network namespace of storage, so 127.0.0.1:9000 is RustFS both
+# inside runtimedb and on the host. Presigned upload URLs carry that address, so a
+# client on the host can upload.
+#
+# No named volume. `make local-down` removes every container and its anonymous volumes, so
+# the data is gone.
+
+name: hotmemory
+
+services:
+  catalog:
+    image: ${POSTGRES_IMAGE:-postgres:17}
+    environment:
+      POSTGRES_USER: runtimedb
+      POSTGRES_PASSWORD: runtimedb
+      POSTGRES_DB: runtimedb
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "runtimedb", "-d", "runtimedb"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  storage:
+    image: ${RUSTFS_IMAGE:-rustfs/rustfs:latest}
+    environment:
+      RUSTFS_ACCESS_KEY: hotmemory
+      RUSTFS_SECRET_KEY: hotmemory-local
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:${LOCAL_PORT:-3000}:3000"
+
+  runtimedb:
+    image: ${RUNTIMEDB_IMAGE:-ghcr.io/hotdata-dev/runtimedb:latest}
+    network_mode: service:storage
+    depends_on:
+      catalog:
+        condition: service_healthy
+      storage:
+        condition: service_started
+    environment:
+      RUNTIMEDB_SECRET_KEY: ${RUNTIMEDB_SECRET_KEY:-}
+      RUNTIMEDB_AUTH__ALLOW_UNAUTHENTICATED: "true"
+      RUNTIMEDB_ENGINE__SQL_WRITES: "true"
+      RUNTIMEDB_CATALOG__TYPE: postgres
+      RUNTIMEDB_CATALOG__HOST: catalog
+      RUNTIMEDB_CATALOG__PORT: "5432"
+      RUNTIMEDB_CATALOG__DATABASE: runtimedb
+      RUNTIMEDB_CATALOG__USER: runtimedb
+      RUNTIMEDB_CATALOG__PASSWORD: runtimedb
+      RUNTIMEDB_STORAGE__TYPE: s3
+      RUNTIMEDB_STORAGE__BUCKET: runtimedb
+      RUNTIMEDB_STORAGE__REGION: us-east-1
+      RUNTIMEDB_STORAGE__ENDPOINT: http://127.0.0.1:9000
+      RUNTIMEDB_STORAGE__ACCESS_KEY: hotmemory
+      RUNTIMEDB_STORAGE__SECRET_KEY: hotmemory-local

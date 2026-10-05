@@ -8,29 +8,39 @@ phase closes. The phases themselves are in `roadmap.md`. Section numbers below r
 
 When this phase closes, a reader can learn the contracts and the guarantees from two public
 files, a contributor can run one command that checks the documents, an engineer can run the
-library's target against a RuntimeDB container on a laptop, and every guarantee marked to
-measure in the brief has a number and a date.
+library's target against a RuntimeDB container on a laptop, agents working here have one
+instruction file, and every guarantee marked to measure in the brief has a number and a
+date.
 
 ## Tasks
 
-Each task is one issue once the repository has a remote. Each is one commit or a few.
+GitHub issue #1 holds these tasks as a checklist. They are worked in order on one branch,
+and one pull request closes the issue.
 
 1. `docs/contracts.md`: sections 3 and 4 of the brief in public form, with the measured
    platform facts kept and no private name.
-2. `docs/guarantees.md`: every row of section 5 with its state, and the measurement
-   placeholders M1 to M6.
+2. `docs/guarantees.md`: every row of section 5 with its state, and placeholders M1 to M6.
 3. `README.md` revised to point at both files, and `CONTRIBUTING.md` with the one command
-   and the rules from section 6.
-4. `Makefile` with `verify` running the link check over `README.md` and `docs/`, which is
-   the only documentation check that exists before code does.
-5. `docs/local.md` and a `make local-up` target: the container command from the RuntimeDB
-   README, the three environment variables, and how to point the library at it.
-6. `scripts/measure_cloud.py`: creates a throwaway database, runs M1, M2, and M3, prints
-   the numbers, deletes the database.
-7. `scripts/measure_local.py`: starts the container with the SQL writes flag on, runs M4,
-   M5, and M6, prints the numbers.
-8. The numbers and dates written into `docs/guarantees.md`, and any guarantee that the
-   numbers contradict rewritten in the brief.
+   and the rules from section 6. The make targets are named `verify` and `local-up`.
+4. `Makefile` with `verify` running a link check over `README.md` and `docs/`, and a
+   minimal `pyproject.toml` holding only the development tools so `verify` has something
+   to run.
+5. `docs/local.md` and `make local-up`: the container command from the RuntimeDB README,
+   the three environment variables (`HOTDATA_API_URL`, `HOTDATA_WORKSPACE`, and the
+   container's `RUNTIMEDB_AUTH__ALLOW_UNAUTHENTICATED=true`), and how to point the library
+   at it.
+6. `scripts/measure_cloud.py`: creates a throwaway database named by an environment
+   variable, runs M1, M2, and M3, prints the numbers, deletes the database. Inline script
+   metadata (PEP 723) so `uv run scripts/measure_cloud.py` works on its own.
+7. `scripts/measure_local.py`: against a running container whose URL comes from the
+   environment, runs M4, M5, and M6, prints the numbers. Same inline metadata. The script
+   does not start the container.
+8. `AGENTS.md` with the commands, the rules, and pointers to `plan.md`, `roadmap.md`,
+   `contracts.md`, and `guarantees.md`, restating nothing they say. `CLAUDE.md` is one
+   `@AGENTS.md` line plus any Claude-only note.
+9. The numbers and dates written into `docs/guarantees.md`, and any guarantee the numbers
+   contradict rewritten in the brief. The scripts are run by the repository owner: the
+   cloud script needs an API key and a workspace, the local script needs Docker Desktop.
 
 ## Acceptance criteria
 
@@ -43,6 +53,9 @@ Each task is one issue once the repository has a remote. Each is one commit or a
   control plane. Proven by the M6 script's first call.
 - AC4. No file under `docs/` or at the root names a private repository, a customer, or a
   deployment detail. Proven by a grep for the known names, recorded in the pull request.
+- AC5. `AGENTS.md` and `CLAUDE.md` exist, and `AGENTS.md` contains no sentence that
+  `plan.md`, `roadmap.md`, `contracts.md`, or `guarantees.md` already contains. Proven by
+  review.
 
 ## Verification
 

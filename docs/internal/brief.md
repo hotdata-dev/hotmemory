@@ -1,6 +1,7 @@
 # Brief: hotmemory, agent memory as tables on Hotdata
 
-Status: draft, revised 2026-10-05, phases moved to `roadmap.md` and `plan.md`. Nothing in this brief is built. It fixes the two
+Status: draft, revised 2026-10-05, phases moved to `roadmap.md` and `plan.md`, and the phase 0
+measurements applied (results in `docs/guarantees.md`). Nothing in this brief is built. It fixes the two
 contracts, the guarantees behind them, and the harness that proves them, before the first
 line of code. The revision applies section 4 of `survey.md`, in this folder.
 
@@ -46,12 +47,15 @@ for MCP are separate work and are listed under out of scope.
 The library runs inside the consumer's process. The consumer imports it, and it calls the
 Hotdata API over HTTPS with the consumer's API key. There is no hotmemory server. The hosted
 API that production needs already exists, and it is Hotdata's own API: files, loads,
-indexes, and query. The same library runs against a RuntimeDB container on a laptop with
-three environment variables: `HOTDATA_API_URL` pointing at the container,
-`HOTDATA_WORKSPACE` set to any id so the framework skips the workspace listing that a bare
-RuntimeDB does not serve, and the container started with
-`RUNTIMEDB_AUTH__ALLOW_UNAUTHENTICATED=true`. Whether every managed-table call the driver
-makes works in that mode is measurement M6. A separate memory service in front of Hotdata is what section 8 rules
+indexes, and query. The same library runs against a local RuntimeDB on a laptop, but
+not against the bare engine image. [measured, M6] A managed table needs a Postgres catalog,
+because DuckLake metadata lives only in Postgres, and storage that can presign, because the
+framework uploads parquet through presigned URLs. The local stack in `docs/local.md` is
+three containers: Postgres, RustFS, and the engine sharing the RustFS network namespace so
+the presigned address resolves on both sides. The library then needs `HOTDATA_API_URL`
+pointing at the engine, `HOTDATA_WORKSPACE` set to any id, and any non-empty
+`HOTDATA_API_KEY`. Every driver call works on that stack except a provider-backed vector
+index, because no embedding provider is configured locally. A separate memory service in front of Hotdata is what section 8 rules
 out, and the reasons it can become necessary are listed there.
 
 ### 2.2 Platform facts that shape the design
@@ -92,9 +96,17 @@ These come from measurements against Hotdata between 2026-08-27 and 2026-09-18.
   provider, and the query passes text. A metric mismatch in plain mode silently reverts to
   a full scan. Indexes are invisible to SQL, so only the control plane can say whether one
   exists. (`hotdata_framework/client.py:584-600`, `hotdata_langchain/vectorstore.py:541`)
-- RuntimeDB runs standalone from a container image with a SQLite catalog and filesystem
-  storage, with no cloud dependency. A local container is a real Hotdata for development
-  and for measurements that production cannot run.
+- A provider-backed vector index cannot share its table with any other index. The engine
+  refuses the second one. A BM25 index, a plain vector index, and a sorted index share a
+  table. [measured 2026-08-18, confirmed by M5 on 2026-10-05]
+- `bm25_search` refuses to run on a column without a BM25 index. There is no scan
+  fallback. [measured, M5]
+- RuntimeDB runs on a laptop with a Postgres container and an S3-compatible storage
+  container, with no cloud dependency. The bare image, with its SQLite catalog and
+  filesystem storage, refuses managed tables. [measured, M6] The local stack is a real
+  Hotdata for development and for measurements that production cannot run. A load there
+  costs about 24 ms, against about 2.1 seconds in the cloud, so the cloud write cost is
+  outside the engine. [measured, M4]
 
 ### 2.3 What the design takes from these facts
 
@@ -183,8 +195,9 @@ Two drivers ship in version 1.
   driver.
 - `HotdataStore`. One managed database, two tables per schema version, keyed loads, a
   serialized writer, and the ranking query in section 3.4. The integration leg runs against
-  it. Against a local RuntimeDB container it is also the development driver, so no third
-  driver is needed for working offline.
+  it. Against the local RuntimeDB stack it is also the development driver, so no third
+  driver is needed for working offline. The integration leg can run against that stack in
+  CI, with plain vector indexes in place of provider-backed ones. [measured, M6]
 
 ### 3.4 Tables and retrieval
 
@@ -205,15 +218,20 @@ Small facts revise cleanly, supersede cleanly, and render into a profile. The su
 systems that extract agree on the unit: 15 to 80 words in mem0, one edge per fact in
 Graphiti. Markdown remains a fine format for the `content` column of an episode chunk.
 
-Retrieval runs in one SQL query over the `memory` table, in three stages that the engine
-can push down.
+Retrieval runs in one SQL query over the `memory` table, in three stages.
 
 1. Exact filters first: namespace labels, validity at the as-of time, `kind`, `subject`,
    `tags`, and `forget_after`. These are plain predicates and cut the candidate set before
    any ranking.
 2. Three rankings over the survivors, each served by its own index: BM25 over `content`,
    vector distance over `content`, and vector distance over `cues`. Fused by reciprocal rank
-   fusion, which the engine already does for text plus semantic search.
+   fusion, written as plain SQL with common table expressions. The engine has no fusion
+   primitive and needs none. Because a provider-backed index excludes every other index,
+   the two vector rankings need plain vector indexes over embedding columns, and so an
+   embedder supplied by the caller. Without an embedder, the driver can offer BM25 alone or
+   a provider-backed vector ranking alone, not both. `bm25_search` ranks the whole table
+   and the filters of stage 1 apply after it, so the BM25 fetch depth must be wide enough
+   to survive the filters.
 3. A sorted index on `created_at` for recency ordering and for the sweeper.
 
 `cues` is the part that is not in any surveyed system and is cheap here. A cue is the
@@ -223,9 +241,15 @@ content. Cues are optional, and the content-only path always works, so a consume
 writes no cues loses nothing it had.
 
 Fast reads come from the table being small, not from cleverness. A consumer's memory table
-holds thousands of rows, and a filtered scan of that is fast before any index exists. The
-indexes matter above about a hundred thousand rows, and phase 0 measures the point at
-which they start to pay.
+holds thousands of rows, and a filtered scan of that is fast before any index exists. M5
+measured the crossover. In the engine, the vector index starts to pay between one thousand
+and ten thousand rows, and at one hundred thousand rows it cuts the filtered vector rank
+from 48 ms to 15 ms. The fused query with indexes takes 21 ms there. In the cloud, one
+request costs about 400 ms at every size, and that floor hides the saving up to at least
+one hundred thousand rows. Only the sorted index on `created_at` showed a cloud gain, 695 ms
+to 407 ms at one hundred thousand rows. The driver therefore builds the BM25 index whatever
+the size, because `bm25_search` needs it, and treats the vector and sorted indexes as an
+optimisation that matters from about ten thousand rows. [measured, M5]
 
 ## 4. The memory contract
 
@@ -269,11 +293,11 @@ gets a conformance test in phase 1, and `docs/guarantees.md` names the test.
 | Can a retried `remember` create duplicates? | No. The key is derived from subject and normalized content hash, and a put whose normalized content equals the current revision's writes nothing. | answered |
 | Is a paraphrase a duplicate? | No. Deduplication is exact on normalized content. `candidates` exists so a caller can decide. | answered |
 | When a synchronous `put` returns, is the record visible to `list`? | Yes. Read after write was never stale in 30 trials. | answered [measured] |
-| When a synchronous `put` returns, is the record visible to `search`? | Yes without an index, because the ranking query scans the table. With an index, unknown. | to measure, M1 |
+| When a synchronous `put` returns, is the record visible to `search`? | Yes. Without an index the ranking query scans the table. With a provider-backed vector index or a BM25 index, the first search after the load returned the new row. | answered [measured], M1 |
 | When a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes, and `writer` returns the ids it flushed. | answered |
-| What happens when two processes write the same table? | The second load is refused with 409. The driver retries with backoff and gives up after a bound. Within one process the writer serializes. | answered [measured], retry bound to measure, M3 |
+| What happens when two processes write the same table? | The second load is refused with 409. The driver retries with backoff and gives up after a bound. Within one process the writer serializes. | answered [measured], M3: with two concurrent writers no load needed more than 3 of 8 attempts |
 | What happens when two writers put the same key? | Last writer wins at the row level. Because revisions are new rows, both revisions exist and the later one is current. | answered |
-| Does `delete` remove retained revisions and derived embeddings? | Yes for rows, because the embedding is a column of the row. Index entries, unknown. | to measure, M2 |
+| Does `delete` remove retained revisions and derived embeddings? | Yes. The embedding is a column of the row, and after a keyed delete neither a provider-backed vector index nor a BM25 index returned the row. | answered [measured], M2 |
 | Which filters work in `list` and `search`? | Equality on `kind`, `subject`, `tags`, and `actor`. Range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. Prefix on namespace labels. Anything else raises. | answered |
 | Does a higher score mean more relevant? | The store returns distance, and lower is closer. The memory contract returns records in order and no score. An adapter that needs a score converts. | answered |
 | What does `recall(as_of=T)` return? | Records valid at T by the as-of rule in section 4, including records superseded after T when `history` is consulted, and excluding them otherwise. | answered |
@@ -283,7 +307,9 @@ gets a conformance test in phase 1, and `docs/guarantees.md` names the test.
 | Does a write inside a turn reach a `recall` in the same turn? | No, by contract. A consumer reads what was there before its own capture. | answered |
 
 Phase 0 measurements. M1 to M3 run against a throwaway database that the run creates and
-deletes. M4, M5, and M6 run against a local RuntimeDB container.
+deletes. M4, M5, and M6 ran against throwaway cloud databases and against the local stack,
+because the bare container refuses managed tables. All six were run on 2026-10-05, and
+`docs/guarantees.md` holds the numbers.
 
 - M1. Build a provider-backed vector index on a table, load ten more rows, and search
   for one of them. Record whether the new row is served, and after how long.
@@ -392,7 +418,7 @@ the API.
   client in another language, for extraction that must run centrally, or for scope
   enforcement above the API key. None of the three exists yet.
 - Server-side extraction. `capture` takes a callable and that is all.
-- A third driver. A local RuntimeDB container covers offline development with the Hotdata
+- A third driver. The local RuntimeDB stack covers offline development with the Hotdata
   driver itself.
 - Access control beyond scope filtering.
 - A Rust implementation. The Rust client has no framework layer to build on.
