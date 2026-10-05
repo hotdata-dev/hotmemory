@@ -191,9 +191,8 @@ always works.
 
 Reads are fast because the table is small. A memory table holds thousands of rows, and a
 filtered scan of that is fast without an index. Measurement M5 found that the vector
-index saves engine time from about ten thousand rows. In the cloud, the cost of one request
-is about 400 ms at every size, and it hides that saving up to at least one hundred
-thousand rows. [measured 2026-10-05]
+index saves engine time from about ten thousand rows. In the cloud, one request costs about
+400 ms at every size. That cost hides the saving up to at least one hundred thousand rows. [measured 2026-10-05]
 
 ## The memory contract
 
