@@ -38,29 +38,34 @@ passes in CI. It has no tiers, because the full check takes less than five secon
 
 ## Rules of the harness
 
-The library is deterministic. The offline suite needs no clock, no network, and no model.
-These rules keep it that way.
+The library is deterministic. The offline suite needs no real clock, no network, and no
+model. The tests pass a fixed clock and a fake embedder to the store, from
+`tests/conftest.py`. These rules keep the suite deterministic.
 
-- One conformance suite runs against every driver. Each answered guarantee in
-  [docs/guarantees.md](docs/guarantees.md) is one test. A driver that fails a conformance
-  test is not a driver.
-- The in-memory driver is the reference for the Hotdata driver. A test builds the same
-  records in both drivers and compares the results of `search`.
+- One conformance suite, `tests/test_conformance.py`, runs against every driver through
+  the `store` fixture. Each answered guarantee of the storage contract in
+  [docs/guarantees.md](docs/guarantees.md) has its tests there. A driver that fails a
+  conformance test is not a driver. To add a driver, add it to `DRIVERS` in
+  `tests/conftest.py`.
+- The in-memory driver is the reference for the Hotdata driver. From phase 2, a test
+  builds the same records in both drivers and compares the results of `search`.
 - Four surfaces are frozen: the names in `__all__`, the method set of the `Store`
   protocol, the fields and field types of the record for each schema version, and the
   filter keys of `list` and `search`. A test compares each surface against a literal set.
-  A change to a frozen surface is a public contract change, and it needs a changelog
-  entry.
+  These tests are in `tests/test_frozen.py`. A change to a frozen surface is a public
+  contract change, and it needs an entry in [CHANGELOG.md](CHANGELOG.md).
 - A frozen surface is compared against a literal set, never against the thing that it
   protects. A test that iterates over the protected thing turns a deletion into one test
   fewer and not into a failure.
-- Each row in the guarantees ledger names the test that proves it. A test reads the ledger.
-  A named test that does not exist makes it fail.
-- Tests marked `hotdata` run the Hotdata driver against a real database. They need
-  `HOTMEMORY_TEST_DB` to name a throwaway database. Without it, they skip. They
+- Each row in the guarantees ledger names the conformance tests that prove it, or the phase
+  that will prove it. `tests/test_ledger.py` reads the ledger. A named test that the
+  conformance suite does not define makes it fail. A row with no test and no phase also
+  makes it fail.
+- From phase 2, tests marked `hotdata` run the Hotdata driver against a real database.
+  They need `HOTMEMORY_TEST_DB` to name a throwaway database. Without it, they skip. They
   run once for each pull request. They are the only tests that use the network.
-- No test calls a model. `capture` takes a callable, and the tests pass a fake extractor
-  that returns fixed facts.
+- No test calls a model. The tests pass a fake embedder. From phase 3, `capture` takes a
+  callable, and the tests pass a fake extractor that returns fixed facts.
 - There is no coverage gate, no mutation-testing gate, and no report generator. The output
   of `make verify` is the report.
 
@@ -68,7 +73,8 @@ These rules keep it that way.
 
 Documents are checked like code. If you change a behavior, update
 [docs/contracts.md](docs/contracts.md) and [docs/guarantees.md](docs/guarantees.md) in the
-same pull request.
+same pull request. If you change a public surface, add an entry to
+[CHANGELOG.md](CHANGELOG.md).
 
 No file in this repository names a private repository, a customer, or a deployment detail.
 This rule includes `docs/internal/`.

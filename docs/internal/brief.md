@@ -1,7 +1,8 @@
 # Brief: hotmemory, agent memory as tables on Hotdata
 
 Status: draft, revised 2026-10-05, phases moved to `roadmap.md` and `plan.md`, and the phase 0
-measurements applied (results in `docs/guarantees.md`). Nothing in this brief is built. It fixes the two
+measurements applied (results in `docs/guarantees.md`). Phase 1 built the storage contract with
+`MemoryStore`, and `docs/contracts.md` states the details that it fixed. It fixes the two
 contracts, the guarantees behind them, and the harness that proves them, before the first
 line of code. The revision applies section 4 of `survey.md`, in this folder.
 
@@ -136,16 +137,16 @@ A record is the unit the store holds. Its fields are fixed for schema version 1.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `namespace` | tuple of strings | Where the record lives. Stored as a path string joined with `/`, and matched on whole labels, never on a string prefix. No label contains `.`. |
-| `key` | string | The caller's stable identifier inside the namespace. |
+| `namespace` | tuple of strings | Where the record lives. Stored as a path string joined with `/`, and matched on whole labels, never on a string prefix. A label is not empty and contains no `.` and no `/`. |
+| `key` | string | The caller's stable identifier inside the namespace. It is not empty and contains no `/` and no `@`. |
 | `revision` | integer | 1 for the first put under a key, then counting up. |
 | `kind` | string | One of `fact`, `profile`, `procedure`, `episode`. |
 | `subject` | string | What the record is about, for example an alert key, a person, a service. Empty when unknown. |
 | `content` | string | The text a model reads. This is the column a provider-backed index embeds. |
-| `cues` | list of strings | Questions or phrases this record answers. Optional. Embedded separately from `content`. Section 3.4. |
+| `cues` | tuple of strings | Questions or phrases this record answers. Optional. Embedded separately from `content`. Section 3.4. |
 | `payload` | JSON object | Structured data the consumer defines. The store never reads it. |
-| `tags` | list of strings | Free labels. Filterable. |
-| `sources` | list of strings | References to where the record came from: a thread id, a document path, a run id, an episode key. The length of this list is the corroboration count. |
+| `tags` | tuple of strings | Free labels. Filterable. |
+| `sources` | tuple of strings | References to where the record came from: a thread id, a document path, a run id, an episode key. The length of this list is the corroboration count. |
 | `actor` | string | Who wrote this revision: a user id, an agent name, an extractor name. |
 | `created_at` | timestamp | When this revision was written. System clock. |
 | `observed_at` | timestamp or null | The time of the source the record came from. A post-mortem loaded a year later keeps the incident date here. |
@@ -176,7 +177,7 @@ store found out. A replay that asks what memory held on a given day reads `creat
 | `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions ranked by relevance, closest first, with a distance. The same filter as `list`. With no query text it is `list`. |
 | `delete` | namespace, key | Removes every revision of the key. Hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix. |
-| `writer` | none | A context manager. Every `put` inside it is buffered. The buffer flushes on exit, or at a row count, or at an interval, and returns the ids it flushed. |
+| `writer` | optional row count, optional interval | A context manager. Every `put` inside it is buffered. The buffer flushes on exit, or at a row count, or at an interval, and the writer records the ids it flushed. |
 
 Deleted revisions, superseded revisions, and records past `forget_after` never appear in
 `list` or `search`. `history` shows superseded revisions. Nothing shows deleted ones.
@@ -294,7 +295,7 @@ gets a conformance test in phase 1, and `docs/guarantees.md` names the test.
 | Is a paraphrase a duplicate? | No. Deduplication is exact on normalized content. `candidates` exists so a caller can decide. | answered |
 | When a synchronous `put` returns, is the record visible to `list`? | Yes. Read after write was never stale in 30 trials. | answered [measured] |
 | When a synchronous `put` returns, is the record visible to `search`? | Yes. Without an index the ranking query scans the table. With a provider-backed vector index or a BM25 index, the first search after the load returned the new row. | answered [measured], M1 |
-| When a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes, and `writer` returns the ids it flushed. | answered |
+| When a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes, and the writer records the ids it flushed. | answered |
 | What happens when two processes write the same table? | The second load is refused with 409. The driver retries with backoff and gives up after a bound. Within one process the writer serializes. | answered [measured], M3: with two concurrent writers no load needed more than 3 of 8 attempts |
 | What happens when two writers put the same key? | Last writer wins at the row level. Because revisions are new rows, both revisions exist and the later one is current. | answered |
 | Does `delete` remove retained revisions and derived embeddings? | Yes. The embedding is a column of the row, and after a keyed delete neither a provider-backed vector index nor a BM25 index returned the row. | answered [measured], M2 |

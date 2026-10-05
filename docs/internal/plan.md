@@ -98,6 +98,11 @@ Worked in order on one branch. Each task is one commit or a few.
   fused search, the test has to compare something looser, such as the set of records
   returned. Phase 2 decides which, and this phase keeps `MemoryStore` search vector-only so
   that either choice stays open.
+- How `supersede` closes the old record. The memory contract sets the old record's
+  `valid_until` and `expired_at`. `Store.put` sets only `superseded_by` on the old
+  revision, and no `Store` operation can change another field of a written revision. Phase
+  3 decides how `Memory` writes those two fields, and the change to `Store` needs a
+  changelog entry.
 
 ## Stop and ask if
 

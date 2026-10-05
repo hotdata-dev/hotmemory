@@ -5,8 +5,9 @@ implements. The memory contract is the surface that an agent calls, and it is bu
 store. This file states both. The behavior that each contract guarantees, and the proof for
 each guarantee, are in [guarantees.md](guarantees.md).
 
-Status: design. No code exists yet. This file describes schema version 1 as the library
-will ship it.
+Status: the storage contract exists in Python, with `MemoryStore` as its only driver.
+`HotdataStore` and the memory contract are design, and this file describes them as the
+library will ship them. This file describes schema version 1.
 
 ## The platform under the store
 
