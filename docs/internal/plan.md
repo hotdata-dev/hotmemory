@@ -13,8 +13,8 @@ pull request. Nothing in this phase touches the network.
 
 ## Decisions this plan takes
 
-The brief leaves these open. The plan takes a default for each, and the owner can change a
-default before the issue opens.
+The brief leaves these open. The owner confirmed each one on 2026-10-05, and issue #4
+repeats them.
 
 - `MemoryStore` takes an embedder at construction: a callable from a list of texts to a
   list of vectors. `search` with query text and no embedder raises. The tests pass a
@@ -27,6 +27,10 @@ default before the issue opens.
   cannot be expressed, and an unsupported value type raises.
 - The package uses a `src/` layout with `py.typed`. It builds with hatchling, but this
   phase does not publish it. PyPI publishing comes after a working initial version.
+- `Store` is a `typing.Protocol`, not an abstract base class. A driver conforms by its
+  methods and needs no import from hotmemory. Logic that both drivers share, such as
+  revision numbering, normalization, namespace matching, and filter checks, lives in plain
+  functions that the drivers call.
 
 ## Tasks
 
