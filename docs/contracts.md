@@ -117,15 +117,20 @@ records the moment that the store found out. To ask what memory held on a given 
 | `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
 | `history` | namespace, key | Returns every revision, oldest first. |
-| `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first. It uses no model and no embedding. |
-| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, closest first, each with a distance. It takes the same filter as `list`. With no query text, it is `list`. |
+| `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |
+| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, closest first, each with a distance. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. |
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
-| `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix. |
-| `writer` | none | A context manager. It buffers every `put` inside it. The buffer flushes on exit, at a row count, or at an interval, and returns the ids that it flushed. |
+| `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
+| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
 `valid_from`, `valid_until`, `created_at`, and `expired_at`. Any other filter raises an
-error.
+error. In Python, the filter is a frozen dataclass with one optional field for each key, so
+an unknown key cannot be written, and a value of the wrong type raises an error.
+
+- A `tags` filter matches a record that holds every tag that the filter names.
+- A range includes its start and excludes its end. A side that is not given is open.
+- A null timestamp on a record never matches a range. This is the SQL rule for null.
 
 `list` and `search` never return a deleted revision, a superseded revision, or a record
 past `forget_after`. `history` returns superseded revisions. No operation returns a deleted
