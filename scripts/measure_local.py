@@ -10,9 +10,11 @@
 The script does not start the container. Start it with `make local-up`, which sets
 RUNTIMEDB_ENGINE__SQL_WRITES=true for M4. Reads the connection from the environment:
 
-- HOTDATA_API_URL: required. The container URL, for example http://localhost:3000.
-- HOTDATA_WORKSPACE: optional. Any value. Defaults to local.
-- HOTDATA_API_KEY: optional. Any value that is not empty. Defaults to local.
+- HOTMEMORY_LOCAL_URL: optional. The container URL. Defaults to http://localhost:3000.
+
+The script ignores HOTDATA_API_URL, HOTDATA_API_KEY, and HOTDATA_WORKSPACE, so a
+.env that also holds cloud credentials never sends them to the container. It sends
+the placeholder key and workspace "local".
 - HOTMEMORY_EMBEDDING_PROVIDER: optional. The provider that M6 tries for a
   provider-backed vector index. Defaults to sys_emb_openai.
 - HOTMEMORY_M5_SIZES: optional. Comma-separated row counts for M5. Defaults to
@@ -111,10 +113,7 @@ def now() -> str:
 
 
 def connect() -> HotdataClient:
-    host = env("HOTDATA_API_URL")
-    return HotdataClient(
-        env("HOTDATA_API_KEY", "local"), env("HOTDATA_WORKSPACE", "local"), host=host
-    )
+    return HotdataClient("local", "local", host=env("HOTMEMORY_LOCAL_URL", "http://localhost:3000"))
 
 
 def write_parquet(directory: Path, name: str, table: pa.Table) -> str:

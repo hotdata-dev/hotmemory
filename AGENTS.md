@@ -9,8 +9,9 @@ rules, and points to the files that hold everything else.
 make verify       # the full check; run it before each commit
 make local-up     # start a local RuntimeDB container
 make local-down   # stop it
-uv run scripts/measure_cloud.py   # M1 to M3; needs HOTDATA_API_KEY and HOTMEMORY_MEASURE_DB
-uv run scripts/measure_local.py   # M4 to M6; needs HOTDATA_API_URL and a running container
+cp .env.template .env            # then fill in .env; it is ignored by git
+uv run --env-file .env scripts/measure_cloud.py   # M1 to M3
+uv run --env-file .env scripts/measure_local.py   # M4 to M6; needs a running container
 ```
 
 ## Where things are
