@@ -177,8 +177,12 @@ Retrieval is one SQL query over the `memory` table, in three stages.
 Stage 2 needs a BM25 index and vector indexes on one table. A provider-backed vector index
 cannot share a table with another index, so stage 2 needs plain vector indexes and an
 embedder that the caller supplies. With a provider-backed index and no BM25 index, stage 2
-ranks by meaning only. Measurement M5 in [guarantees.md](guarantees.md) records which
-arrangement the engine accepts and what each one costs.
+ranks by meaning only. Measurement M5 in [guarantees.md](guarantees.md) confirmed both
+rules on 2026-10-05.
+
+`bm25_search` ranks the whole table, and the filters of stage 1 apply after it. The BM25
+fetch depth must therefore be wide enough that enough rows survive the filters. Also,
+`bm25_search` refuses to run without a BM25 index, so the driver always builds one.
 
 A cue is the question that a record answers. The extractor or the caller writes it at
 capture time. A query that resembles the question matches the cue, even when the
@@ -186,9 +190,10 @@ query and the content share no words. Cues are optional, and retrieval on conten
 always works.
 
 Reads are fast because the table is small. A memory table holds thousands of rows, and a
-filtered scan of that is fast without an index. Indexes start to matter at about one
-hundred thousand rows. Measurement M5 records the size at which an index first beats the
-scan.
+filtered scan of that is fast without an index. Measurement M5 found that the vector
+index saves engine time from about ten thousand rows. In the cloud, the cost of one request
+is about 400 ms at every size, and it hides that saving up to at least one hundred
+thousand rows. [measured 2026-10-05]
 
 ## The memory contract
 
