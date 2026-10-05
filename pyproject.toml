@@ -2,15 +2,20 @@
 name = "hotmemory"
 version = "0.0.0"
 description = "Agent memory as tables on Hotdata"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = []
 
-[dependency-groups]
-dev = ["ruff"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.uv]
-package = false
+[tool.hatch.build.targets.wheel]
+packages = ["src/hotmemory"]
+
+[dependency-groups]
+dev = ["mypy", "pytest", "pytest-socket", "ruff"]
 
 [tool.ruff]
 line-length = 100
@@ -18,3 +23,12 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
