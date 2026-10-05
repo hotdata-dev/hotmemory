@@ -40,8 +40,10 @@ the Test column is empty.
 ## Measurements
 
 Phase 0 runs six measurements. M1, M2, and M3 run against a throwaway cloud database that
-the run creates and deletes. M4, M5, and M6 run against a local RuntimeDB container. The
-scripts are `scripts/measure_cloud.py` and `scripts/measure_local.py`.
+the run creates and deletes. M4, M5, and M6 were planned for a local RuntimeDB container.
+The bare container refuses managed tables, so they also run against throwaway cloud
+databases, with `--cloud`. The scripts are `scripts/measure_cloud.py` and
+`scripts/measure_local.py`.
 
 Each result below is a placeholder until the scripts run. A result gets a number, a date,
 and the engine that produced it.

@@ -12,6 +12,7 @@ make local-down   # stop it
 cp .env.template .env            # then fill in .env; it is ignored by git
 uv run --env-file .env scripts/measure_cloud.py   # M1 to M3
 uv run --env-file .env scripts/measure_local.py   # M4 to M6; needs a running container
+uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the cloud
 ```
 
 ## Where things are

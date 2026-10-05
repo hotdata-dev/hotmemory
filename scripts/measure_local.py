@@ -5,23 +5,32 @@
 #   "pyarrow>=14.0",
 # ]
 # ///
-"""Run measurements M6, M4, and M5 against a running local RuntimeDB container.
+"""Run measurements M6, M4, and M5 against a local RuntimeDB container or the cloud.
 
-The script does not start the container. Start it with `make local-up`, which sets
-RUNTIMEDB_ENGINE__SQL_WRITES=true for M4. Reads the connection from the environment:
+By default the script targets a running local container. It does not start the
+container. Start it with `make local-up`, which sets RUNTIMEDB_ENGINE__SQL_WRITES=true
+for M4. With --cloud, it targets the Hotdata cloud API instead.
 
-- HOTMEMORY_LOCAL_URL: optional. The container URL. Defaults to http://localhost:3000.
+Reads the connection from the environment:
 
-The script ignores HOTDATA_API_URL, HOTDATA_API_KEY, and HOTDATA_WORKSPACE, so a
-.env that also holds cloud credentials never sends them to the container. It sends
-the placeholder key and workspace "local".
-- HOTMEMORY_EMBEDDING_PROVIDER: optional. The provider that M6 tries for a
+- HOTMEMORY_LOCAL_URL: optional, local only. The container URL. Defaults to
+  http://localhost:3000. Locally the script ignores HOTDATA_API_URL, HOTDATA_API_KEY,
+  and HOTDATA_WORKSPACE, and sends the placeholder key and workspace "local", so a
+  .env that holds cloud credentials never sends them to the container.
+- HOTDATA_API_KEY: required with --cloud.
+- HOTDATA_WORKSPACE: optional with --cloud. Without it, the framework picks the
+  active workspace.
+- HOTDATA_API_URL: optional with --cloud. Defaults to https://api.hotdata.dev.
+- HOTMEMORY_MEASURE_DB: required with --cloud. The prefix for the throwaway database
+  names; each measurement appends -m4, -m5, or -m6. The script refuses to run when a
+  database with one of those names already exists.
+- HOTMEMORY_EMBEDDING_PROVIDER: optional. The provider that M6 and M5 try for a
   provider-backed vector index. Defaults to sys_emb_openai.
 - HOTMEMORY_M5_SIZES: optional. Comma-separated row counts for M5. Defaults to
   1000,10000,100000.
 
-M6 runs first, and its first two calls are the proof that the container answers a
-query with no API key and no control plane. Each measurement creates its own
+M6 runs first. Locally, its first two calls are the proof that the container answers
+a query with no API key and no control plane. Each measurement creates its own
 database and deletes it on exit.
 
 Prints the results as Markdown, ready to paste into docs/guarantees.md.
@@ -43,6 +52,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from hotdata_framework import HotdataClient, ManagedDatabase
+from hotdata_framework.env import default_api_key, default_host, pick_workspace
 
 SCHEMA = "public"
 M4_CALLS = 100
@@ -116,6 +126,12 @@ def connect() -> HotdataClient:
     return HotdataClient("local", "local", host=env("HOTMEMORY_LOCAL_URL", "http://localhost:3000"))
 
 
+def connect_cloud() -> HotdataClient:
+    api_key = env("HOTDATA_API_KEY", default_api_key())
+    host = default_host()
+    return HotdataClient(api_key, pick_workspace(api_key, host), host=host)
+
+
 def write_parquet(directory: Path, name: str, table: pa.Table) -> str:
     path = directory / f"{name}.parquet"
     pq.write_table(table, path)
@@ -143,7 +159,9 @@ def short(error: BaseException) -> str:
 # M6: every framework call the driver needs, against the bare container.
 
 
-def measure_bare(client: HotdataClient, work: Path, provider: str) -> list[tuple[str, str]]:
+def measure_bare(
+    client: HotdataClient, work: Path, provider: str, prefix: str
+) -> list[tuple[str, str]]:
     steps: list[tuple[str, str]] = []
     db: ManagedDatabase | None = None
 
@@ -159,7 +177,7 @@ def measure_bare(client: HotdataClient, work: Path, provider: str) -> list[tuple
     db = step(
         "create a managed database with two keyed tables",
         lambda: client.create_managed_database(
-            "hotmemory-m6", tables=["memory", "episode"], keys={"memory": ["id"], "episode": ["id"]}
+            f"{prefix}-m6", tables=["memory", "episode"], keys={"memory": ["id"], "episode": ["id"]}
         ),
     )
     if db is None:
@@ -245,9 +263,9 @@ def measure_bare(client: HotdataClient, work: Path, provider: str) -> list[tuple
 # M4: SQL INSERT against upload-and-load, one row per call.
 
 
-def measure_insert(client: HotdataClient, work: Path) -> dict[str, Any]:
+def measure_insert(client: HotdataClient, work: Path, prefix: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    db = client.create_managed_database("hotmemory-m4", tables=["by_load", "by_sql"])
+    db = client.create_managed_database(f"{prefix}-m4", tables=["by_load", "by_sql"])
     try:
         seed = pa.table({"id": ["seed"], "content": ["seed"]})
         for table in ("by_load", "by_sql"):
@@ -375,11 +393,13 @@ def median_time(client: HotdataClient, db: ManagedDatabase, sql: str) -> str:
     return f"{statistics.median(runs) * 1000:.0f} ms"
 
 
-def measure_scale(client: HotdataClient, work: Path, sizes: list[int], provider: str) -> dict:
+def measure_scale(
+    client: HotdataClient, work: Path, sizes: list[int], provider: str, prefix: str
+) -> dict:
     rng = random.Random(7)
     tables = [f"m5_{size}" for size in sizes]
     out: dict[str, Any] = {"sizes": {}, "coexistence": []}
-    db = client.create_managed_database("hotmemory-m5", tables=tables)
+    db = client.create_managed_database(f"{prefix}-m5", tables=tables)
     try:
         for size, table in zip(sizes, tables, strict=True):
             entry: dict[str, Any] = {}
@@ -452,24 +472,36 @@ def summary(times: list[float]) -> str:
 def main() -> int:
     provider = os.environ.get("HOTMEMORY_EMBEDDING_PROVIDER", "sys_emb_openai")
     sizes = [int(s) for s in os.environ.get("HOTMEMORY_M5_SIZES", "1000,10000,100000").split(",")]
-    client = connect()
+    cloud = "--cloud" in sys.argv[1:]
+    if cloud:
+        prefix = env("HOTMEMORY_MEASURE_DB")
+        client = connect_cloud()
+        names = {f"{prefix}-{m}" for m in ("m4", "m5", "m6")}
+        taken = sorted(names & {d.description for d in client.list_managed_databases()})
+        if taken:
+            sys.exit(
+                f"databases already exist: {', '.join(taken)}; pick a new HOTMEMORY_MEASURE_DB"
+            )
+    else:
+        prefix = "hotmemory"
+        client = connect()
     started_at = now()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        bare = measure_bare(client, work, provider)
+        bare = measure_bare(client, work, provider, prefix)
         print("m6 done", file=sys.stderr)
         try:
-            insert = measure_insert(client, work)
+            insert = measure_insert(client, work, prefix)
         except RuntimeError as e:
             insert = {"setup_error": short(e)}
         print("m4 done", file=sys.stderr)
         try:
-            scale = measure_scale(client, work, sizes, provider)
+            scale = measure_scale(client, work, sizes, provider, prefix)
         except RuntimeError as e:
             scale = {"sizes": {}, "coexistence": [], "setup_error": short(e)}
         print("m5 done", file=sys.stderr)
 
-    print(f"## Local measurements, {started_at}")
+    print(f"## {'Cloud' if cloud else 'Local'} measurements of M4 to M6, {started_at}")
     print()
     print(f"Host: {client.host}.")
     print()
