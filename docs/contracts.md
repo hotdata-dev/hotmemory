@@ -76,16 +76,16 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `namespace` | tuple of strings | Where the record lives. The store keeps it as one path string joined with `/`. A match is on whole labels and never on a string prefix. No label contains `.`. |
-| `key` | string | The stable identifier of the caller inside the namespace. |
+| `namespace` | tuple of strings | Where the record lives. The store keeps it as one path string joined with `/`. A match is on whole labels and never on a string prefix. A namespace has at least one label. A label is not empty and contains no `.` and no `/`. |
+| `key` | string | The stable identifier of the caller inside the namespace. A key is not empty and contains no `/` and no `@`. |
 | `revision` | integer | 1 for the first put under a key. Each later put adds 1. |
 | `kind` | string | One of `fact`, `profile`, `procedure`, `episode`. |
 | `subject` | string | What the record is about, for example an alert key, a person, or a service. Empty if unknown. |
 | `content` | string | The text that a model reads. |
-| `cues` | list of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
+| `cues` | tuple of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
 | `payload` | JSON object | Structured data that the consumer defines. The store never reads it. |
-| `tags` | list of strings | Free labels. You can filter on them. |
-| `sources` | list of strings | References to the origin of the record: a thread id, a document path, a run id, an episode key. The length of the list is the corroboration count. |
+| `tags` | tuple of strings | Free labels. You can filter on them. |
+| `sources` | tuple of strings | References to the origin of the record: a thread id, a document path, a run id, an episode key. The length of the list is the corroboration count. |
 | `actor` | string | Who wrote this revision: a user id, an agent name, or an extractor name. |
 | `created_at` | timestamp | When the store wrote this revision. System clock. |
 | `observed_at` | timestamp or null | The time of the source. A post-mortem that you load a year later keeps the incident date here. |
@@ -96,6 +96,10 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `forget_after` | timestamp or null | When a sweeper can delete the record. Null means keep. |
 | `forget_reason` | string | The reason for `forget_after`. Empty if `forget_after` is null. |
 | `id` | string | `namespace/key@revision`. Derived. The load key. |
+
+In Python, the record is a frozen dataclass. The list fields are tuples, so a record
+cannot change after the store writes it. Every timestamp carries a time zone. The record
+refuses a value that the table above does not allow.
 
 The public record has no embedding field. If the caller supplies an embedder, the Hotdata
 driver adds embedding columns. If the caller uses a provider-backed index, the driver adds
