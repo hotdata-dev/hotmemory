@@ -148,7 +148,11 @@ Version 1 ships two drivers.
 - `MemoryStore` runs in the process, in memory. It is a real driver and not a mock. It
   computes relevance with the same cosine distance that the engine uses, and it refuses a
   filter that it does not model. The offline test suite runs against it, and it is the
-  reference for the other driver.
+  reference for the other driver. It takes two optional arguments. The embedder is a
+  callable that turns a list of texts into a list of vectors. Without it, a `search` with
+  query text raises an error. The clock is a callable that returns the current time, and
+  the default reads the system clock. `MemoryStore` ranks by the cosine distance between
+  the query and `content` only. It does not rank by BM25 or by `cues`.
 - `HotdataStore` uses one managed database, two tables per schema version, keyed loads, a
   serialized writer, and the retrieval query below. With the local RuntimeDB stack, it is also
   the development driver.

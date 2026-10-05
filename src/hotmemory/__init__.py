@@ -1,6 +1,7 @@
 """Agent memory as tables on Hotdata."""
 
 from hotmemory.filter import Filter, TimeRange
+from hotmemory.memory import MemoryStore, MemoryWriter
 from hotmemory.record import SCHEMA_VERSION, JSONValue, Kind, Record, normalize
 from hotmemory.store import Clock, Embedder, Hit, Store, Writer
 
@@ -12,6 +13,8 @@ __all__ = [
     "Hit",
     "JSONValue",
     "Kind",
+    "MemoryStore",
+    "MemoryWriter",
     "Record",
     "Store",
     "TimeRange",
