@@ -190,7 +190,7 @@ at the first poll. The loads took 0.2 s or less.
 At one hundred thousand rows, the fused query with indexes took 21 ms, against 48 ms for
 the filtered vector scan alone. Thus the three-stage query is faster than a scan at that
 size. Locally, the sorted index gave no gain. The stack has no embedding provider, so the
-local run could not test a provider-backed index beside the others.
+local run did not test a provider-backed index beside the others.
 
 Across both runs, an index saves engine time from about ten thousand rows. In the cloud,
 the cost of one request hides that saving up to at least one hundred thousand rows.
