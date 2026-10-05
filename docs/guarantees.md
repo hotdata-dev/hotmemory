@@ -11,31 +11,34 @@ Each guarantee has one of two states.
 - Answered: a measurement or the design already supports the answer.
 - To measure: a measurement must give the answer before the library relies on it.
 
-A guarantee marked [measured] was observed against a real Hotdata workspace. In phase 1,
-each answered guarantee gets one conformance test, and the Test column names it. If a named test
-does not exist, a test in the suite fails. Until the suite exists,
-the Test column is empty.
+A guarantee marked [measured] was observed against a real Hotdata workspace.
+
+The Test column names the conformance tests in `tests/test_conformance.py` that prove the
+guarantee against every driver. If a named test does not exist, `tests/test_ledger.py`
+fails. A row that no test proves yet names the phase that will prove it. Phase 2 proves
+the rows that only the Hotdata driver can show, and phase 3 proves the rows of the memory
+contract.
 
 ## The ledger
 
 | Question | Answer | State | Test |
 |---|---|---|---|
-| Does a second `put` under the same key replace the record? | No. It writes revision n+1 and marks revision n as superseded. `get` returns n+1. | answered | |
-| Can a retried `remember` create duplicates? | No. The key comes from the subject and a hash of the normalized content. A put whose normalized content is equal to the current revision writes nothing. | answered | |
-| Is a paraphrase a duplicate? | No. Deduplication is exact on normalized content. `candidates` exists so that a caller can decide. | answered | |
-| After a synchronous `put` returns, does `list` see the record? | Yes. A read after a write was never stale in 30 trials. | answered [measured] | |
-| After a synchronous `put` returns, does `search` see the record? | Yes. Without an index, the retrieval query scans the table. With a provider-backed vector index or a BM25 index, the first search after the load returned the new row. | answered [measured], M1 | |
-| After a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes. `writer` returns the ids that it flushed. | answered | |
-| Two processes write to the same table. What happens? | The engine refuses the second load with 409. The driver retries with backoff and stops after a bound. Inside one process, the writer sends one load at a time. | answered [measured], M3 | |
-| Two writers put the same key. What happens? | The last writer wins at the row level. Revisions are new rows, so both revisions exist and the later one is current. | answered | |
-| Does `delete` remove retained revisions and their embeddings? | Yes. An embedding is a column of its row. After a keyed delete, neither a provider-backed vector index nor a BM25 index returned the deleted row. | answered [measured], M2 | |
-| Which filters work in `list` and `search`? | Equality on `kind`, `subject`, `tags`, and `actor`. A range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. A prefix on namespace labels. Any other filter raises an error. | answered | |
-| Does a higher score mean more relevant? | The store returns a distance, and a lower distance is closer. The memory contract returns records in order, with no score. An adapter that needs a score converts the distance. | answered | |
-| What does `recall(as_of=T)` return? | The records that are valid at T by the as-of rule in [contracts.md](contracts.md). If `history` is consulted, this includes records superseded after T. If not, it excludes them. | answered | |
-| Who enforces scope? | The library filters on the allowed scopes of the caller. The platform enforces the database boundary through the API token. A caller that holds the token can go around the library. | answered | |
-| Can a consumer tell sources, extractions, and hypotheses apart? | Yes, through `kind`, `sources`, and `actor`. An extracted fact carries the name of the extractor in `actor`. | answered | |
-| Is a record deleted after its `forget_after` time passes? | No. It stops appearing in `list` and `search`. The sweeper deletes it on its next run. | answered [measured] | |
-| Does a write inside a turn reach a `recall` in the same turn? | No, by contract. A consumer reads what was there before its own capture. | answered | |
+| Does a second `put` under the same key replace the record? | No. It writes revision n+1 and marks revision n as superseded. `get` returns n+1. | answered || `test_second_put_writes_a_new_revision` |
+| Can a retried `remember` create duplicates? | No. The key comes from the subject and a hash of the normalized content. A put whose normalized content is equal to the current revision writes nothing. | answered || phase 3 |
+| Is a paraphrase a duplicate? | No. Deduplication is exact on normalized content. `candidates` exists so that a caller can decide. | answered || `test_deduplication_is_exact_on_normalized_content` |
+| After a synchronous `put` returns, does `list` see the record? | Yes. A read after a write was never stale in 30 trials. | answered [measured] || `test_synchronous_put_is_visible_to_list` |
+| After a synchronous `put` returns, does `search` see the record? | Yes. Without an index, the retrieval query scans the table. With a provider-backed vector index or a BM25 index, the first search after the load returned the new row. | answered [measured], M1 || `test_synchronous_put_is_visible_to_search` |
+| After a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes. `writer` returns the ids that it flushed. | answered || `test_buffered_put_is_visible_after_flush` |
+| Two processes write to the same table. What happens? | The engine refuses the second load with 409. The driver retries with backoff and stops after a bound. Inside one process, the writer sends one load at a time. | answered [measured], M3 || phase 2 |
+| Two writers put the same key. What happens? | The last writer wins at the row level. Revisions are new rows, so both revisions exist and the later one is current. | answered || `test_last_writer_wins_on_one_key` |
+| Does `delete` remove retained revisions and their embeddings? | Yes. An embedding is a column of its row. After a keyed delete, neither a provider-backed vector index nor a BM25 index returned the deleted row. | answered [measured], M2 || `test_delete_removes_every_revision` |
+| Which filters work in `list` and `search`? | Equality on `kind`, `subject`, `tags`, and `actor`. A range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. A prefix on namespace labels. Any other filter raises an error. | answered || `test_filter_matches_by_equality`, `test_filter_matches_a_time_range`, `test_unknown_filter_key_raises`, `test_prefix_matches_whole_labels` |
+| Does a higher score mean more relevant? | The store returns a distance, and a lower distance is closer. The memory contract returns records in order, with no score. An adapter that needs a score converts the distance. | answered || `test_search_returns_distance_closest_first` |
+| What does `recall(as_of=T)` return? | The records that are valid at T by the as-of rule in [contracts.md](contracts.md). If `history` is consulted, this includes records superseded after T. If not, it excludes them. | answered || phase 3 |
+| Who enforces scope? | The library filters on the allowed scopes of the caller. The platform enforces the database boundary through the API token. A caller that holds the token can go around the library. | answered || phase 3 |
+| Can a consumer tell sources, extractions, and hypotheses apart? | Yes, through `kind`, `sources`, and `actor`. An extracted fact carries the name of the extractor in `actor`. | answered || phase 3 |
+| Is a record deleted after its `forget_after` time passes? | No. It stops appearing in `list` and `search`. The sweeper deletes it on its next run. | answered [measured] || `test_forget_after_hides_without_deleting`, and the sweeper in phase 2 |
+| Does a write inside a turn reach a `recall` in the same turn? | No, by contract. A consumer reads what was there before its own capture. | answered || phase 3 |
 
 ## Measurements
 
