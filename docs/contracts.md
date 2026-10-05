@@ -45,7 +45,7 @@ API owns and loads from files. The facts below shape the contracts. A fact marke
   refuses the second index. A plain vector index and a BM25 index can share a table.
   [measured 2026-08-18]
 - RuntimeDB, the Hotdata query engine, runs from a container image on a laptop. The
-  driver can use it for development. [docs/local.md](local.md) tells you how.
+  driver can use it for development. `local.md` tells you how.
 
 The contracts take these decisions from the facts:
 
