@@ -99,7 +99,12 @@ With `RUNTIMEDB_ENGINE__SQL_WRITES=true`, time one hundred single-row INSERT sta
 one hundred single-row upload-and-load calls into the same table shape. Record the cost per
 call of each.
 
-Result: not measured yet.
+Cloud result, 2026-10-05, `api.hotdata.dev`: the engine refused the first INSERT with
+`Bad Request`. Production does not turn on SQL writes, so this is the expected result. One
+hundred single-row upload-and-append loads took a median of 2,136 ms, a p95 of 2,614 ms, and
+a mean of 2,208 ms. This agrees with the 2.1 seconds per call measured earlier.
+
+Local result: not measured yet. It runs on the local stack with SQL writes turned on.
 
 ### M5. At what size does an index beat a scan?
 
@@ -109,7 +114,50 @@ vector indexes. Record the size at which an index first beats the scan. Also rec
 whether the engine accepts a BM25 index beside a plain vector index, and beside a
 provider-backed vector index.
 
-Result: not measured yet.
+Cloud result, 2026-10-05, `api.hotdata.dev`: no index beat the scan by a clear margin
+at any size up to one hundred thousand rows. Each query costs about 400 ms at every size,
+with or without indexes. That cost is the floor of one query request. The embeddings have
+64 dimensions. Each value is the median of 5 runs after one warm-up, with k 10 and a
+fusion depth of 100.
+
+| Query | 1,000 rows, without / with | 10,000 rows, without / with | 100,000 rows, without / with |
+|---|---|---|---|
+| Filter scan, newest first | 379 / 423 ms | 414 / 394 ms | 695 / 407 ms |
+| Filtered vector rank | 384 / 397 ms | 402 / 639 ms | 405 / 411 ms |
+| Unfiltered vector rank | 392 / 393 ms | 374 / 488 ms | 380 / 404 ms |
+| Text match scan (`LIKE`) | 368 / 401 ms | 386 / 616 ms | 375 / 451 ms |
+| `bm25_search` | refused / 380 ms | refused / 716 ms | refused / 431 ms |
+| Fused three-stage query | refused / 422 ms | refused / 601 ms | refused / 462 ms |
+
+| Index build | 1,000 rows | 10,000 rows | 100,000 rows |
+|---|---|---|---|
+| BM25 on `content` | 0.7 s | 0.7 s | 0.7 s |
+| Plain vector on `embedding`, cosine | 0.7 s | 3.0 s | 65.8 s |
+| Sorted on `created_at` | 0.7 s | 0.6 s | 3.1 s |
+
+The loads took 4.0 s, 7.5 s, and 62.9 s. Each load time includes the upload of the parquet
+file. At one hundred thousand rows the file holds about 25 MB of embeddings, so the transfer
+dominates.
+
+These results lead to four conclusions.
+
+- The only clear gain is the sorted index on `created_at`. It cut the newest-first filter
+  scan at one hundred thousand rows from 695 ms to 407 ms.
+- The vector index gave no gain at any size. A scan of one hundred thousand vectors of 64
+  dimensions is already inside the 400 ms floor.
+- `bm25_search` refuses to run without a BM25 index, so the fused query cannot run without
+  one. The fused query cost 422 to 462 ms with indexes, close to the floor.
+- The 10,000-row column is slower with indexes in three rows. This is one run, and the
+  measurement did not repeat it to separate noise from a real cost.
+
+The engine accepted a BM25 index, a plain vector index, and a sorted index on one table. It
+refused a provider-backed vector index beside them, with this error:
+
+```text
+Embedding-backed vector indexes cannot coexist with other indexes on the same table.
+```
+
+Local result: not measured yet.
 
 ### M6. Does the driver work against a bare container?
 
@@ -119,4 +167,17 @@ upsert and delete, build a BM25 index and a provider-backed vector index, and qu
 which calls work. If all of them work, the integration tests can run against the container
 in CI, in place of a throwaway cloud database.
 
-Result: not measured yet.
+Bare container result, 2026-10-05, with the `latest` image pulled on that day (digest
+`sha256:302371bb1923`): the first call fails. The container refuses to create a managed
+database, with `managed catalogs require ducklake.metadata_pg_url to be configured`.
+[local.md](local.md) explains the cause.
+
+Cloud result, 2026-10-05, `api.hotdata.dev`: every call works. The calls create a
+database with two keyed tables and load it in replace, upsert, and delete mode. They build
+a BM25 index and run `bm25_search`. They build a provider-backed vector index
+(`sys_emb_openai`) and run `vector_search`.
+The row count after the loads was 3, as expected. This is the reference for the local
+result.
+
+Local result: not measured yet. It runs on the local stack with Postgres and S3-compatible
+storage.
