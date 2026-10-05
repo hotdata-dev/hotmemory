@@ -9,8 +9,8 @@ from hotmemory import Filter, Kind, Record, Store
 
 def changed(surface: str) -> str:
     return (
-        f"{surface} is a frozen surface. A change to it is a public contract change: "
-        "add an entry to CHANGELOG.md under Unreleased, then update the literal in this test."
+        f"Frozen surface changed: {surface}. This is a public contract change. "
+        "Add an entry to CHANGELOG.md under Unreleased, then update the literal in this test."
     )
 
 
@@ -45,11 +45,11 @@ def test_store_methods_are_frozen() -> None:
         "delete",
         "list_namespaces",
         "writer",
-    }, changed("The method set of Store")
+    }, changed("the method set of Store")
 
 
 def test_record_fields_are_frozen() -> None:
-    assert hotmemory.SCHEMA_VERSION == 1, changed("The schema version")
+    assert hotmemory.SCHEMA_VERSION == 1, changed("the schema version")
     assert {field.name: field.type for field in fields(Record)} == {
         "namespace": "tuple[str, ...]",
         "key": "str",
@@ -71,9 +71,9 @@ def test_record_fields_are_frozen() -> None:
         "forget_after": "datetime | None",
         "forget_reason": "str",
         "id": "str",
-    }, changed("The fields and field types of Record, schema version 1,")
+    }, changed("the fields and field types of Record, schema version 1")
     assert set(get_args(Kind)) == {"fact", "profile", "procedure", "episode"}, changed(
-        "The values of Kind"
+        "the values of Kind"
     )
 
 
@@ -87,4 +87,4 @@ def test_filter_keys_are_frozen() -> None:
         "valid_until",
         "created_at",
         "expired_at",
-    }, changed("The filter keys of list and search")
+    }, changed("the filter keys of list and search")
