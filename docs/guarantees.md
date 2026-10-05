@@ -104,7 +104,14 @@ Cloud result, 2026-10-05, `api.hotdata.dev`: the engine refused the first INSERT
 hundred single-row upload-and-append loads took a median of 2,136 ms, a p95 of 2,614 ms, and
 a mean of 2,208 ms. This agrees with the 2.1 seconds per call measured earlier.
 
-Local result: not measured yet. It runs on the local stack with SQL writes turned on.
+Local result, 2026-10-05, the local stack in [local.md](local.md) with SQL writes turned
+on: one hundred single-row INSERT statements took a median of 17 ms, a p95 of 22 ms, and a
+mean of 18 ms. One hundred single-row upload-and-append loads took a median of 24 ms, a p95
+of 29 ms, and a mean of 24 ms. Both tables held 101 rows after the calls.
+
+Locally, a load costs about 24 ms, against 2,136 ms in the cloud. So almost all of the
+cloud cost is outside the engine. An INSERT is about 30 percent cheaper than a load
+locally, but production does not accept it.
 
 ### M5. At what size does an index beat a scan?
 
@@ -157,7 +164,36 @@ refused a provider-backed vector index beside them, with this error:
 Embedding-backed vector indexes cannot coexist with other indexes on the same table.
 ```
 
-Local result: not measured yet.
+Local result, 2026-10-05, the local stack in [local.md](local.md): a local request costs
+about 6 to 10 ms, so the cost of the engine shows. The vector index starts to pay between
+one thousand and ten thousand rows, and it pays clearly at one hundred thousand rows. The
+settings are the same as in the cloud run.
+
+| Query | 1,000 rows, without / with | 10,000 rows, without / with | 100,000 rows, without / with |
+|---|---|---|---|
+| Filter scan, newest first | 8 / 9 ms | 9 / 12 ms | 13 / 15 ms |
+| Filtered vector rank | 8 / 9 ms | 21 / 13 ms | 48 / 15 ms |
+| Unfiltered vector rank | 7 / 6 ms | 14 / 9 ms | 47 / 6 ms |
+| Text match scan (`LIKE`) | 7 / 9 ms | 9 / 12 ms | 20 / 19 ms |
+| `bm25_search` | refused / 6 ms | refused / 8 ms | refused / 8 ms |
+| Fused three-stage query | refused / 17 ms | refused / 21 ms | refused / 21 ms |
+
+| Index build | 1,000 rows | 10,000 rows | 100,000 rows |
+|---|---|---|---|
+| BM25 on `content` | 0.2 s | 0.2 s | 0.2 s |
+| Plain vector on `embedding`, cosine | 0.2 s | 1.4 s | 21.9 s |
+| Sorted on `created_at` | 0.2 s | 0.2 s | 0.4 s |
+
+The script polls an index build every 0.2 seconds, so 0.2 s means that the build was done
+at the first poll. The loads took 0.2 s or less.
+
+At one hundred thousand rows, the fused query with indexes took 21 ms, against 48 ms for
+the filtered vector scan alone. Thus the three-stage query is faster than a scan at that
+size. Locally, the sorted index gave no gain. The stack has no embedding provider, so the
+local run could not test a provider-backed index beside the others.
+
+Across both runs, an index saves engine time from about ten thousand rows. In the cloud,
+the cost of one request hides that saving up to at least one hundred thousand rows.
 
 ### M6. Does the driver work against a bare container?
 
@@ -179,5 +215,9 @@ a BM25 index and run `bm25_search`. They build a provider-backed vector index
 The row count after the loads was 3, as expected. This is the reference for the local
 result.
 
-Local result: not measured yet. It runs on the local stack with Postgres and S3-compatible
-storage.
+Local result, 2026-10-05, the local stack in [local.md](local.md), with Postgres and
+RustFS beside the engine: every call works except the provider-backed vector index. It
+fails with `Embedding provider 'sys_emb_openai' not found`, because the stack configures no
+embedding provider. The row count after the loads was 3. So the integration tests can run
+against the local stack in CI, with plain vector indexes in place of provider-backed
+ones.
