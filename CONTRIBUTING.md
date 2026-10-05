@@ -21,7 +21,7 @@ Today, `make verify` runs these checks, in this order:
 
 1. `ruff check` over the Python files.
 2. `ruff format --check` over the Python files and the Python code blocks in Markdown.
-3. The link check. It reads each relative link in `README.md`, in `CONTRIBUTING.md`, and
+3. The link check. It reads each relative link in the Markdown files at the root and
    under `docs/`. A link to a file that does not exist makes it fail.
 
 When the library exists, strict `mypy` and the offline test suite join `make verify`
