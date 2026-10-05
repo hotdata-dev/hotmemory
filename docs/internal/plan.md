@@ -85,6 +85,16 @@ Worked in order on one branch. Each task is one commit or a few.
 - Before the pull request: the hand checks for AC2 and AC3, and the name grep for AC7.
 - This phase needs no credentials and no Docker.
 
+## Questions this phase leaves open
+
+- The oracle comparison. The brief makes `MemoryStore` the oracle for `HotdataStore`: a
+  test builds the same records in both drivers and compares their `search` results.
+  `MemoryStore` matches the engine's cosine distance exactly, but it cannot reproduce the
+  engine's BM25 scoring. So an exact comparison works only on the vector-only path. For the
+  fused search, the test has to compare something looser, such as the set of records
+  returned. Phase 2 decides which, and this phase keeps `MemoryStore` search vector-only so
+  that either choice stays open.
+
 ## Stop and ask if
 
 - A guarantee marked answered cannot be given a test that observes it against
