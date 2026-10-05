@@ -9,7 +9,7 @@ the memory systems that we surveyed stores memory as typed columns in the same e
 the data of the consumer.
 
 Status: design. No code exists yet. The contracts and the guarantees are written, and
-phase 0 measures the guarantees that are still open.
+phase 0 measured each guarantee that was open.
 
 The library has two layers:
 

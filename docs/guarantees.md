@@ -45,8 +45,8 @@ The bare container refuses managed tables, so they also run against throwaway cl
 databases, with `--cloud`. The scripts are `scripts/measure_cloud.py` and
 `scripts/measure_local.py`.
 
-Each result below is a placeholder until the scripts run. A result gets a number, a date,
-and the engine that produced it.
+Each result below has a number, a date, and the engine that produced it. All six ran on
+2026-10-05.
 
 ### M1. Does an index serve rows loaded after its build?
 
