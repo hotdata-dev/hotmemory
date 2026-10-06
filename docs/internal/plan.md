@@ -103,6 +103,9 @@ Worked in order on one branch. Each task is one commit or a few.
   revision, and no `Store` operation can change another field of a written revision. Phase
   3 decides how `Memory` writes those two fields, and the change to `Store` needs a
   changelog entry.
+- Deduplication compares content only. A `put` that keeps the content and adds a source,
+  a tag, or a new `forget_after` writes nothing. The contract counts sources as
+  corroboration, so phase 3 decides how `remember` adds a source to an existing fact.
 
 ## Stop and ask if
 

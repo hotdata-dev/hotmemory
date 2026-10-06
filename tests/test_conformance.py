@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from hotmemory import Filter, Store, TimeRange
+from hotmemory import Filter, JSONValue, Store, TimeRange
 
 from .conftest import FakeClock
 
@@ -181,3 +181,58 @@ def test_forget_after_hides_without_deleting(store: Store, clock: FakeClock) -> 
     assert store.search("disk", [NS]) == []
     assert store.get(NS, "disk") is not None
     assert len(store.history(NS, "disk")) == 1
+
+
+def test_put_after_forget_after_writes_a_new_revision(store: Store, clock: FakeClock) -> None:
+    store.put(
+        NS,
+        "disk",
+        kind="fact",
+        content="The disk fills at night.",
+        forget_after=clock.now + timedelta(days=1),
+        forget_reason="temporary",
+    )
+    clock.advance(timedelta(days=1))
+    record_id = store.put(NS, "disk", kind="fact", content="The disk fills at night.")
+
+    assert record_id == "team/alerts/disk@2"
+    assert [record.id for record in store.list(NS)] == [record_id]
+    assert [hit.record.id for hit in store.search("disk fills at night", [NS])] == [record_id]
+
+
+def test_stored_record_cannot_change(store: Store) -> None:
+    payload: dict[str, JSONValue] = {"hosts": ["db-1"], "limits": {"disk": 90}}
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.", payload=payload)
+    expected = {"hosts": ["db-1"], "limits": {"disk": 90}}
+
+    payload["hosts"] = ["changed"]
+    returned = [
+        store.get(NS, "disk"),
+        store.get(NS, "disk", revision=1),
+        *store.history(NS, "disk"),
+        *store.list(NS),
+        *(hit.record for hit in store.search(None, [NS])),
+        *(hit.record for hit in store.search("disk", [NS])),
+    ]
+    for record in returned:
+        assert record is not None
+        assert record.payload == expected
+        hosts = record.payload["hosts"]
+        assert isinstance(hosts, list)
+        hosts.append("db-2")
+        record.payload["new"] = True
+
+    stored = store.get(NS, "disk")
+    assert stored is not None
+    assert stored.payload == expected
+
+
+@pytest.mark.parametrize("content", ["", "  \n\t "])
+def test_put_refuses_empty_content(store: Store, content: str) -> None:
+    with pytest.raises(ValueError, match="content"):
+        store.put(NS, "disk", kind="fact", content=content)
+    with pytest.raises(ValueError, match="content"), store.writer() as writer:
+        writer.put(NS, "disk", kind="fact", content=content)
+
+    assert store.get(NS, "disk") is None
+    assert store.list_namespaces() == []

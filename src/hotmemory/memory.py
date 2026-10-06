@@ -88,11 +88,13 @@ class MemoryStore:
     def get(self, namespace: Sequence[str], key: str, revision: int | None = None) -> Record | None:
         revisions = self._revisions.get(self._slot(namespace, key), [])
         if revision is None:
-            return revisions[-1] if revisions else None
-        return next((record for record in revisions if record.revision == revision), None)
+            found = revisions[-1] if revisions else None
+        else:
+            found = next((record for record in revisions if record.revision == revision), None)
+        return None if found is None else _copy(found)
 
     def history(self, namespace: Sequence[str], key: str) -> builtins.list[Record]:
-        return builtins.list(self._revisions.get(self._slot(namespace, key), []))
+        return [_copy(record) for record in self._revisions.get(self._slot(namespace, key), [])]
 
     def list(
         self,
@@ -105,7 +107,7 @@ class MemoryStore:
         records = self._listed([prefix], filter)
         if since is not None:
             records = [record for record in records if record.created_at >= since]
-        return records[:limit]
+        return [_copy(record) for record in records[:limit]]
 
     def search(
         self,
@@ -117,7 +119,7 @@ class MemoryStore:
         _check_count("k", k)
         records = self._listed(prefixes, filter)
         if query is None:
-            return [Hit(record, None) for record in records[:k]]
+            return [Hit(_copy(record), None) for record in records[:k]]
         query_vector = self._embed_query(query)
         self._embed_missing(records)
         hits = [
@@ -125,7 +127,7 @@ class MemoryStore:
             for record in records
         ]
         hits.sort(key=lambda hit: (hit.distance, newest_first(hit.record)))
-        return hits[:k]
+        return [Hit(_copy(hit.record), hit.distance) for hit in hits[:k]]
 
     def delete(self, namespace: Sequence[str], key: str) -> None:
         for record in self._revisions.pop(self._slot(namespace, key), []):
@@ -146,9 +148,10 @@ class MemoryStore:
         slot = (draft.namespace, draft.key)
         revisions = self._revisions.get(slot, [])
         current = revisions[-1] if revisions else None
-        if current is not None and is_duplicate(current, draft.content):
+        now = self._clock()
+        if current is not None and is_duplicate(current, draft.content, now):
             return current.id
-        record = replace(draft, revision=next_revision(current), created_at=self._clock())
+        record = replace(draft, revision=next_revision(current), created_at=now)
         if current is not None:
             revisions = [*revisions[:-1], replace(current, superseded_by=record.id)]
         self._revisions[slot] = [*revisions, record]
@@ -279,6 +282,11 @@ class MemoryWriter:
             self.flush()
         else:
             self._buffer.clear()
+
+
+def _copy(record: Record) -> Record:
+    """Return a record equal to `record` that shares no mutable value with it."""
+    return replace(record)
 
 
 def _check_count(name: str, value: int) -> None:

@@ -30,9 +30,14 @@ def next_revision(current: Record | None) -> int:
     return 1 if current is None else current.revision + 1
 
 
-def is_duplicate(current: Record, content: str) -> bool:
-    """Return True if `content` normalizes to the normalized content of `current`."""
-    return normalize(current.content) == normalize(content)
+def is_duplicate(current: Record, content: str, now: datetime) -> bool:
+    """Return True if a put of `content` writes nothing because `current` holds it.
+
+    That is the case when `current` is listed at `now` and its normalized content equals
+    the normalized `content`. A current revision past its `forget_after` is never a
+    duplicate, so a put brings the fact back as a new revision.
+    """
+    return is_listed(current, now) and normalize(current.content) == normalize(content)
 
 
 def is_listed(record: Record, now: datetime) -> bool:
@@ -101,7 +106,7 @@ def build_record(
         subject=subject,
         content=content,
         cues=tuple(cues),
-        payload={} if payload is None else dict(payload),
+        payload={} if payload is None else payload,
         tags=tuple(tags),
         sources=tuple(sources),
         actor=actor,

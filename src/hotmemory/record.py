@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,7 +67,8 @@ class Record:
     """One revision of a memory record, schema version 1.
 
     The constructor refuses a value that the contract does not allow, and derives `id`.
-    Every timestamp must carry a time zone.
+    Every timestamp must carry a time zone. `content` must not be empty after
+    normalization. The constructor stores a deep copy of `payload`.
     """
 
     namespace: tuple[str, ...]
@@ -104,8 +106,11 @@ class Record:
                 raise TypeError(f"{name} must be a string")
         for name in ("cues", "tags", "sources"):
             object.__setattr__(self, name, _strings(name, getattr(self, name)))
+        if not normalize(self.content):
+            raise ValueError("content must not be empty")
         if not isinstance(self.payload, dict):
             raise TypeError("payload must be a dict")
+        object.__setattr__(self, "payload", copy.deepcopy(self.payload))
         if self.created_at is None:
             raise TypeError("created_at must be a datetime")
         for name in (

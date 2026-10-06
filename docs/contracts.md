@@ -82,7 +82,7 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `revision` | integer | 1 for the first put under a key. Each later put adds 1. |
 | `kind` | string | One of `fact`, `profile`, `procedure`, `episode`. |
 | `subject` | string | What the record is about, for example an alert key, a person, or a service. Empty if unknown. |
-| `content` | string | The text that a model reads. |
+| `content` | string | The text that a model reads. It is not empty after normalization. |
 | `cues` | tuple of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
 | `payload` | JSON object | Structured data that the consumer defines. The store never reads it. |
 | `tags` | tuple of strings | Free labels. You can filter on them. |
@@ -99,7 +99,9 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `id` | string | `namespace/key@revision`. Derived. The load key. |
 
 In Python, the record is a frozen dataclass. The list fields are tuples, so a record
-cannot change after the store writes it. Every timestamp carries a time zone. The record
+cannot change after the store writes it. The store copies `payload` when it writes a
+record and when it returns one, so a change to a dict that a caller holds never reaches the
+store. Every timestamp carries a time zone. The record
 refuses a value that the table above does not allow.
 
 The public record has no embedding field. If the caller supplies an embedder, the Hotdata
@@ -115,7 +117,7 @@ records the moment that the store found out. To ask what memory held on a given 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |

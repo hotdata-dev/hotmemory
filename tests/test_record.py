@@ -97,3 +97,16 @@ def test_record_is_frozen() -> None:
 
 def test_normalize_lowercases_and_collapses_whitespace() -> None:
     assert normalize("  The Disk\n\tFILLS   at night. ") == "the disk fills at night."
+
+
+@pytest.mark.parametrize("content", ["", " \n\t"])
+def test_refuses_empty_content(content: str) -> None:
+    with pytest.raises(ValueError, match="content"):
+        make(content=content)
+
+
+def test_payload_is_copied_on_the_way_in() -> None:
+    payload: dict[str, Any] = {"hosts": ["db-1"]}
+    record = make(payload=payload)
+    payload["hosts"].append("db-2")
+    assert record.payload == {"hosts": ["db-1"]}

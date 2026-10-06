@@ -142,7 +142,7 @@ A record is the unit the store holds. Its fields are fixed for schema version 1.
 | `revision` | integer | 1 for the first put under a key, then counting up. |
 | `kind` | string | One of `fact`, `profile`, `procedure`, `episode`. |
 | `subject` | string | What the record is about, for example an alert key, a person, a service. Empty when unknown. |
-| `content` | string | The text a model reads. This is the column a provider-backed index embeds. |
+| `content` | string | The text a model reads. Not empty after normalization. This is the column a provider-backed index embeds. |
 | `cues` | tuple of strings | Questions or phrases this record answers. Optional. Embedded separately from `content`. Section 3.4. |
 | `payload` | JSON object | Structured data the consumer defines. The store never reads it. |
 | `tags` | tuple of strings | Free labels. Filterable. |
@@ -170,7 +170,7 @@ store found out. A replay that asks what memory held on a given day reads `creat
 
 | Operation | Signature, in words | Behaviour |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision and the previous current row gets `superseded_by` set. Returns the id. If the normalized content equals the current revision's, writes nothing and returns the current id. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision and the previous current row gets `superseded_by` set. Returns the id. If the normalized content equals the current revision's, writes nothing and returns the current id, unless the current revision is past its `forget_after`. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named one. Returns None when absent. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first. No model, no embedding. The filter is equality on `kind`, `subject`, `tags`, and `actor`, and a range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. |
