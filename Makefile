@@ -8,6 +8,8 @@ STORAGE_URL := http://127.0.0.1:9000
 verify:
 	uv run --group dev ruff check .
 	uv run --group dev ruff format --check .
+	uv run --group dev mypy
+	uv run --group dev pytest --disable-socket -q
 	uv run --no-project python scripts/check_links.py
 
 local-up:

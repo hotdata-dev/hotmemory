@@ -2,7 +2,8 @@
 
 RuntimeDB is the Hotdata query engine. The library can use a local RuntimeDB in place of a
 cloud workspace, with no API key and no cloud service. This page tells you how to start it
-and how to point the library at it.
+and how to point the library at it. The Hotdata driver that reads the variables below
+comes in phase 2. Today, the measurement scripts use the stack.
 
 ## Start the stack
 

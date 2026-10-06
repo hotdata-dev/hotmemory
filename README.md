@@ -8,8 +8,10 @@ Hotdata table, so an agent can join its memory to its own data in one SQL query.
 the memory systems that we surveyed stores memory as typed columns in the same engine as
 the data of the consumer.
 
-Status: design. No code exists yet. The contracts and the guarantees are written, and
-phase 0 measured each guarantee that was open.
+Status: version 0.0.0, not published. The storage contract exists in Python with one
+driver, `MemoryStore`, which runs in process memory. The Hotdata driver and the memory
+contract do not exist yet. [docs/internal/roadmap.md](docs/internal/roadmap.md) lists the
+phases.
 
 The library has two layers:
 
@@ -24,6 +26,31 @@ of the consumer. There is no hotmemory server. The first consumer is an incident
 investigator built on Hotdata. The library is not specific to it. A plain Python agent, a
 LangGraph agent, or any process with a Hotdata API key can use it.
 
+## Try the storage contract
+
+`MemoryStore` needs an embedder for a search with query text. An embedder is a callable
+that turns a list of texts into a list of vectors. This example uses a toy embedder that
+counts two words:
+
+```python
+from hotmemory import Filter, MemoryStore
+
+
+def embed(texts):
+    return [[text.count("disk") + 0.1, text.count("cpu") + 0.1] for text in texts]
+
+
+store = MemoryStore(embedder=embed)
+store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at night.")
+store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at noon.")
+store.put(("team", "alerts"), "cpu", kind="fact", content="The cpu spikes after a deploy.")
+
+print(store.get(("team", "alerts"), "disk").id)  # team/alerts/disk@2
+print([r.revision for r in store.history(("team", "alerts"), "disk")])  # [1, 2]
+hits = store.search("disk", [("team",)], Filter(kind="fact"), k=1)
+print(hits[0].record.content)  # The disk fills at noon.
+```
+
 ## Documents
 
 - [docs/contracts.md](docs/contracts.md): the record, the storage operations, the memory
@@ -34,5 +61,6 @@ LangGraph agent, or any process with a Hotdata API key can use it.
   container.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the one command that checks a change, and the rules
   of the test suite.
+- [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
 - [docs/internal/](docs/internal/brief.md): the design brief, the survey, the roadmap, and
   the plan for the current phase.

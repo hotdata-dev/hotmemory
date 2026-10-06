@@ -5,8 +5,9 @@ implements. The memory contract is the surface that an agent calls, and it is bu
 store. This file states both. The behavior that each contract guarantees, and the proof for
 each guarantee, are in [guarantees.md](guarantees.md).
 
-Status: design. No code exists yet. This file describes schema version 1 as the library
-will ship it.
+Status: the storage contract exists in Python, with `MemoryStore` as its only driver.
+`HotdataStore` and the memory contract are design, and this file describes them as the
+library will ship them. This file describes schema version 1.
 
 ## The platform under the store
 
@@ -76,16 +77,16 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `namespace` | tuple of strings | Where the record lives. The store keeps it as one path string joined with `/`. A match is on whole labels and never on a string prefix. No label contains `.`. |
-| `key` | string | The stable identifier of the caller inside the namespace. |
+| `namespace` | tuple of strings | Where the record lives. The store keeps it as one path string joined with `/`. A match is on whole labels and never on a string prefix. A namespace has at least one label. A label is not empty and contains no `.` and no `/`. |
+| `key` | string | The stable identifier of the caller inside the namespace. A key is not empty and contains no `/` and no `@`. |
 | `revision` | integer | 1 for the first put under a key. Each later put adds 1. |
 | `kind` | string | One of `fact`, `profile`, `procedure`, `episode`. |
 | `subject` | string | What the record is about, for example an alert key, a person, or a service. Empty if unknown. |
-| `content` | string | The text that a model reads. |
-| `cues` | list of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
+| `content` | string | The text that a model reads. It is not empty after normalization. |
+| `cues` | tuple of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
 | `payload` | JSON object | Structured data that the consumer defines. The store never reads it. |
-| `tags` | list of strings | Free labels. You can filter on them. |
-| `sources` | list of strings | References to the origin of the record: a thread id, a document path, a run id, an episode key. The length of the list is the corroboration count. |
+| `tags` | tuple of strings | Free labels. You can filter on them. |
+| `sources` | tuple of strings | References to the origin of the record: a thread id, a document path, a run id, an episode key. The length of the list is the corroboration count. |
 | `actor` | string | Who wrote this revision: a user id, an agent name, or an extractor name. |
 | `created_at` | timestamp | When the store wrote this revision. System clock. |
 | `observed_at` | timestamp or null | The time of the source. A post-mortem that you load a year later keeps the incident date here. |
@@ -96,6 +97,12 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `forget_after` | timestamp or null | When a sweeper can delete the record. Null means keep. |
 | `forget_reason` | string | The reason for `forget_after`. Empty if `forget_after` is null. |
 | `id` | string | `namespace/key@revision`. Derived. The load key. |
+
+In Python, the record is a frozen dataclass. The list fields are tuples, so a record
+cannot change after the store writes it. The store copies `payload` when it writes a
+record and when it returns one, so a change to a dict that a caller holds never reaches the
+store. Every timestamp carries a time zone. The record
+refuses a value that the table above does not allow.
 
 The public record has no embedding field. If the caller supplies an embedder, the Hotdata
 driver adds embedding columns. If the caller uses a provider-backed index, the driver adds
@@ -110,18 +117,23 @@ records the moment that the store found out. To ask what memory held on a given 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
 | `history` | namespace, key | Returns every revision, oldest first. |
-| `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first. It uses no model and no embedding. |
-| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, closest first, each with a distance. It takes the same filter as `list`. With no query text, it is `list`. |
+| `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |
+| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, closest first, each with a distance. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. |
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
-| `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix. |
-| `writer` | none | A context manager. It buffers every `put` inside it. The buffer flushes on exit, at a row count, or at an interval, and returns the ids that it flushed. |
+| `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
+| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
 `valid_from`, `valid_until`, `created_at`, and `expired_at`. Any other filter raises an
-error.
+error. In Python, the filter is a frozen dataclass with one optional field for each key, so
+an unknown key cannot be written, and a value of the wrong type raises an error.
+
+- A `tags` filter matches a record that holds every tag that the filter names.
+- A range includes its start and excludes its end. A side that is not given is open.
+- A null timestamp on a record never matches a range. This is the SQL rule for null.
 
 `list` and `search` never return a deleted revision, a superseded revision, or a record
 past `forget_after`. `history` returns superseded revisions. No operation returns a deleted
@@ -139,7 +151,11 @@ Version 1 ships two drivers.
 - `MemoryStore` runs in the process, in memory. It is a real driver and not a mock. It
   computes relevance with the same cosine distance that the engine uses, and it refuses a
   filter that it does not model. The offline test suite runs against it, and it is the
-  reference for the other driver.
+  reference for the other driver. It takes two optional arguments. The embedder is a
+  callable that turns a list of texts into a list of vectors. Without it, a `search` with
+  query text raises an error. The clock is a callable that returns the current time, and
+  the default reads the system clock. `MemoryStore` ranks by the cosine distance between
+  the query and `content` only. It does not rank by BM25 or by `cues`.
 - `HotdataStore` uses one managed database, two tables per schema version, keyed loads, a
   serialized writer, and the retrieval query below. With the local RuntimeDB stack, it is also
   the development driver.

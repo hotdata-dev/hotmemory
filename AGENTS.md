@@ -24,6 +24,8 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 - [docs/guarantees.md](docs/guarantees.md): what a consumer can rely on, and the proof.
 - [docs/internal/brief.md](docs/internal/brief.md): the design and its reasons.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the checks inside `make verify` and the test rules.
+- [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
+- `src/hotmemory/`: the library. `tests/test_conformance.py` is the conformance suite.
 
 ## Rules
 
@@ -37,3 +39,4 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
   workspace id, or a database id in a file.
 - If a change alters a behavior, update `docs/contracts.md` and `docs/guarantees.md` in the
   same commit.
+- If a change alters a frozen surface, add an entry to `CHANGELOG.md` in the same commit.
