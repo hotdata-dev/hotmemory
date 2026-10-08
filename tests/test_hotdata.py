@@ -1,6 +1,8 @@
 """Tests of `HotdataStore` that need a running engine. They skip without HOTMEMORY_TEST_URL."""
 
 import os
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -291,3 +293,48 @@ def test_vector_ranking_matches_by_content_alone(client: HotdataClient, name: st
     assert sorted(hit.record.key for hit in hits) == ["one", "three", "two"]
     distances = [hit.distance for hit in hits]
     assert distances == sorted(distances, key=lambda distance: distance or 0.0)
+
+
+def test_two_stores_write_one_database_at_once(client: HotdataClient, name: str) -> None:
+    first = provision(client, name)
+    second = HotdataStore.open(
+        first.database.id, embedder=fake_embedder, model=MODEL, dimensions=DIMENSIONS, client=client
+    )
+    retries: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        retries.append(seconds)
+        time.sleep(seconds)
+
+    for store in (first, second):
+        store._sleep = sleep
+
+    def write(store: HotdataStore, prefix: str) -> None:
+        for n in range(6):
+            store.put(NS, f"{prefix}{n}", kind="fact", content=f"Fact {n} from {prefix}.")
+
+    threads = [threading.Thread(target=write, args=args) for args in ((first, "a"), (second, "b"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    keys = {record.key for record in first.list(NS)}
+    assert keys == {f"{prefix}{n}" for prefix in "ab" for n in range(6)}
+    assert all(seconds <= 4.0 for seconds in retries)
+
+
+def test_one_store_serializes_writes_on_one_key(store: HotdataStore) -> None:
+    def write(writer: str) -> None:
+        for n in range(4):
+            store.put(NS, "disk", kind="fact", content=f"Revision {n} from {writer}.")
+
+    threads = [threading.Thread(target=write, args=(writer,)) for writer in ("one", "two")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    history = store.history(NS, "disk")
+    assert [record.revision for record in history] == list(range(1, 9))
+    assert [record.superseded_by is None for record in history] == [False] * 7 + [True]
