@@ -286,13 +286,18 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `remember` | facts, scope, actor | Writes facts that are already structured. Each fact is a record with `kind` set. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. |
+| `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer, so if one fact is refused, none is written. |
 | `recall` | query, scopes, optional as_of, budget in characters | Searches the allowed scopes, keeps the records that are valid at `as_of`, and returns the top records inside the budget. It returns them as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
 | `candidates` | fact, scopes, k | Returns the k nearest current records with their distances. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
 | `supersede` | key of the record to close, new fact, optional valid_from | Closes the named record and writes the new fact as the next revision under its key. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
 | `forget` | ids, or a horizon | Deletes the named records, or every record whose `forget_after` is before the horizon. |
 | `profile` | subject, scopes, budget in characters | Returns the current records for the subject, grouped by `kind`, as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
 | `capture` | text, scope, actor, observed_at, extractor | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the scope. Then it calls `remember` on the result. The extractor is a plain callable. The library ships no model and names no model. |
+
+The key of a fact has two parts joined by `-`. The first part is the subject, with each
+character outside `[A-Za-z0-9_-]` changed to `-`, cut to its first 64 characters. An empty
+subject gives `fact`. The second part is the first 16 hex characters of the SHA-256 of the
+normalized content. A derived key never contains `/` or `@`.
 
 A record is valid at time T when `valid_from` is null or at most T, and `valid_until` is
 null or after T. A null `valid_from` means the start of time.
