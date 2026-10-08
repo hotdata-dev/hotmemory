@@ -6,8 +6,8 @@ store. This file states both. The behavior that each contract guarantees, and th
 each guarantee, are in [guarantees.md](guarantees.md).
 
 Status: the storage contract exists in Python, with two drivers, `MemoryStore` and
-`HotdataStore`. The memory contract is design, and this file describes it as the library
-will ship it. This file describes schema version 1.
+`HotdataStore`. The memory contract exists in Python as `Memory`, over either driver. This
+file describes schema version 1.
 
 ## The platform under the store
 
@@ -126,14 +126,14 @@ records the moment that the store found out. To ask what memory held on a given 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. A key holds episodes only, or holds no episode at all. A `put` that moves a key between `episode` and another kind raises an error. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. If such a put brings a source that the current revision lacks, it writes a new revision whose `sources` are the current sources followed by the new ones, in order, without repeats. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. A key holds episodes only, or holds no episode at all. A `put` that moves a key between `episode` and another kind raises an error. With `close_previous` and a current revision, the previous row also gets `valid_until` set to the new `valid_from`, and `expired_at` set to the clock's time, in the same write. The put raises an error and writes nothing if the new `valid_from` is missing or is earlier than the previous `valid_from`. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |
 | `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, each with the cosine distance between the query and `content`. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. In `MemoryStore`, relevance is that distance, so the hits come closest first. The section on retrieval gives the order of `HotdataStore`. |
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
-| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. |
+| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. If one put in a flush raises an error, the flush writes nothing. |
 | `sweep` | none | Deletes every revision of each key whose current revision is past its `forget_after` at the time of the clock. Returns the deleted ids, sorted. A key whose current revision is not past its `forget_after` keeps all of its revisions. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
@@ -161,11 +161,13 @@ Version 1 ships two drivers.
 - `MemoryStore` runs in the process, in memory. It is a real driver and not a mock. It
   computes relevance with the same cosine distance that the engine uses, and it refuses a
   filter that it does not model. The offline test suite runs against it, and it is the
-  reference for the other driver. It takes two optional arguments. The embedder is a
+  reference for the other driver. It takes three optional arguments. The embedder is a
   callable that turns a list of texts into a list of vectors. Without it, a `search` with
   query text raises an error. The clock is a callable that returns the current time, and
-  the default reads the system clock. `MemoryStore` ranks by the cosine distance between
-  the query and `content` only. It does not rank by BM25 or by `cues`.
+  the default reads the system clock. The records are revisions that the store starts
+  with. `records()` returns every revision that a store holds, so a caller can save a
+  store and build it again. `MemoryStore` ranks by the cosine distance between the query
+  and `content` only. It does not rank by BM25 or by `cues`.
 - `HotdataStore` uses one managed database, keyed loads, a lock for its writes, and the
   retrieval query below. It needs the `hotdata` extra. With the local RuntimeDB stack, it
   is also the development driver. The section on `HotdataStore` below gives the details.
@@ -231,7 +233,8 @@ each database. If an embedder returns a vector of another size, the write or sea
 vector on `content_embedding`, and sorted on `created_at`. In `cue_v1`, it
 builds a plain cosine vector index on `cues_embedding`. The engine refuses an index on an
 empty table. So `provision` loads one seed row into each table, builds the indexes, and
-deletes the seed rows.
+deletes the seed rows. The vector indexes stay built, but no ranking uses them until the
+engine fixes the filtered search through the index.
 
 A `put` reads the current revision, then writes the new row and the superseded row in one
 load. If the record has cues, a second load writes its cue row into `cue_v1` at the same
@@ -257,11 +260,13 @@ the filter sets `kind`, the query reads only the record table of that kind. With
    `content_embedding`, and the cosine distance of `cues_embedding`. BM25 reads only the
    words of the query, each as a quoted term, so query syntax in the text cannot break the
    query. A query with no words gives BM25 no terms, and the two vector rankings still rank.
-2. Each ranking fetches its top rows with no filter, and then applies the exact filters:
-   namespace labels, `superseded_by`, `forget_after`, and the `Filter`. The fetch depth is
-   100 rows, or 10 rows for each requested hit if that is more. A narrow filter can leave
-   a ranking with fewer rows than k. The vector rankings cannot filter first, because a
-   filtered search through the vector index misses rows loaded after its build.
+2. Each ranking keeps its top rows, to a depth of 100 rows, or 10 rows for each requested
+   hit if that is more. The exact filters are the namespace labels, `superseded_by`,
+   `forget_after`, and the `Filter`. The two vector rankings apply the filters first and
+   then rank every row that is left by a scan, so a narrow scope keeps its recall. They do
+   not use the vector index, because a filtered search through the index misses rows
+   loaded after its build. BM25 fetches its top rows from the whole table and then
+   applies the filters, so a narrow filter can leave BM25 with fewer rows than k.
 3. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking, and the query returns
    the k rows with the highest sum. Ties go to the smaller content distance, then to the
    newer row.
@@ -284,16 +289,51 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `remember` | facts, scope, actor | Writes facts that are already structured. Each fact is a record with `kind` set. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. |
-| `recall` | query, scopes, optional as_of, budget in characters | Searches the allowed scopes, keeps the records that are valid at `as_of`, and returns the top records inside the budget. It returns them as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
-| `candidates` | fact, scopes, k | Returns the k nearest current records with their distances. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
-| `supersede` | key of the record to close, new fact, optional valid_from | Closes the named record and writes the new fact as the next revision under its key. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
-| `forget` | ids, or a horizon | Deletes the named records, or every record whose `forget_after` is before the horizon. |
-| `profile` | subject, scopes, budget in characters | Returns the current records for the subject, grouped by `kind`, as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
-| `capture` | text, scope, actor, observed_at, extractor | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the scope. Then it calls `remember` on the result. The extractor is a plain callable. The library ships no model and names no model. |
+| `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer, so if one fact is refused, none is written. |
+| `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions in the allowed scopes for the top k records. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
+| `candidates` | fact, scopes, k | Returns the top k hits of `search` for the content of the fact, sorted by distance, closest first. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
+| `supersede` | scope, key of the record to close, new fact, optional valid_from, actor | Closes the named record and writes the new fact as the next revision under its key, in one `put` with `close_previous`. The new `valid_from` is the argument, else that of the fact, else now. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the key has no current revision, or the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
+| `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
+| `profile` | subject, scopes, budget in characters | Returns the current records for the subject, grouped by `kind`, as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
+| `capture` | text, scope, extractor, actor, observed_at | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. The extractor is a plain callable. The library ships no model and names no model. |
+
+The key of a fact has two parts joined by `-`. The first part is the subject, with each
+character outside `[A-Za-z0-9_-]` changed to `-`, cut to its first 64 characters. An empty
+subject gives `fact`. The second part is the first 16 hex characters of the SHA-256 of the
+normalized content. A derived key never contains `/` or `@`.
+
+The block of `recall` has one line for each record, in the order of the search:
+
+```text
+- <content> [sources: a, b] [valid: <valid_from> to <valid_until>]
+```
+
+Each run of whitespace in the content becomes one space, so a record is always one line.
+Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unknown`, a
+null `valid_until` as `now`, and a record with no sources as `none`. The block holds whole
+lines only, joined by newlines. It stops before the first line that would make it longer
+than the budget. The list holds the records of the block.
+
+The block of `profile` has a group for each kind that has records, in the order fact,
+profile, procedure, episode. A line `<kind>:` starts each group, and its records follow
+in the line format of `recall`, newest first. Then a line `namespaces:` starts the counts,
+with one line `- <namespace>: <count>` for each namespace under the scopes. The count is
+the number of current records in that namespace exactly, read with `list` up to 1000
+records. If `list` reached that limit, the count ends with `+`. `list` matches the
+namespace as a prefix, so the records of its sub-namespaces share the window of 1000. A
+count with `+` is a lower bound, and it can be far below the true count when a
+sub-namespace is large. The counts take the budget
+first, and the record lines fill what is left, by whole lines. A group line with no record
+after it is dropped.
 
 A record is valid at time T when `valid_from` is null or at most T, and `valid_until` is
 null or after T. A null `valid_from` means the start of time.
+
+The skill file `skills/hotmemory/SKILL.md` gives an agent each memory operation as a
+command. Each command is a script in `skills/hotmemory/scripts/`. With `--database`, a
+script opens `HotdataStore` with `OpenAIEmbedder`. With `--memory-file`, it opens a
+`MemoryStore` that loads from a JSON file and saves to it after the command. That store
+embeds by hashed word counts, which match words and not meaning.
 
 These three rules apply to every operation:
 

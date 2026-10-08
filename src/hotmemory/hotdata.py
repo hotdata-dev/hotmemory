@@ -25,11 +25,15 @@ from hotdata_framework import HotdataClient, ManagedDatabase
 from hotdata_framework.client import IndexType, ManagedLoadMode, VectorMetric
 
 from hotmemory._rules import (
+    Draft,
     build_record,
+    check_close,
     check_episode_line,
     check_prefix,
     is_duplicate,
     next_revision,
+    superseded,
+    with_new_sources,
 )
 from hotmemory._writer import BufferedWriter, check_count
 from hotmemory.filter import Filter, TimeRange
@@ -254,8 +258,9 @@ class HotdataStore:
         valid_until: datetime | None = None,
         forget_after: datetime | None = None,
         forget_reason: str = "",
+        close_previous: bool = False,
     ) -> str:
-        draft = build_record(
+        record = build_record(
             namespace,
             key,
             1,
@@ -274,7 +279,7 @@ class HotdataStore:
             forget_after=forget_after,
             forget_reason=forget_reason,
         )
-        return self._write_many([draft])[0]
+        return self._write_many([Draft(record, close_previous)])[0]
 
     def get(self, namespace: Sequence[str], key: str, revision: int | None = None) -> Record | None:
         labels = check_namespace(namespace)
@@ -410,7 +415,7 @@ class HotdataStore:
             sql += f" LIMIT {limit}"
         return [_record(row) for row in self._sql(sql).to_records()]
 
-    def _write_many(self, drafts: Sequence[Record]) -> builtins.list[str]:
+    def _write_many(self, drafts: Sequence[Draft]) -> builtins.list[str]:
         """Write `drafts` in order, with one load per table, and return the id of each.
 
         Each draft follows the rules of `put`. The read of the current revisions and the
@@ -418,20 +423,26 @@ class HotdataStore:
         """
         with self._lock:
             now = self._clock()
-            slots = {(draft.namespace, draft.key) for draft in drafts}
+            slots = {(draft.record.namespace, draft.record.key) for draft in drafts}
             current, vectors = self._current(slots)
             pending: dict[str, Record] = {}
             ids = []
             for draft in drafts:
-                slot = (draft.namespace, draft.key)
+                slot = (draft.record.namespace, draft.record.key)
                 found = current.get(slot)
-                check_episode_line(found, draft.kind)
-                if found is not None and is_duplicate(found, draft.content, now):
-                    ids.append(found.id)
-                    continue
-                record = replace(draft, revision=next_revision(found), created_at=now)
+                check_episode_line(found, draft.record.kind)
+                written = draft.record
+                if found is not None and is_duplicate(found, draft.record.content, now):
+                    merged = with_new_sources(found, written)
+                    if merged is None:
+                        ids.append(found.id)
+                        continue
+                    written = merged
+                record = replace(written, revision=next_revision(found), created_at=now)
                 if found is not None:
-                    pending[found.id] = replace(found, superseded_by=record.id)
+                    if draft.close_previous:
+                        check_close(found, record)
+                    pending[found.id] = superseded(found, record, now, draft.close_previous)
                 pending[record.id] = record
                 current[slot] = record
                 ids.append(record.id)
@@ -757,10 +768,10 @@ def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: i
 
     Each ranking keeps only the rows that `where` keeps, numbers them from 1, and adds
     1 / (RRF_CONSTANT + rank) to the score of each row. BM25 ranks each table on its own,
-    because BM25 scores of two tables do not compare. Every ranking fetches its depth
-    before the filter applies, so a narrow filter can leave it with fewer rows. The vector
-    rankings carry no filter, because a filtered search through the vector index misses
-    rows loaded after the index build.
+    because BM25 scores of two tables do not compare. BM25 fetches its depth before the
+    filter applies, so a narrow filter can leave it with fewer rows. The vector rankings
+    filter first and rank by a scan, in the form of `_vector_query`, so they rank every
+    row that `where` keeps.
     """
     depth = _depth(k)
     rank = "ROW_NUMBER() OVER (ORDER BY {order}) AS rank"
@@ -774,22 +785,22 @@ def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: i
         )
         rankings.append(name)
     nearest = " UNION ALL ".join(
-        f"SELECT * FROM (SELECT id, cosine_distance(content_embedding, {vector}) AS distance "
-        f"FROM {_ref(table)} ORDER BY distance ASC LIMIT {depth})"
+        f"SELECT scanned.id, cosine_distance(scanned.content_embedding, {vector}) AS distance "
+        f"FROM {_ref(table)} scanned WHERE {where}"
         for table in tables
     )
     parts.append(
         f"content_rank AS (SELECT candidate.id, "
-        f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} "
-        f"FROM ({nearest}) candidate WHERE candidate.id IN ({_union(tables, 'id', where)}))"
+        f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} FROM ("
+        f"SELECT * FROM ({nearest}) ORDER BY distance ASC, id ASC LIMIT {depth}) candidate)"
     )
     rankings.append("content_rank")
     parts.append(
         f"cue_rank AS (SELECT candidate.id, "
         f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} FROM ("
-        f"SELECT id, cosine_distance(cues_embedding, {vector}) AS distance FROM {_ref(CUE_TABLE)} "
-        f"ORDER BY distance ASC LIMIT {depth}) candidate "
-        f"WHERE candidate.id IN ({_union(tables, 'id', where)}))"
+        f"SELECT scanned.id, cosine_distance(scanned.cues_embedding, {vector}) AS distance "
+        f"FROM {_ref(CUE_TABLE)} scanned WHERE scanned.id IN ({_union(tables, 'id', where)}) "
+        f"ORDER BY distance ASC, id ASC LIMIT {depth}) candidate)"
     )
     rankings.append("cue_rank")
     ranked = " UNION ALL ".join(

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 from types import TracebackType
 from typing import Self
 
-from hotmemory._rules import build_record
-from hotmemory.record import JSONValue, Kind, Record
+from hotmemory._rules import Draft, build_record
+from hotmemory.record import JSONValue, Kind
 from hotmemory.store import Clock
 
 
@@ -29,7 +29,7 @@ class BufferedWriter:
 
     def __init__(
         self,
-        write: Callable[[Sequence[Record]], builtins.list[str]],
+        write: Callable[[Sequence[Draft]], builtins.list[str]],
         clock: Clock,
         max_rows: int,
         interval: timedelta,
@@ -41,7 +41,7 @@ class BufferedWriter:
         self._clock = clock
         self._max_rows = max_rows
         self._interval = interval
-        self._buffer: builtins.list[Record] = []
+        self._buffer: builtins.list[Draft] = []
         self._flushed: builtins.list[str] = []
         self._last_flush = clock()
 
@@ -67,29 +67,29 @@ class BufferedWriter:
         valid_until: datetime | None = None,
         forget_after: datetime | None = None,
         forget_reason: str = "",
+        close_previous: bool = False,
     ) -> None:
         now = self._clock()
-        self._buffer.append(
-            build_record(
-                namespace,
-                key,
-                1,
-                now,
-                kind=kind,
-                content=content,
-                subject=subject,
-                cues=cues,
-                payload=payload,
-                tags=tags,
-                sources=sources,
-                actor=actor,
-                observed_at=observed_at,
-                valid_from=valid_from,
-                valid_until=valid_until,
-                forget_after=forget_after,
-                forget_reason=forget_reason,
-            )
+        record = build_record(
+            namespace,
+            key,
+            1,
+            now,
+            kind=kind,
+            content=content,
+            subject=subject,
+            cues=cues,
+            payload=payload,
+            tags=tags,
+            sources=sources,
+            actor=actor,
+            observed_at=observed_at,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            forget_after=forget_after,
+            forget_reason=forget_reason,
         )
+        self._buffer.append(Draft(record, close_previous))
         if len(self._buffer) >= self._max_rows or now - self._last_flush >= self._interval:
             self.flush()
 

@@ -22,6 +22,13 @@ each one, and its failure message points to this file.
   the database by name, and `HotdataStore.open` opens it by id. `LayoutError` reports a
   database whose layout differs. `ranking="vector"` ranks a search by content distance
   alone.
+- `Memory`, the memory contract over one `Store`, with `remember`, `recall`,
+  `candidates`, `supersede`, `forget`, `profile`, and `capture`. `Fact` is the frozen
+  dataclass of one structured fact that `remember` takes.
+- `MemoryStore` takes `records`, the revisions that it starts with, and `records()`
+  returns every revision that it holds.
+- The skill file `skills/hotmemory/SKILL.md`, with one script in
+  `skills/hotmemory/scripts/` for each memory operation.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
   the OpenAI embeddings API.
 
@@ -32,3 +39,11 @@ each one, and its failure message points to this file.
   `HotdataStore` implement it.
 - A `put` that moves a key between `episode` and another kind raises `ValueError` in
   every driver.
+- `Store.put` and `Writer.put` take `close_previous`, which closes the validity span of
+  the current revision in the same write. `MemoryStore` and `HotdataStore` implement it.
+- A put whose content duplicates the current revision but brings a new source writes a
+  new revision with the merged sources. Before, it wrote nothing.
+- A `MemoryStore` writer flush in which one put raises writes nothing, as in
+  `HotdataStore`.
+- The vector rankings of a fused `HotdataStore.search` filter first and rank by a scan, so
+  a search in a narrow scope returns the top k rows of that scope.

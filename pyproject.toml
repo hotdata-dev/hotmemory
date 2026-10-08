@@ -31,7 +31,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "skills/hotmemory/scripts"]
 
 [[tool.mypy.overrides]]
 module = ["pyarrow", "pyarrow.*"]

@@ -295,6 +295,23 @@ def test_vector_ranking_matches_by_content_alone(client: HotdataClient, name: st
     assert distances == sorted(distances, key=lambda distance: distance or 0.0)
 
 
+@pytest.mark.parametrize("ranking", ["fused", "vector"])
+def test_search_in_a_narrow_scope_returns_its_top_k(
+    client: HotdataClient, name: str, ranking: str
+) -> None:
+    store = provision(client, name)
+    store._ranking = ranking  # type: ignore[assignment]
+    narrow = ("team", "narrow")
+    with store.writer() as writer:
+        for n in range(990):
+            writer.put(NS, f"wide-{n}", kind="fact", content=f"disk report {n}", cues=("disk?",))
+        for n in range(10):
+            writer.put(narrow, f"narrow-{n}", kind="fact", content=f"cpu load {n}", cues=("cpu?",))
+
+    hits = store.search("disk report", [narrow], k=10)
+    assert sorted(hit.record.key for hit in hits) == sorted(f"narrow-{n}" for n in range(10))
+
+
 def test_two_stores_write_one_database_at_once(client: HotdataClient, name: str) -> None:
     first = provision(client, name)
     second = HotdataStore.open(

@@ -1,210 +1,157 @@
-# Plan: phase 2, the Hotdata driver
+# Plan: phase 3, the memory contract
 
-Status: open, 2026-10-08. This file holds the current phase only. The next phase replaces it.
-The phases themselves are in `roadmap.md`. Section numbers below refer to `brief.md`. Phase 1
-closed with PR #5. The storage contract, `MemoryStore`, and the conformance suite are on
-`main`.
+Status: all tasks done, 2026-10-08, in review. This file holds the current phase only.
+The next phase replaces it. The phases themselves are in `roadmap.md`. Section numbers
+below refer to `brief.md`.
+Phase 2 closed with PR #7. `HotdataStore`, the conformance suite against both drivers, the
+oracle test, and the CI integration job are on `main`.
 
 ## Goal
 
-When this phase closes, `HotdataStore` implements the `Store` protocol over one managed
-database. The conformance suite runs against both drivers. The suite runs against the local
-RuntimeDB stack in CI, and an oracle test compares `HotdataStore` with `MemoryStore`. A
-caller can provision a database by name, can embed with OpenAI or with an own embedder, and
-can sweep records past `forget_after`. `make verify` stays offline and under five seconds.
+When this phase closes, `Memory` gives an agent the seven operations of section 4 over any
+`Store`: remember, recall, candidates, supersede, forget, profile, and capture. Tests pin
+the rendered blocks of `recall` and `profile` as exact strings. The skill file
+`skills/hotmemory/SKILL.md` and its scripts exist, and `make verify` runs every command in
+the skill file. The vector rankings of `HotdataStore` filter first, so a narrow scope keeps
+its recall. Every ledger row that names phase 3 names a test.
 
 ## Decisions this plan takes
 
-The owner agreed to each one on 2026-10-08. The issue repeats them as first agreed. The
-layout and the indexes changed after the task 2 probe, and the issue does not show that yet.
+The owner agreed to all of them on 2026-10-08: the first four with the plan, and the rest
+before task 2 started.
 
-- Provisioning. `HotdataStore.provision(name, ...)` is safe to run again. It looks up the
-  databases with that name. If it finds exactly one with the expected tables and layout, it
-  opens that one. If it finds none, it creates the database, declares the tables, and builds
-  the indexes. If it finds more than one, or one with a different layout, it raises and
-  creates nothing. Two processes that provision the same new name at the same moment can
-  both create a database, because the platform has no conditional create. The docs state
-  this race, and the driver does not try to prevent it. A caller can also open a database
-  by its id.
-- The layout. `provision` declares four tables: `memory_v1`, `episode_v1`, `cue_v1`, and a
-  one-row `meta_v1` that records the schema version, the embedding model name, and the
-  vector size. `memory_v1` and `episode_v1` have the record columns and one embedding
-  column, `content_embedding`. `cue_v1` holds the record id and `cues_embedding` for each
-  record of either table that has cues. The cues vector embeds the cues joined with
-  newlines. A record with no cues has no row in `cue_v1`. Vectors are float32 lists, the
-  same as the `hotdata-langchain` vector store. The layout is permanent, so the embedding
-  model and the vector size are fixed for each database. A store refuses an embedder whose
-  vectors have another size.
-- Indexes. `provision` builds a BM25 index on `content`, a plain cosine vector index on
-  `content_embedding`, and a sorted index on `created_at` in `memory_v1` and `episode_v1`,
-  and a plain cosine vector index on `cues_embedding` in `cue_v1`. The engine refuses a
-  BM25 index or a vector index on an empty table. So `provision` loads one seed row into
-  each table, builds the indexes, and deletes the seed rows. A put with cues loads
-  `memory_v1` or `episode_v1` and `cue_v1` in parallel. The two loads are not atomic. If
-  the cue load fails, the record has no cue row until a retry of the put. If the record
-  load fails, the join drops the stray cue row. The owner agreed to these changes on
-  2026-10-08, after the task 2 probe below.
-- Embedding. Fused search needs BM25 and plain vector indexes on one table, and a
-  provider-backed index refuses to share a table (M5). So the client embeds, and the rows
-  carry the vectors. RuntimeDB has no call that embeds text and returns the vector. Only
-  the routes that manage embedding providers exist. This was read from the RuntimeDB source
-  at `4615bd3` on 2026-10-08 and was not observed. The library ships `OpenAIEmbedder` in an
-  optional extra, `hotmemory[openai]`. Any callable that matches `Embedder` also works. A
-  LangChain `Embeddings.embed_documents` method already matches it.
-- Writers. One `HotdataStore` holds a lock around the read and the load of each write.
-  Across processes, two writers on one key can both compute the same next revision, and
-  the later load replaces the earlier row. The docs state that one process writes to a database. The fix waits for
-  a conditional write in RuntimeDB, an `UPDATE ... WHERE` that reports how many rows it
-  changed. The ledger row on two writers says that it holds inside one process only.
-- Episodes. A `put` with `kind="episode"` writes to `episode_v1`. Every other kind writes
-  to `memory_v1`. `get`, `history`, `list`, `search`, `delete`, and `list_namespaces` read
-  both tables. `Filter(kind="episode")` searches episodes only. A key cannot change between
-  `episode` and another kind. In both drivers, a `put` that changes a key across that
-  line raises an error.
-- The sweeper. `sweep()` joins the `Store` protocol. It deletes every revision of each key
-  whose current revision is past `forget_after` at the clock's time, and returns the ids
-  that it deleted. Both drivers implement it. The change to the frozen method set gets a
-  changelog entry.
-- The oracle. `MemoryStore` cannot reproduce the engine's BM25 scores, because the engine
-  uses its own tokenizer and constants. Cosine distance is arithmetic, so the vector-only
-  ranking compares exactly: the same records in the same order, with distances equal
-  within 1e-6, because the engine stores float32. The fused search compares more loosely:
-  on a fixture where k covers every record, both drivers return the same set of records.
-- Dependencies. `hotmemory[hotdata]` adds `hotdata-framework` and `pyarrow`.
-  `hotmemory[openai]` adds `openai`. The core package keeps no runtime dependencies.
-  `HotdataStore` lives in `hotmemory.hotdata` and `OpenAIEmbedder` in `hotmemory.openai`,
-  outside the top-level `__all__`, so `import hotmemory` needs neither extra.
-- Latency. A cloud load costs about 2.1 seconds and a local load about 24 ms (M4). This
-  phase accepts that cost.
+- Supersede (agreed). `put` and `Writer.put` gain `close_previous: bool = False`. The
+  rule applies when it is True and the key has a current revision. Then the superseded
+  row, which the same load already writes, also gets `valid_until` set to the new
+  `valid_from`. Its `expired_at` is
+  set to the clock's time. If the old `valid_from` is later than the new `valid_from`, the
+  put raises `ValueError` and writes nothing. No extra load and no new `Store` method. The
+  method set stays frozen, and the changed signature gets a changelog entry.
+- Sources (agreed). Deduplication still compares normalized content. Sometimes the content
+  matches but the put brings a source that the current revision lacks. Then the put writes
+  a new revision whose `sources` are the current sources followed by the new ones, in
+  order, without repeats. A put with the same content and no new source still writes
+  nothing, so a retried `remember` stays safe.
+- As-of (agreed). `recall(as_of=T)` searches current revisions only, and keeps the ones
+  valid at T by the as-of rule. A fact superseded after T is not returned. The ledger row
+  on `recall(as_of=T)` changes to say this. A search over history goes to the roadmap as
+  deferred work.
+- Recall under a narrow scope (agreed). Task 2 changes both vector rankings of
+  `HotdataStore` to filter first and then rank by a scan, as `ranking="vector"` does. The
+  BM25 ranking keeps its fetch depth, because `bm25_search` ranks the whole table. The
+  vector indexes stay built. After the engine fixes the filtered index search, a later
+  change can let the vector rankings use the index again.
+- Keys (agreed). `remember` derives the key from the subject and the content. Each
+  character of the subject outside `[A-Za-z0-9_-]` becomes `-`, and the result keeps its
+  first 64 characters. Then come `-` and the first
+  16 hex characters of the SHA-256 of the normalized content. An empty subject gives the
+  key `fact-` and the hash. The derived key never contains `/` or `@`.
+- Facts (agreed). `remember` takes a sequence of `Fact`, a frozen dataclass with `kind`,
+  `content`, and the optional record fields. `Fact` joins `__all__`, with a changelog
+  entry.
+- The rendered block (agreed). `recall` and `profile` return a list of records and one
+  text block. Each record is one line: `- <content> [sources: a, b] [valid: <from> to
+  <until>]`. Dates are in ISO 8601, with `unknown` and `now` for null ends. The block holds
+  whole lines only, and stops before the first line that passes the character budget. In
+  the block of `profile`, a line `<kind>:` starts each group of records. The block never
+  holds an instruction.
+- Forget (agreed). `forget(ids=...)` deletes the key of each id, every revision.
+  `forget(horizon=T)` deletes every key whose current revision has a `forget_after` before
+  T. `Store` gains nothing. `forget(horizon)` lists the candidates and deletes them one key
+  at a time, and `sweep` stays the fast path for a horizon of now.
+- Profile counts (agreed). The block of `profile` ends with each namespace that the
+  allowed scopes reach, with its count of current records. The count comes from `list`
+  with a limit of 1000, and a count at the limit shows as `1000+`.
+- Capture (agreed). The extractor is a callable. It takes the text, `observed_at`, and
+  the list of current records that `recall` returns, and it returns a list of `Fact`.
+  `capture` calls `remember` on the result. The tests pass a fake extractor.
+- The skill file (agreed). `skills/hotmemory/SKILL.md` has a name and a description in
+  front matter, and one example for each memory operation. `skills/hotmemory/scripts/`
+  holds one command-line entry point for each operation. A script opens `HotdataStore`
+  with `--database`. With `--memory-file`, it opens a `MemoryStore` that loads from and
+  saves to a JSON file. The command check in `make verify` uses that file, so it keeps
+  state across commands and needs no network.
+
+## Decisions taken during the work
+
+The plan left these details open. The work took the defaults below, and the owner can
+change any of them in review.
+
+- A `put` with `close_previous` and no `valid_from` (and no `observed_at`) raises
+  `ValueError`, because the old span has no time to close at. `Memory.supersede` passes
+  the clock's time when the caller and the fact give none.
+- `Memory.supersede` raises `ValueError` when the key has no current revision.
+- `recall` with no `as_of` keeps every current record. A current record whose span ended
+  shows its span on its line.
+- A record with no sources renders `[sources: none]`. Each run of whitespace in the
+  content renders as one space, so a record is always one line.
+- In the block of `profile`, the namespace counts take the budget first, and the record
+  lines fill what is left. A count is for the namespace exactly, and ends with `+` when
+  `list` reached its limit. The records of sub-namespaces share that window, so a `+`
+  count is a lower bound. An exact count needs a new `Store` method.
+- `forget` takes the allowed scopes, like every other operation, and refuses an id
+  outside them. `forget(horizon)` reads up to 10,000 records under each scope.
+- `MemoryStore` gains `records` on its constructor and a `records()` method, so the
+  `--memory-file` mode of the scripts saves and loads the whole store.
 
 ## Tasks
 
 Worked in order on one branch. Each task is one commit or a few.
 
-1. Close phase 1 in `roadmap.md` and replace `plan.md` with the phase 2 plan.
-2. Packaging: the `hotdata` and `openai` extras, the `hotmemory.hotdata` module, and
-   `HotdataStore.provision` and opening by id, with the four tables and their indexes.
-   Check first that `hotdata-framework` can list databases by name, declare the layout,
-   and read it back.
-3. The write path: `put` reads the current revision and writes the new row and the
-   superseded old row in one upsert load. Deduplication, the episode routing, and the key
-   rule for kinds come from `hotmemory._rules`. The lock holds across the read and the
-   load. A load that gets `409 RESOURCE_LOCKED` retries up to 8 attempts, with a backoff
-   from 0.25 seconds that doubles to at most 4 seconds (M3). `writer` sends one load per
-   flush. `delete` is a keyed delete load of every revision.
-4. The read path: `get`, `history`, `list`, and `list_namespaces` in SQL, with every
-   `Filter` key and the null rule for ranges. A prefix matches whole labels on the stored
-   path string, with any `%`, `_`, or escape character in a label escaped.
-5. The retrieval query (section 3.4): the exact filters, then BM25 over `content` and
-   vector distance over `content_embedding` and `cues_embedding`, fused by reciprocal rank
-   with the constant 60, in one SQL query. The BM25 fetch depth is wide enough to survive
-   the filters. The vector and sorted indexes are an optimization (section 3.4).
-6. The sweeper: `sweep()` on `Store`, `MemoryStore`, and `HotdataStore`, a conformance
-   test, the ledger row, and a changelog entry.
-7. `OpenAIEmbedder` in `hotmemory.openai`, tested with a fake client and no network.
-8. The integration leg: the `store` fixture gains a `hotdata` driver that provisions a
-   database with a new name for each run and deletes it at the end. It skips unless
-   `HOTMEMORY_TEST_URL` names a running engine. `make integration` runs the suite against
-   the local stack. A second CI job starts the stack with `make local-up` and runs
-   `make integration`. `make verify` stays offline.
-9. The oracle test, as decided above, with the deterministic fake embedder.
-10. The ledger: name the tests for the phase 2 rows (the two-process 409 row and the
-    sweeper half of the `forget_after` row). Narrow the row on two writers to one process.
-    Add a row for each of these: the provisioning rerun, the one-process rule, the episode
-    routing, and the sweeper. Also add a row on whether a plain vector index serves rows
-    loaded after its build.
-11. Docs: `README.md`, `docs/contracts.md`, `docs/guarantees.md`, `docs/local.md`,
-    `CONTRIBUTING.md`, `AGENTS.md`, and `CHANGELOG.md` audited against the code. The
-    contracts state provisioning and its race, the one-process rule, the embedding
-    columns, the episode routing, and `sweep`.
+1. Close phase 2 in `roadmap.md` and replace `plan.md` with the phase 3 plan.
+2. The vector rankings of `HotdataStore` filter first and rank by a scan. Add a test where
+   the scope holds 1 percent of the rows and every one of them must come back.
+3. `close_previous` on `put` and `Writer.put`, in both drivers, with conformance tests and
+   a changelog entry.
+4. The merge of new sources into a new revision, in `_rules` and both drivers, with
+   conformance tests. Update the ledger row on duplicates.
+5. `Fact`, the key derivation, and `Memory.remember`.
+6. `Memory.recall` and `Memory.candidates`, with the as-of rule and the character budget.
+7. `Memory.supersede` and `Memory.forget`.
+8. `Memory.profile`, with the counts of each namespace.
+9. `Memory.capture`, with a fake extractor.
+10. The rendered blocks pinned by tests, as exact strings, for both drivers.
+11. The skill file, its scripts, and the command check in `make verify`.
+12. The ledger: name the tests for the five rows that name phase 3. Add a row for each of
+    these: `close_previous`, the merge of sources, the derived key, and the budget.
+13. Docs: `README.md`, `docs/contracts.md`, `docs/guarantees.md`, `CONTRIBUTING.md`,
+    `AGENTS.md`, and `CHANGELOG.md` audited against the code.
 
 ## Acceptance criteria
 
-- AC1. `make verify` passes offline in under five seconds. Proven by its timed output in
-  the pull request.
-- AC2. `make integration` runs the whole conformance suite against `HotdataStore` on the
-  local stack, and every test passes. Proven by its output in the pull request.
-- AC3. CI runs the integration job on the pull request, and it passes.
-- AC4. The oracle test passes: the vector-only ranking matches exactly within 1e-6, and the
-  fused search returns the same set.
-- AC5. A second `provision` with the same name returns the same database. A duplicate name
-  or a different layout raises and creates nothing. Proven by integration tests.
-- AC6. The frozen-surface tests pass, and each surface change has a changelog entry.
-- AC7. Every row in `docs/guarantees.md` that names phase 2 now names a test that passes.
-- AC8. No committed file names a private repository, a customer, or a deployment detail.
-  Proven by a grep for the known names, recorded in the pull request.
+- AC1. `make verify` passes offline in under five seconds, with the command check.
+- AC2. `make integration` passes against the local stack, and the CI integration job
+  passes on the pull request.
+- AC3. Every memory operation has a test that runs against both drivers.
+- AC4. The rendered blocks of `recall` and `profile` match their pinned strings.
+- AC5. In `HotdataStore`, a search whose scope holds 1 percent of the rows returns the
+  top k rows of that scope.
+- AC6. Every command in the skill file runs and exits zero in `make verify`.
+- AC7. Every ledger row that names phase 3 names a test that passes.
+- AC8. No public text names a private repository, a customer, or a deployment detail. The
+  check covers committed files, commit messages, the pull request, and the issue. A grep
+  for the known names proves it, and the pull request describes the grep without the
+  names themselves.
 
 ## Verification
 
 - Per commit: `make verify`.
-- Per commit that touches the driver: `make local-up`, then `make integration`.
-- Before the pull request: the AC5 checks and the name grep for AC8.
-- The cloud needs credentials, and only the owner runs it, from a gitignored `.env`.
-
-## What the task 2 probe found
-
-Observed on 2026-10-08 against the local stack, with the `latest` RuntimeDB image (digest
-`sha256:302371bb1923`) and `hotdata-framework` 0.14.1.
-
-- The framework lists databases by name and opens one by id. A declared table has no
-  columns until its first load. A replace load of an empty parquet file sets the columns,
-  and `information_schema` then reads them back with their types.
-- The engine refuses a BM25 index on an empty table with `No record batches to index`. It
-  refuses a plain vector index on an empty list column, because it cannot detect the
-  vector size. A fixed-size list column avoids the second refusal.
-- The engine refuses a second vector index on one table with `Only one vector index per
-  table is currently supported`. This is why the cues moved to `cue_v1`.
-- After a seed row is loaded, indexed, and deleted, the BM25 index and the vector index
-  serve rows loaded later. The query plan shows `USearchExec` for the vector ranking, also
-  with a `WHERE` filter on the same table.
-- The form `cosine_distance(t.column, ...) AS distance ... ORDER BY distance`, with a
-  table alias, makes the engine scan, with no `USearchExec`. Without the alias, or with
-  `ORDER BY cosine_distance(...)` directly, the engine uses the index.
-- A filtered search through a plain vector index misses rows loaded after the index build.
-  The index was built over one row, and two rows were loaded after. Then
-  `WHERE kind = 'fact' ORDER BY cosine_distance(e, q) LIMIT 10`, with
-  `USearchExec ... filtered=true` in the plan, returned only the first row. The same
-  query without the `WHERE`, or without the `LIMIT`, or on a table with no index, returned
-  all three. The owner decided on 2026-10-08 that each vector ranking fetches its depth
-  with no filter and filters after, as BM25 and the cues do. `ranking="vector"` scans
-  with the filter first, so that the oracle stays exact.
-- One fused query used both vector indexes and `bm25_search`. Medians of 5 runs, with half
-  the records holding cues:
-
-  | Rows and dimensions | Cues scanned in `memory_v1` | Cues indexed in `cue_v1` | No cues ranking |
-  |---|---|---|---|
-  | 10,000 and 1,536 | 96 ms | 46 ms | 38 ms |
-  | 100,000 and 64 | 53 ms | 31 ms | 26 ms |
-
-  The cues ranking takes the top 100 cues and then filters through the join. A cues
-  ranking that filters first through the join scans, at 136 ms for 10,000 rows of 1,536
-  dimensions.
-- Loads into two tables at the same time do not refuse each other. Two parallel loads cost
-  958 ms against 932 ms for one load, at 10,000 rows of 1,536 dimensions.
-- 24 puts, each two parallel loads, ran against a second writer that loaded both tables
-  every 0.1 seconds. The engine refused 8 loads with 409, and each succeeded on its second
-  attempt. After the run, every record had its cue row, and every cue row had its record.
-  A second writer that loads with no pause kept the retries out for minutes.
-- `hotdata-framework` 0.14.1 reports a refused query as `Bad Request`, with no message
-  from the engine.
+- Per commit that touches a driver: `make local-up`, then `make integration`.
+- Before the pull request: the docs audit of the `pr-workflow` skill, and the grep for
+  AC8 over the files, the commit messages, and the text of the pull request.
 
 ## Questions left open
 
-- For phase 3: `supersede` sets `valid_until` and `expired_at` on the old record, and no
-  `Store` operation can change those fields today.
-- For phase 3: deduplication compares content only, so a `put` that adds a source to an
-  existing fact writes nothing. The contract counts sources as corroboration.
-- After RuntimeDB ships a conditional write: replace the one-process rule with a
+- After the engine fixes the filtered vector index search: let the vector rankings use
+  the index again, and measure the gain.
+- After the engine ships a conditional write: replace the one-process rule with a
   compare-and-set on the revision.
+- A search over history, so that `recall(as_of=T)` can return a fact superseded after T.
 
 ## Stop and ask if
 
-- The engine refuses a planned part of the layout, for example a BM25 index on an empty
-  table, or two plain vector indexes on one table.
-- `hotdata-framework` cannot list databases by name or read back a table layout.
-- A plain vector index does not serve rows loaded after its build.
-- A conformance test fails against `HotdataStore`, and the fix needs a contract change.
-- The oracle's exact comparison differs by more than 1e-6.
-- The whole-label prefix match cannot be written safely in SQL.
-- The integration job cannot start the local stack in CI within ten minutes.
-- `make verify` cannot stay under five seconds without tiers.
+- A rendered block needs a field that the record does not have.
+- `close_previous` cannot write the old and the new row in one load.
+- The command check pushes `make verify` past five seconds.
+- A memory operation needs a new `Store` method.
+- The filter-first scan is slower than 1 second at 100,000 rows on the local stack.

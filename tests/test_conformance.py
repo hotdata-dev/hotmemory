@@ -1,13 +1,13 @@
 """The conformance suite. Each test proves one row of docs/guarantees.md for every driver."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 
 from hotmemory import Filter, JSONValue, Store, TimeRange
 
-from .conftest import FakeClock
+from .conftest import START, FakeClock
 
 NS = ("team", "alerts")
 
@@ -29,6 +29,101 @@ def test_second_put_writes_a_new_revision(store: Store, clock: FakeClock) -> Non
     assert [hit.record.id for hit in store.search("disk fills", [NS])] == [second]
 
 
+def test_close_previous_closes_the_current_revision(store: Store, clock: FakeClock) -> None:
+    night, noon = START - timedelta(days=2), START - timedelta(days=1)
+    first = store.put(NS, "disk", kind="fact", content="The disk fills at night.", valid_from=night)
+    clock.advance()
+    second = store.put(
+        NS,
+        "disk",
+        kind="fact",
+        content="The disk fills at noon.",
+        valid_from=noon,
+        close_previous=True,
+    )
+
+    previous = store.get(NS, "disk", revision=1)
+    assert previous is not None
+    assert (previous.superseded_by, previous.valid_until, previous.expired_at) == (
+        second,
+        noon,
+        clock(),
+    )
+    current = store.get(NS, "disk")
+    assert current is not None
+    assert (current.id, current.valid_from, current.valid_until, current.expired_at) == (
+        second,
+        noon,
+        None,
+        None,
+    )
+    assert [record.id for record in store.history(NS, "disk")] == [first, second]
+
+
+def test_put_without_close_previous_leaves_the_span_open(store: Store, clock: FakeClock) -> None:
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.", valid_from=START)
+    clock.advance()
+    store.put(NS, "disk", kind="fact", content="The disk fills at noon.", valid_from=clock())
+
+    previous = store.get(NS, "disk", revision=1)
+    assert previous is not None
+    assert (previous.valid_until, previous.expired_at) == (None, None)
+
+
+@pytest.mark.parametrize("valid_from", [START - timedelta(seconds=1), None])
+def test_close_previous_refuses_a_span_it_cannot_close(
+    store: Store, clock: FakeClock, valid_from: datetime | None
+) -> None:
+    first = store.put(NS, "disk", kind="fact", content="The disk fills at night.", valid_from=START)
+    clock.advance()
+    with pytest.raises(ValueError, match="valid_from"):
+        store.put(
+            NS,
+            "disk",
+            kind="fact",
+            content="The disk fills at noon.",
+            valid_from=valid_from,
+            close_previous=True,
+        )
+    with pytest.raises(ValueError, match="valid_from"), store.writer() as writer:
+        writer.put(NS, "cpu", kind="fact", content="The CPU spikes at noon.")
+        writer.put(
+            NS,
+            "disk",
+            kind="fact",
+            content="The disk fills at noon.",
+            valid_from=valid_from,
+            close_previous=True,
+        )
+        writer.flush()
+
+    assert [record.id for record in store.history(NS, "disk")] == [first]
+    assert store.get(NS, "cpu") is None
+    current = store.get(NS, "disk")
+    assert current is not None
+    assert (current.valid_until, current.expired_at) == (None, None)
+
+
+def test_close_previous_on_a_new_key_or_same_content(store: Store, clock: FakeClock) -> None:
+    first = store.put(
+        NS, "disk", kind="fact", content="The disk fills at night.", close_previous=True
+    )
+    clock.advance()
+    again = store.put(
+        NS,
+        "disk",
+        kind="fact",
+        content="the disk fills at night.",
+        valid_from=clock(),
+        close_previous=True,
+    )
+
+    assert again == first == "team/alerts/disk@1"
+    current = store.get(NS, "disk")
+    assert current is not None
+    assert (current.valid_until, current.expired_at) == (None, None)
+
+
 def test_deduplication_is_exact_on_normalized_content(store: Store, clock: FakeClock) -> None:
     first = store.put(NS, "disk", kind="fact", content="The disk fills at night.")
     clock.advance()
@@ -39,6 +134,32 @@ def test_deduplication_is_exact_on_normalized_content(store: Store, clock: FakeC
     assert again == first
     assert paraphrase == "team/alerts/disk@2"
     assert len(store.history(NS, "disk")) == 2
+
+
+def test_same_content_with_a_new_source_writes_a_merged_revision(
+    store: Store, clock: FakeClock
+) -> None:
+    content = "The disk fills at night."
+    first = store.put(NS, "disk", kind="fact", content=content, sources=("chat-1",))
+    clock.advance()
+    retried = store.put(NS, "disk", kind="fact", content=content, sources=("chat-1",))
+    clock.advance()
+    merged = store.put(
+        NS, "disk", kind="fact", content=" the disk fills at NIGHT.", sources=("wiki", "chat-1")
+    )
+    clock.advance()
+    known = [
+        store.put(NS, "disk", kind="fact", content=content, sources=sources)
+        for sources in (("wiki",), ())
+    ]
+
+    assert retried == first
+    assert merged == "team/alerts/disk@2"
+    assert known == [merged, merged]
+    current = store.get(NS, "disk")
+    assert current is not None
+    assert current.sources == ("chat-1", "wiki")
+    assert [record.id for record in store.history(NS, "disk")] == [first, merged]
 
 
 def test_synchronous_put_is_visible_to_list(store: Store) -> None:

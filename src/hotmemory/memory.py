@@ -8,7 +8,9 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from hotmemory._rules import (
+    Draft,
     build_record,
+    check_close,
     check_episode_line,
     check_prefix,
     cosine_distance,
@@ -18,7 +20,9 @@ from hotmemory._rules import (
     matches,
     newest_first,
     next_revision,
+    superseded,
     under_prefix,
+    with_new_sources,
 )
 from hotmemory._writer import BufferedWriter, check_count
 from hotmemory.filter import Filter
@@ -37,14 +41,29 @@ class MemoryStore:
     `embedder` turns texts into vectors for `search` with query text. Without one, such a
     search raises RuntimeError. `clock` gives `created_at` and the time against which
     `forget_after` is compared. Search ranks by the cosine distance between the query and
-    `content`, closest first.
+    `content`, closest first. `records` are revisions that the store starts with, such as
+    the result of `records()` from another store.
     """
 
-    def __init__(self, *, embedder: Embedder | None = None, clock: Clock = utc_now) -> None:
+    def __init__(
+        self,
+        *,
+        embedder: Embedder | None = None,
+        clock: Clock = utc_now,
+        records: Sequence[Record] = (),
+    ) -> None:
         self._embedder = embedder
         self._clock = clock
         self._revisions: dict[tuple[tuple[str, ...], str], builtins.list[Record]] = {}
         self._vectors: dict[str, tuple[float, ...]] = {}
+        for record in sorted(records, key=lambda record: record.revision):
+            self._revisions.setdefault((record.namespace, record.key), []).append(record)
+
+    def records(self) -> builtins.list[Record]:
+        """Return every revision of every key, ordered by namespace, key, and revision."""
+        return [
+            _copy(record) for slot in sorted(self._revisions) for record in self._revisions[slot]
+        ]
 
     def put(
         self,
@@ -64,8 +83,9 @@ class MemoryStore:
         valid_until: datetime | None = None,
         forget_after: datetime | None = None,
         forget_reason: str = "",
+        close_previous: bool = False,
     ) -> str:
-        draft = build_record(
+        record = build_record(
             namespace,
             key,
             1,
@@ -84,7 +104,7 @@ class MemoryStore:
             forget_after=forget_after,
             forget_reason=forget_reason,
         )
-        return self._write(draft)
+        return self._write_many([Draft(record, close_previous)])[0]
 
     def get(self, namespace: Sequence[str], key: str, revision: int | None = None) -> Record | None:
         revisions = self._revisions.get(self._slot(namespace, key), [])
@@ -157,22 +177,40 @@ class MemoryStore:
                 ids.append(record.id)
         return sorted(ids)
 
-    def _write(self, draft: Record) -> str:
-        slot = (draft.namespace, draft.key)
-        revisions = self._revisions.get(slot, [])
-        current = revisions[-1] if revisions else None
-        check_episode_line(current, draft.kind)
-        now = self._clock()
-        if current is not None and is_duplicate(current, draft.content, now):
-            return current.id
-        record = replace(draft, revision=next_revision(current), created_at=now)
-        if current is not None:
-            revisions = [*revisions[:-1], replace(current, superseded_by=record.id)]
-        self._revisions[slot] = [*revisions, record]
-        return record.id
+    def _write_many(self, drafts: Sequence[Draft]) -> builtins.list[str]:
+        """Write `drafts` in order and return the id of each.
 
-    def _write_many(self, drafts: Sequence[Record]) -> builtins.list[str]:
-        return [self._write(draft) for draft in drafts]
+        If one draft raises, no draft is written.
+        """
+        revisions = dict(self._revisions)
+        ids = [self._write(draft, revisions) for draft in drafts]
+        self._revisions = revisions
+        return ids
+
+    def _write(
+        self,
+        draft: Draft,
+        revisions: dict[tuple[tuple[str, ...], str], builtins.list[Record]],
+    ) -> str:
+        slot = (draft.record.namespace, draft.record.key)
+        history = revisions.get(slot, [])
+        current = history[-1] if history else None
+        check_episode_line(current, draft.record.kind)
+        now = self._clock()
+        written = draft.record
+        if current is not None and is_duplicate(current, draft.record.content, now):
+            merged = with_new_sources(current, written)
+            if merged is None:
+                return current.id
+            written = merged
+        record = replace(written, revision=next_revision(current), created_at=now)
+        if current is not None:
+            if draft.close_previous:
+                check_close(current, record)
+            closed = superseded(current, record, now, draft.close_previous)
+            history = [*history[:-1], closed]
+        revisions[slot] = [*history, record]
+        return record.id
 
     def _slot(self, namespace: Sequence[str], key: str) -> tuple[tuple[str, ...], str]:
         labels = check_namespace(namespace)
