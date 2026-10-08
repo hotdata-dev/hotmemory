@@ -41,14 +41,29 @@ class MemoryStore:
     `embedder` turns texts into vectors for `search` with query text. Without one, such a
     search raises RuntimeError. `clock` gives `created_at` and the time against which
     `forget_after` is compared. Search ranks by the cosine distance between the query and
-    `content`, closest first.
+    `content`, closest first. `records` are revisions that the store starts with, such as
+    the result of `records()` from another store.
     """
 
-    def __init__(self, *, embedder: Embedder | None = None, clock: Clock = utc_now) -> None:
+    def __init__(
+        self,
+        *,
+        embedder: Embedder | None = None,
+        clock: Clock = utc_now,
+        records: Sequence[Record] = (),
+    ) -> None:
         self._embedder = embedder
         self._clock = clock
         self._revisions: dict[tuple[tuple[str, ...], str], builtins.list[Record]] = {}
         self._vectors: dict[str, tuple[float, ...]] = {}
+        for record in sorted(records, key=lambda record: record.revision):
+            self._revisions.setdefault((record.namespace, record.key), []).append(record)
+
+    def records(self) -> builtins.list[Record]:
+        """Return every revision of every key, ordered by namespace, key, and revision."""
+        return [
+            _copy(record) for slot in sorted(self._revisions) for record in self._revisions[slot]
+        ]
 
     def put(
         self,

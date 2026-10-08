@@ -109,3 +109,20 @@ def test_cosine_distance() -> None:
 def test_cosine_distance_refuses_bad_vectors(a: list[float], b: list[float]) -> None:
     with pytest.raises(ValueError):
         cosine_distance(a, b)
+
+
+def test_records_rebuild_the_same_store(clock: FakeClock) -> None:
+    store = MemoryStore(clock=clock)
+    store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at night.")
+    clock.advance()
+    store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at noon.")
+    store.put(("team",), "cpu", kind="fact", content="The CPU spikes.")
+
+    copy = MemoryStore(clock=clock, records=list(reversed(store.records())))
+    assert copy.records() == store.records()
+    assert [record.id for record in store.records()] == [
+        "team/cpu@1",
+        "team/alerts/disk@1",
+        "team/alerts/disk@2",
+    ]
+    assert copy.list(("team",)) == store.list(("team",))

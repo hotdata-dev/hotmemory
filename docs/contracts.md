@@ -161,11 +161,13 @@ Version 1 ships two drivers.
 - `MemoryStore` runs in the process, in memory. It is a real driver and not a mock. It
   computes relevance with the same cosine distance that the engine uses, and it refuses a
   filter that it does not model. The offline test suite runs against it, and it is the
-  reference for the other driver. It takes two optional arguments. The embedder is a
+  reference for the other driver. It takes three optional arguments. The embedder is a
   callable that turns a list of texts into a list of vectors. Without it, a `search` with
   query text raises an error. The clock is a callable that returns the current time, and
-  the default reads the system clock. `MemoryStore` ranks by the cosine distance between
-  the query and `content` only. It does not rank by BM25 or by `cues`.
+  the default reads the system clock. The records are revisions that the store starts
+  with. `records()` returns every revision that a store holds, so a caller can save a
+  store and build it again. `MemoryStore` ranks by the cosine distance between the query
+  and `content` only. It does not rank by BM25 or by `cues`.
 - `HotdataStore` uses one managed database, keyed loads, a lock for its writes, and the
   retrieval query below. It needs the `hotdata` extra. With the local RuntimeDB stack, it
   is also the development driver. The section on `HotdataStore` below gives the details.
@@ -322,6 +324,12 @@ after it is dropped.
 
 A record is valid at time T when `valid_from` is null or at most T, and `valid_until` is
 null or after T. A null `valid_from` means the start of time.
+
+The skill file `skills/hotmemory/SKILL.md` gives an agent each memory operation as a
+command. Each command is a script in `skills/hotmemory/scripts/`. With `--database`, a
+script opens `HotdataStore` with `OpenAIEmbedder`. With `--memory-file`, it opens a
+`MemoryStore` that loads from a JSON file and saves to it after the command. That store
+embeds by hashed word counts, which match words and not meaning.
 
 These three rules apply to every operation:
 
