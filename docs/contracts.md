@@ -287,8 +287,8 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 | Operation | Arguments | Behavior |
 |---|---|---|
 | `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer, so if one fact is refused, none is written. |
-| `recall` | query, scopes, optional as_of, budget in characters | Searches the allowed scopes, keeps the records that are valid at `as_of`, and returns the top records inside the budget. It returns them as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
-| `candidates` | fact, scopes, k | Returns the k nearest current records with their distances. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
+| `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions in the allowed scopes for the top k records. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
+| `candidates` | fact, scopes, k | Returns the top k hits of `search` for the content of the fact, sorted by distance, closest first. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
 | `supersede` | key of the record to close, new fact, optional valid_from | Closes the named record and writes the new fact as the next revision under its key. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
 | `forget` | ids, or a horizon | Deletes the named records, or every record whose `forget_after` is before the horizon. |
 | `profile` | subject, scopes, budget in characters | Returns the current records for the subject, grouped by `kind`, as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
@@ -298,6 +298,18 @@ The key of a fact has two parts joined by `-`. The first part is the subject, wi
 character outside `[A-Za-z0-9_-]` changed to `-`, cut to its first 64 characters. An empty
 subject gives `fact`. The second part is the first 16 hex characters of the SHA-256 of the
 normalized content. A derived key never contains `/` or `@`.
+
+The block of `recall` has one line for each record, in the order of the search:
+
+```text
+- <content> [sources: a, b] [valid: <valid_from> to <valid_until>]
+```
+
+Each run of whitespace in the content becomes one space, so a record is always one line.
+Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unknown`, a
+null `valid_until` as `now`, and a record with no sources as `none`. The block holds whole
+lines only, joined by newlines. It stops before the first line that would make it longer
+than the budget. The list holds the records of the block.
 
 A record is valid at time T when `valid_from` is null or at most T, and `valid_until` is
 null or after T. A null `valid_from` means the start of time.

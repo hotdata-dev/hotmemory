@@ -6,14 +6,16 @@ import hashlib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
+from hotmemory._writer import check_count
 from hotmemory.memory import utc_now
-from hotmemory.record import JSONValue, Kind, check_namespace, normalize
-from hotmemory.store import Clock, Store
+from hotmemory.record import JSONValue, Kind, Record, check_namespace, normalize
+from hotmemory.store import Clock, Hit, Store
 
 SUBJECT_LENGTH = 64
 HASH_LENGTH = 16
+DEFAULT_BUDGET = 2000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -36,6 +38,43 @@ class Fact:
     valid_until: datetime | None = None
     forget_after: datetime | None = None
     forget_reason: str = ""
+
+
+def is_valid_at(record: Record, when: datetime) -> bool:
+    """Return True if `record` is valid at `when` by the as-of rule.
+
+    `valid_from` is null or at most `when`, and `valid_until` is null or after `when`.
+    """
+    starts = record.valid_from is None or record.valid_from <= when
+    ends = record.valid_until is None or record.valid_until > when
+    return starts and ends
+
+
+def render_line(record: Record) -> str:
+    """Return the line of `record` in a rendered block.
+
+    The line is `- <content> [sources: a, b] [valid: <from> to <until>]`. Each run of
+    whitespace in the content becomes one space. A null `valid_from` shows as `unknown`,
+    a null `valid_until` as `now`, and no sources as `none`.
+    """
+    content = " ".join(record.content.split())
+    sources = ", ".join(record.sources) or "none"
+    start = _time(record.valid_from, "unknown")
+    end = _time(record.valid_until, "now")
+    return f"- {content} [sources: {sources}] [valid: {start} to {end}]"
+
+
+def fit_lines(lines: Sequence[str], budget: int) -> int:
+    """Return how many of `lines`, from the first, fit in `budget` characters with newlines.
+
+    The count stops at the first line that would pass the budget.
+    """
+    used = 0
+    for count, line in enumerate(lines):
+        used += len(line) + (1 if count else 0)
+        if used > budget:
+            return count
+    return len(lines)
 
 
 def derive_key(subject: str, content: str) -> str:
@@ -95,3 +134,41 @@ class Memory:
                     forget_reason=fact.forget_reason,
                 )
         return writer.flushed
+
+    def recall(
+        self,
+        query: str,
+        scopes: Sequence[Sequence[str]],
+        as_of: datetime | None = None,
+        budget: int = DEFAULT_BUDGET,
+        k: int = 10,
+    ) -> tuple[list[Record], str]:
+        """Return the top current records for `query` under `scopes`, and their block.
+
+        The search returns up to `k` current records. With `as_of`, only the ones valid at
+        `as_of` remain. The block holds one line for each record, in order, and stops
+        before the first line that would pass `budget` characters. The list holds the
+        records of the block.
+        """
+        check_count("budget", budget)
+        records = [hit.record for hit in self._store.search(query, scopes, k=k)]
+        if as_of is not None:
+            records = [record for record in records if is_valid_at(record, as_of)]
+        lines = [render_line(record) for record in records]
+        count = fit_lines(lines, budget)
+        return records[:count], "\n".join(lines[:count])
+
+    def candidates(self, fact: Fact, scopes: Sequence[Sequence[str]], k: int = 5) -> list[Hit]:
+        """Return up to `k` current records near the content of `fact`, closest first.
+
+        Each hit carries the cosine distance to the content. Nothing is decided or written.
+        """
+        hits = self._store.search(fact.content, scopes, k=k)
+        return sorted(hits, key=lambda hit: hit.distance if hit.distance is not None else 0.0)
+
+
+def _time(value: datetime | None, missing: str) -> str:
+    """Return `value` in ISO 8601 in UTC to the second, or `missing` if it is None."""
+    if value is None:
+        return missing
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
