@@ -1,6 +1,6 @@
 """Tests of the memory contract. Each test runs `Memory` over every driver."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -325,3 +325,75 @@ def test_capture_remembers_what_the_extractor_returns(memory: Memory) -> None:
 def test_capture_with_no_facts_writes_nothing(memory: Memory) -> None:
     assert memory.capture("nothing here", SCOPE, lambda text, observed_at, current: []) == []
     assert memory.store.list(SCOPE) == []
+
+
+PINNED_RECALL = (
+    "- The disk fills at night. [sources: chat-1, wiki] "
+    "[valid: 2026-10-01T00:00:00Z to 2026-10-04T00:00:00Z]\n"
+    "- The disk fills. [sources: none] [valid: unknown to now]\n"
+    "- The disk is a 2 TB volume. [sources: inventory] [valid: 2026-09-01T08:30:00Z to now]"
+)
+
+PINNED_PROFILE = (
+    "fact:\n"
+    "- The disk is a 2 TB volume. [sources: inventory] [valid: 2026-09-01T08:30:00Z to now]\n"
+    "- The disk fills. [sources: none] [valid: unknown to now]\n"
+    "- The disk fills at night. [sources: chat-1, wiki] "
+    "[valid: 2026-10-01T00:00:00Z to 2026-10-04T00:00:00Z]\n"
+    "procedure:\n"
+    "- Rotate the logs before noon. [sources: runbook] [valid: unknown to now]\n"
+    "namespaces:\n"
+    "- team/alerts: 5\n"
+    "- team/alerts/night: 1"
+)
+
+
+def remember_pinned(memory: Memory, clock: FakeClock) -> None:
+    facts = [
+        Fact(
+            kind="fact",
+            subject="disk",
+            content="The disk fills at night.",
+            sources=("chat-1", "wiki"),
+            valid_from=datetime(2026, 10, 1, tzinfo=UTC),
+            valid_until=datetime(2026, 10, 4, tzinfo=UTC),
+        ),
+        Fact(kind="fact", subject="disk", content="The disk fills."),
+        Fact(
+            kind="fact",
+            subject="disk",
+            content="The disk is a 2 TB volume.",
+            sources=("inventory",),
+            valid_from=datetime(2026, 9, 1, 8, 30, tzinfo=UTC),
+        ),
+        Fact(
+            kind="procedure",
+            subject="disk",
+            content="Rotate the logs before noon.",
+            sources=("runbook",),
+        ),
+        Fact(kind="fact", subject="cpu", content="The CPU spikes at noon."),
+    ]
+    for fact in facts:
+        memory.remember([fact], SCOPE)
+        clock.advance()
+    memory.remember(
+        [Fact(kind="fact", subject="net", content="The link drops.")], (*SCOPE, "night")
+    )
+
+
+def test_recall_block_matches_its_pinned_string(memory: Memory, clock: FakeClock) -> None:
+    remember_pinned(memory, clock)
+    records, block = memory.recall("The disk fills at night.", [SCOPE], k=3)
+    assert block == PINNED_RECALL
+    assert [record.content for record in records] == [
+        "The disk fills at night.",
+        "The disk fills.",
+        "The disk is a 2 TB volume.",
+    ]
+
+
+def test_profile_block_matches_its_pinned_string(memory: Memory, clock: FakeClock) -> None:
+    remember_pinned(memory, clock)
+    _, block = memory.profile("disk", [SCOPE])
+    assert block == PINNED_PROFILE
