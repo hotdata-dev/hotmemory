@@ -5,8 +5,15 @@ Needs the `hotdata` extra: `pip install hotmemory[hotdata]`.
 
 from __future__ import annotations
 
+import builtins
+import json
 import tempfile
-from dataclasses import dataclass
+import threading
+import time
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +21,24 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from hotdata.api.indexes_api import IndexesApi
 from hotdata_framework import HotdataClient, ManagedDatabase
-from hotdata_framework.client import IndexType, VectorMetric
+from hotdata_framework.client import IndexType, ManagedLoadMode, VectorMetric
 
+from hotmemory._rules import (
+    build_record,
+    check_episode_line,
+    is_duplicate,
+    next_revision,
+)
+from hotmemory._writer import BufferedWriter
 from hotmemory.memory import utc_now
-from hotmemory.record import SCHEMA_VERSION
+from hotmemory.record import (
+    SCHEMA_VERSION,
+    JSONValue,
+    Kind,
+    Record,
+    check_key,
+    check_namespace,
+)
 from hotmemory.store import Clock, Embedder
 
 SCHEMA = "public"
@@ -29,6 +50,9 @@ TABLES = (MEMORY_TABLE, EPISODE_TABLE, CUE_TABLE, META_TABLE)
 RECORD_TABLES = (MEMORY_TABLE, EPISODE_TABLE)
 SEED_ID = "seed"
 META_ID = "meta"
+LOAD_ATTEMPTS = 8
+FIRST_BACKOFF = 0.25
+MAX_BACKOFF = 4.0
 
 _TIME = pa.timestamp("us", tz="UTC")
 _TEXTS = pa.list_(pa.string())
@@ -59,6 +83,9 @@ RECORD_SCHEMA = pa.schema(
         ("content_embedding", _VECTOR),
     ]
 )
+_Load = tuple[str, pa.Table, ManagedLoadMode]
+"""One load: the table, the rows, and the load mode."""
+
 CUE_SCHEMA = pa.schema([("id", pa.string()), ("cues_embedding", _VECTOR)])
 META_SCHEMA = pa.schema(
     [
@@ -123,6 +150,8 @@ class HotdataStore:
         self._model = model
         self._dimensions = dimensions
         self._clock = clock
+        self._lock = threading.Lock()
+        self._sleep: Callable[[float], None] = time.sleep
 
     @classmethod
     def provision(
@@ -185,6 +214,200 @@ class HotdataStore:
         return cls(
             client, database, embedder=embedder, model=model, dimensions=dimensions, clock=clock
         )
+
+    def put(
+        self,
+        namespace: Sequence[str],
+        key: str,
+        *,
+        kind: Kind,
+        content: str,
+        subject: str = "",
+        cues: Sequence[str] = (),
+        payload: dict[str, JSONValue] | None = None,
+        tags: Sequence[str] = (),
+        sources: Sequence[str] = (),
+        actor: str = "",
+        observed_at: datetime | None = None,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+        forget_after: datetime | None = None,
+        forget_reason: str = "",
+    ) -> str:
+        draft = build_record(
+            namespace,
+            key,
+            1,
+            self._clock(),
+            kind=kind,
+            content=content,
+            subject=subject,
+            cues=cues,
+            payload=payload,
+            tags=tags,
+            sources=sources,
+            actor=actor,
+            observed_at=observed_at,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            forget_after=forget_after,
+            forget_reason=forget_reason,
+        )
+        return self._write_many([draft])[0]
+
+    def delete(self, namespace: Sequence[str], key: str) -> None:
+        labels = check_namespace(namespace)
+        check_key(key)
+        with self._lock:
+            where = _slot_condition(labels, key)
+            loads: builtins.list[_Load] = []
+            for table in RECORD_TABLES:
+                rows = self._sql(f"SELECT id FROM {_ref(table)} WHERE {where}").rows
+                if rows:
+                    ids = pa.table({"id": [row[0] for row in rows]})
+                    loads.extend([(table, ids, "delete"), (CUE_TABLE, ids, "delete")])
+            self._load_all(loads)
+
+    def writer(
+        self, max_rows: int = 1000, interval: timedelta = timedelta(seconds=5)
+    ) -> HotdataWriter:
+        return HotdataWriter(self, max_rows, interval)
+
+    def _write_many(self, drafts: Sequence[Record]) -> builtins.list[str]:
+        """Write `drafts` in order, with one load per table, and return the id of each.
+
+        Each draft follows the rules of `put`. The read of the current revisions and the
+        loads hold the lock of this store.
+        """
+        with self._lock:
+            now = self._clock()
+            slots = {(draft.namespace, draft.key) for draft in drafts}
+            current, vectors = self._current(slots)
+            pending: dict[str, Record] = {}
+            ids = []
+            for draft in drafts:
+                slot = (draft.namespace, draft.key)
+                found = current.get(slot)
+                check_episode_line(found, draft.kind)
+                if found is not None and is_duplicate(found, draft.content, now):
+                    ids.append(found.id)
+                    continue
+                record = replace(draft, revision=next_revision(found), created_at=now)
+                if found is not None:
+                    pending[found.id] = replace(found, superseded_by=record.id)
+                pending[record.id] = record
+                current[slot] = record
+                ids.append(record.id)
+            if pending:
+                self._load_records(builtins.list(pending.values()), vectors)
+            return ids
+
+    def _current(
+        self, slots: set[tuple[tuple[str, ...], str]]
+    ) -> tuple[dict[tuple[tuple[str, ...], str], Record], dict[str, builtins.list[float]]]:
+        """Return the current revision of each slot that has one, and its content vector."""
+        current: dict[tuple[tuple[str, ...], str], Record] = {}
+        vectors: dict[str, builtins.list[float]] = {}
+        if not slots:
+            return current, vectors
+        where = " OR ".join(f"({_slot_condition(*slot)})" for slot in sorted(slots))
+        columns = ", ".join(RECORD_SCHEMA.names)
+        for table in RECORD_TABLES:
+            sql = f"SELECT {columns} FROM {_ref(table)} WHERE superseded_by IS NULL AND ({where})"
+            for row in self._sql(sql).to_records():
+                record = _record(row)
+                slot = (record.namespace, record.key)
+                if slot not in current or current[slot].revision < record.revision:
+                    current[slot] = record
+                    vectors[record.id] = row["content_embedding"]
+        return current, vectors
+
+    def _load_records(
+        self, records: Sequence[Record], vectors: dict[str, builtins.list[float]]
+    ) -> None:
+        """Upsert `records` into their tables, and the cue rows of the new ones."""
+        fresh = [record for record in records if record.id not in vectors]
+        with_cues = [record for record in fresh if record.cues]
+        embedded = self._embed(
+            [record.content for record in fresh] + ["\n".join(record.cues) for record in with_cues]
+        )
+        content = dict(zip((record.id for record in fresh), embedded[: len(fresh)], strict=True))
+        cues = dict(zip((record.id for record in with_cues), embedded[len(fresh) :], strict=True))
+        by_table: dict[str, builtins.list[dict[str, Any]]] = {}
+        for record in records:
+            vector = vectors[record.id] if record.id in vectors else content[record.id]
+            by_table.setdefault(_table(record.kind), []).append(_row(record, vector))
+        loads: builtins.list[_Load] = [
+            (table, pa.Table.from_pylist(rows, schema=RECORD_SCHEMA), "upsert")
+            for table, rows in by_table.items()
+        ]
+        if cues:
+            cue_rows = {"id": builtins.list(cues), "cues_embedding": builtins.list(cues.values())}
+            loads.append((CUE_TABLE, pa.table(cue_rows, schema=CUE_SCHEMA), "upsert"))
+        self._load_all(loads)
+
+    def _embed(self, texts: Sequence[str]) -> builtins.list[builtins.list[float]]:
+        """Return one vector for each text, or raise ValueError if a vector has another size."""
+        if not texts:
+            return []
+        vectors = [[float(x) for x in vector] for vector in self._embedder(texts)]
+        if len(vectors) != len(texts):
+            raise ValueError(f"embedder returned {len(vectors)} vectors for {len(texts)} texts")
+        for vector in vectors:
+            if len(vector) != self._dimensions:
+                raise ValueError(
+                    f"embedder returned a vector of {len(vector)} floats; "
+                    f"this database holds vectors of {self._dimensions}"
+                )
+        return vectors
+
+    def _load_all(self, loads: Sequence[_Load]) -> None:
+        """Run each load, at the same time when there is more than one."""
+        if len(loads) == 1:
+            self._load(*loads[0])
+            return
+        if not loads:
+            return
+        with ThreadPoolExecutor(len(loads)) as pool:
+            futures = [pool.submit(self._load, *load) for load in loads]
+        for future in futures:
+            future.result()
+
+    def _load(self, table: str, rows: pa.Table, mode: ManagedLoadMode) -> None:
+        """Upload `rows` once and load them, with a retry when the table is locked.
+
+        A load refused with 409 RESOURCE_LOCKED is tried up to LOAD_ATTEMPTS times, with
+        a backoff from FIRST_BACKOFF seconds that doubles up to MAX_BACKOFF seconds.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            upload_id = self.client.upload_parquet(_Files(Path(tmp)).write(rows))
+        delay = FIRST_BACKOFF
+        for attempt in range(1, LOAD_ATTEMPTS + 1):
+            try:
+                self.client.load_managed_table(
+                    self.database,
+                    table,
+                    schema=SCHEMA,
+                    upload_id=upload_id,
+                    mode=mode,
+                    key=["id"],
+                )
+                return
+            except RuntimeError as error:
+                if attempt == LOAD_ATTEMPTS or not _is_locked(error):
+                    raise
+            self._sleep(delay)
+            delay = min(delay * 2, MAX_BACKOFF)
+
+    def _sql(self, sql: str) -> Any:
+        return self.client.execute_sql(sql, database=self.database)
+
+
+class HotdataWriter(BufferedWriter):
+    """The `Writer` that `HotdataStore.writer` returns. Each flush sends one load per table."""
+
+    def __init__(self, store: HotdataStore, max_rows: int, interval: timedelta) -> None:
+        super().__init__(store._write_many, store._clock, max_rows, interval)
 
 
 def _check_settings(model: str, dimensions: int) -> None:
@@ -294,6 +517,90 @@ def _check_layout(
             f"and {found[2]} dimensions; this store has schema version {SCHEMA_VERSION}, "
             f"model {model!r}, and {dimensions} dimensions"
         )
+
+
+def _table(kind: Kind) -> str:
+    """Return the table that holds records of `kind`."""
+    return EPISODE_TABLE if kind == "episode" else MEMORY_TABLE
+
+
+def _text(value: str) -> str:
+    """Return `value` as a SQL string literal."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _slot_condition(namespace: tuple[str, ...], key: str) -> str:
+    """Return the SQL condition that matches the rows of one key."""
+    return f"namespace = {_text('/'.join(namespace))} AND key = {_text(key)}"
+
+
+def _row(record: Record, vector: Sequence[float]) -> dict[str, Any]:
+    """Return the table row of `record`, with `vector` as its content embedding."""
+    return {
+        "id": record.id,
+        "namespace": "/".join(record.namespace),
+        "key": record.key,
+        "revision": record.revision,
+        "kind": record.kind,
+        "subject": record.subject,
+        "content": record.content,
+        "cues": list(record.cues),
+        "payload": json.dumps(record.payload, sort_keys=True),
+        "tags": list(record.tags),
+        "sources": list(record.sources),
+        "actor": record.actor,
+        "created_at": record.created_at,
+        "observed_at": record.observed_at,
+        "valid_from": record.valid_from,
+        "valid_until": record.valid_until,
+        "expired_at": record.expired_at,
+        "superseded_by": record.superseded_by,
+        "forget_after": record.forget_after,
+        "forget_reason": record.forget_reason,
+        "content_embedding": list(vector),
+    }
+
+
+def _record(row: dict[str, Any]) -> Record:
+    """Return the record that a table row holds."""
+    return Record(
+        namespace=tuple(row["namespace"].split("/")),
+        key=row["key"],
+        revision=int(row["revision"]),
+        kind=row["kind"],
+        subject=row["subject"],
+        content=row["content"],
+        cues=tuple(row["cues"] or ()),
+        payload=json.loads(row["payload"]),
+        tags=tuple(row["tags"] or ()),
+        sources=tuple(row["sources"] or ()),
+        actor=row["actor"],
+        created_at=_time(row["created_at"]),
+        observed_at=_time(row["observed_at"]),
+        valid_from=_time(row["valid_from"]),
+        valid_until=_time(row["valid_until"]),
+        expired_at=_time(row["expired_at"]),
+        superseded_by=row["superseded_by"],
+        forget_after=_time(row["forget_after"]),
+        forget_reason=row["forget_reason"],
+    )
+
+
+def _time(value: Any) -> Any:
+    """Return a timestamp that a query returned as a datetime, or None."""
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
+def _is_locked(error: RuntimeError) -> bool:
+    """Return True if `error` is a refusal because another load holds the table."""
+    cause = error.__cause__
+    if getattr(error, "code", None) == "RESOURCE_LOCKED":
+        return True
+    return getattr(cause, "status", None) == 409 and "RESOURCE_LOCKED" in str(
+        getattr(cause, "body", "")
+    )
 
 
 def _ref(table: str) -> str:
