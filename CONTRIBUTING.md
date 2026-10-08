@@ -32,6 +32,7 @@ passes in CI. It has no tiers, because the full check takes less than five secon
 | Target | What it does |
 |---|---|
 | `make verify` | Runs every check above. |
+| `make integration` | Runs the tests marked `hotdata` against the local stack. Start the stack first with `make local-up`. To use another engine, set `HOTMEMORY_TEST_URL`. |
 | `make local-up` | Starts the local RuntimeDB stack: Postgres, RustFS, and the engine. [docs/local.md](docs/local.md) tells you how to point the library at it. |
 | `make local-down` | Stops the stack and deletes its data. |
 | `make local-pull` | Downloads newer images for the stack. |

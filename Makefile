@@ -3,7 +3,7 @@ export LOCAL_PORT ?= 3000
 
 STORAGE_URL := http://127.0.0.1:9000
 
-.PHONY: verify local-up local-down local-pull
+.PHONY: verify integration local-up local-down local-pull
 
 verify:
 	uv run --group dev ruff check .
@@ -11,6 +11,10 @@ verify:
 	uv run --group dev mypy
 	uv run --group dev pytest --disable-socket -q
 	uv run --no-project python scripts/check_links.py
+
+integration:
+	HOTMEMORY_TEST_URL=$${HOTMEMORY_TEST_URL:-http://localhost:$(LOCAL_PORT)} \
+		uv run --group dev pytest -q -m hotdata
 
 local-up:
 	docker compose up -d --wait catalog storage

@@ -17,3 +17,7 @@ each one, and its failure message points to this file.
 - `Filter` and `TimeRange`, the exact filters of `list` and `search`, and `Hit`, one search
   result with its distance.
 - `MemoryStore` and `MemoryWriter`, the in-process driver.
+- `hotmemory.hotdata`, in the `hotdata` extra, with `HotdataStore.provision` and
+  `HotdataStore.open`, which create or open one managed database with the tables of schema
+  version 1. `LayoutError` reports a database whose layout differs. The `openai` extra is
+  declared.
