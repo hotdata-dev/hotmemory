@@ -293,7 +293,7 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 | `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions in the allowed scopes for the top k records. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
 | `candidates` | fact, scopes, k | Returns the top k hits of `search` for the content of the fact, sorted by distance, closest first. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
 | `supersede` | scope, key of the record to close, new fact, optional valid_from, actor | Closes the named record and writes the new fact as the next revision under its key, in one `put` with `close_previous`. The new `valid_from` is the argument, else that of the fact, else now. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the key has no current revision, or the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
-| `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. An id outside the scopes makes the call refuse and delete nothing. It returns the deleted ids. |
+| `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
 | `profile` | subject, scopes, budget in characters | Returns the current records for the subject, grouped by `kind`, as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
 | `capture` | text, scope, extractor, actor, observed_at | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. The extractor is a plain callable. The library ships no model and names no model. |
 
@@ -319,7 +319,10 @@ profile, procedure, episode. A line `<kind>:` starts each group, and its records
 in the line format of `recall`, newest first. Then a line `namespaces:` starts the counts,
 with one line `- <namespace>: <count>` for each namespace under the scopes. The count is
 the number of current records in that namespace exactly, read with `list` up to 1000
-records. If `list` reached that limit, the count ends with `+`. The counts take the budget
+records. If `list` reached that limit, the count ends with `+`. `list` matches the
+namespace as a prefix, so the records of its sub-namespaces share the window of 1000. A
+count with `+` is a lower bound, and it can be far below the true count when a
+sub-namespace is large. The counts take the budget
 first, and the record lines fill what is left, by whole lines. A group line with no record
 after it is dropped.
 

@@ -220,6 +220,30 @@ def test_forget_by_ids_deletes_every_revision_of_each_key(memory: Memory, clock:
     assert store.get(SCOPE, "cpu") is not None
 
 
+@pytest.mark.parametrize("bad", ["team/alerts/cpu", "team//cpu@1", "team/alerts/@1", "cpu@1"])
+def test_forget_checks_every_id_before_it_deletes(memory: Memory, bad: str) -> None:
+    memory.store.put(SCOPE, "disk", kind="fact", content="disk at night")
+    memory.store.put(SCOPE, "cpu", kind="fact", content="cpu at noon")
+
+    with pytest.raises(ValueError):
+        memory.forget([("team",)], ids=["team/alerts/disk@1", bad])
+    assert memory.store.get(SCOPE, "disk") is not None
+    assert memory.store.get(SCOPE, "cpu") is not None
+
+
+def test_profile_count_shares_its_window_with_sub_namespaces(
+    memory: Memory, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    monkeypatch.setattr("hotmemory.contract.COUNT_LIMIT", 3)
+    memory.remember([Fact(kind="fact", content="disk at night")], SCOPE)
+    clock.advance()
+    child = (*SCOPE, "night")
+    memory.remember([Fact(kind="fact", content=f"net fact {n}") for n in range(3)], child)
+
+    _, block = memory.profile("disk", [SCOPE])
+    assert block.split("\n")[-2:] == ["- team/alerts: 0+", "- team/alerts/night: 3+"]
+
+
 def test_forget_by_horizon_deletes_the_keys_due_before_it(memory: Memory) -> None:
     store = memory.store
     soon, later = START + timedelta(days=1), START + timedelta(days=3)

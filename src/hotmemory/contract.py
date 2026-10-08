@@ -13,7 +13,15 @@ from hotmemory._rules import check_prefix, newest_first, under_prefix
 from hotmemory._writer import check_count
 from hotmemory.filter import Filter
 from hotmemory.memory import utc_now
-from hotmemory.record import KINDS, JSONValue, Kind, Record, check_namespace, normalize
+from hotmemory.record import (
+    KINDS,
+    JSONValue,
+    Kind,
+    Record,
+    check_key,
+    check_namespace,
+    normalize,
+)
 from hotmemory.store import Clock, Hit, Store
 
 SUBJECT_LENGTH = 64
@@ -225,9 +233,10 @@ class Memory:
         Pass exactly one of `ids` and `horizon`. Each id names its key. With `horizon`,
         a key is due when its current revision has a `forget_after` before `horizon`.
         The candidates come from `list`, up to FORGET_SCAN records under each scope, so a
-        record already past its `forget_after` is left to `Store.sweep`. Raises
-        ValueError, and deletes nothing, if an id is outside `scopes`. Returns the ids of
-        the deleted revisions, sorted.
+        record already past its `forget_after` is left to `Store.sweep`. Every id is
+        checked before the first delete. Raises ValueError, and deletes nothing, if an id
+        is not a valid record id or is outside `scopes`. Returns the ids of the deleted
+        revisions, sorted.
         """
         if (ids is None) == (horizon is None):
             raise ValueError("pass exactly one of ids and horizon")
@@ -261,7 +270,9 @@ class Memory:
         group. A line `<kind>:` starts each group. The block ends with `namespaces:` and
         one line `- <namespace>: <count>` for each namespace under `scopes`. The count is
         the number of current records in that namespace, read with `list` up to
-        COUNT_LIMIT, and shows a `+` when `list` reached the limit. The namespace lines
+        COUNT_LIMIT, and shows a `+` when `list` reached the limit. `list` matches the
+        namespace as a prefix, so the records of its sub-namespaces share that window,
+        and a `+` count is a lower bound. The namespace lines
         take the budget first, and the record lines fill what is left, by whole lines.
         The list holds the records of the block, in block order.
         """
@@ -331,12 +342,18 @@ def _scopes(scopes: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
 
 
 def _slot(record_id: str) -> tuple[tuple[str, ...], str]:
-    """Return the namespace and the key that a record id names."""
-    path, separator, _ = record_id.rpartition("@")
+    """Return the namespace and the key that a record id names.
+
+    Raises ValueError if `record_id` is not `namespace/key@revision` with a valid
+    namespace, a valid key, and a revision of digits.
+    """
+    path, separator, revision = record_id.rpartition("@")
     labels = tuple(path.split("/"))
-    if not separator or len(labels) < 2:
+    if not separator or len(labels) < 2 or not revision.isdigit():
         raise ValueError(f"not a record id: {record_id!r}")
-    return labels[:-1], labels[-1]
+    namespace, key = check_namespace(labels[:-1]), labels[-1]
+    check_key(key)
+    return namespace, key
 
 
 def _time(value: datetime | None, missing: str) -> str:

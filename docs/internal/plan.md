@@ -87,7 +87,8 @@ change any of them in review.
   content renders as one space, so a record is always one line.
 - In the block of `profile`, the namespace counts take the budget first, and the record
   lines fill what is left. A count is for the namespace exactly, and ends with `+` when
-  `list` reached its limit.
+  `list` reached its limit. The records of sub-namespaces share that window, so a `+`
+  count is a lower bound. An exact count needs a new `Store` method.
 - `forget` takes the allowed scopes, like every other operation, and refuses an id
   outside them. `forget(horizon)` reads up to 10,000 records under each scope.
 - `MemoryStore` gains `records` on its constructor and a `records()` method, so the
