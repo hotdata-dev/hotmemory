@@ -255,7 +255,8 @@ the filter sets `kind`, the query reads only the record table of that kind. With
 
 1. Three rankings: BM25 over `content` in each record table, the cosine distance of
    `content_embedding`, and the cosine distance of `cues_embedding`. BM25 reads only the
-   words of the query, each as a quoted term, so no query text can break the query.
+   words of the query, each as a quoted term, so query syntax in the text cannot break the
+   query. A query with no words gives BM25 no terms, and the two vector rankings still rank.
 2. Each ranking fetches its top rows with no filter, and then applies the exact filters:
    namespace labels, `superseded_by`, `forget_after`, and the `Filter`. The fetch depth is
    100 rows, or 10 rows for each requested hit if that is more. A narrow filter can leave

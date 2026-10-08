@@ -338,3 +338,16 @@ def test_one_store_serializes_writes_on_one_key(store: HotdataStore) -> None:
     history = store.history(NS, "disk")
     assert [record.revision for record in history] == list(range(1, 9))
     assert [record.superseded_by is None for record in history] == [False] * 7 + [True]
+
+
+def test_query_with_no_words_ranks_by_vector(client: HotdataClient, name: str) -> None:
+    def embed(texts: Any) -> list[list[float]]:
+        return [[1.0] + [0.0] * (DIMENSIONS - 1) for _ in texts]
+
+    store = HotdataStore.provision(
+        name, embedder=embed, model=MODEL, dimensions=DIMENSIONS, client=client
+    )
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.")
+
+    for query in ("?", "--", "   "):
+        assert [hit.record.key for hit in store.search(query, [NS])] == ["disk"]
