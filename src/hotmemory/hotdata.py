@@ -25,11 +25,14 @@ from hotdata_framework import HotdataClient, ManagedDatabase
 from hotdata_framework.client import IndexType, ManagedLoadMode, VectorMetric
 
 from hotmemory._rules import (
+    Draft,
     build_record,
+    check_close,
     check_episode_line,
     check_prefix,
     is_duplicate,
     next_revision,
+    superseded,
 )
 from hotmemory._writer import BufferedWriter, check_count
 from hotmemory.filter import Filter, TimeRange
@@ -254,8 +257,9 @@ class HotdataStore:
         valid_until: datetime | None = None,
         forget_after: datetime | None = None,
         forget_reason: str = "",
+        close_previous: bool = False,
     ) -> str:
-        draft = build_record(
+        record = build_record(
             namespace,
             key,
             1,
@@ -274,7 +278,7 @@ class HotdataStore:
             forget_after=forget_after,
             forget_reason=forget_reason,
         )
-        return self._write_many([draft])[0]
+        return self._write_many([Draft(record, close_previous)])[0]
 
     def get(self, namespace: Sequence[str], key: str, revision: int | None = None) -> Record | None:
         labels = check_namespace(namespace)
@@ -410,7 +414,7 @@ class HotdataStore:
             sql += f" LIMIT {limit}"
         return [_record(row) for row in self._sql(sql).to_records()]
 
-    def _write_many(self, drafts: Sequence[Record]) -> builtins.list[str]:
+    def _write_many(self, drafts: Sequence[Draft]) -> builtins.list[str]:
         """Write `drafts` in order, with one load per table, and return the id of each.
 
         Each draft follows the rules of `put`. The read of the current revisions and the
@@ -418,20 +422,22 @@ class HotdataStore:
         """
         with self._lock:
             now = self._clock()
-            slots = {(draft.namespace, draft.key) for draft in drafts}
+            slots = {(draft.record.namespace, draft.record.key) for draft in drafts}
             current, vectors = self._current(slots)
             pending: dict[str, Record] = {}
             ids = []
             for draft in drafts:
-                slot = (draft.namespace, draft.key)
+                slot = (draft.record.namespace, draft.record.key)
                 found = current.get(slot)
-                check_episode_line(found, draft.kind)
-                if found is not None and is_duplicate(found, draft.content, now):
+                check_episode_line(found, draft.record.kind)
+                if found is not None and is_duplicate(found, draft.record.content, now):
                     ids.append(found.id)
                     continue
-                record = replace(draft, revision=next_revision(found), created_at=now)
+                record = replace(draft.record, revision=next_revision(found), created_at=now)
                 if found is not None:
-                    pending[found.id] = replace(found, superseded_by=record.id)
+                    if draft.close_previous:
+                        check_close(found, record)
+                    pending[found.id] = superseded(found, record, now, draft.close_previous)
                 pending[record.id] = record
                 current[slot] = record
                 ids.append(record.id)

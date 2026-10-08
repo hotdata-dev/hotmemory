@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from hotmemory.filter import Filter
 from hotmemory.record import JSONValue, Kind, Record, check_label, normalize
+
+
+@dataclass(frozen=True)
+class Draft:
+    """One put before a driver writes it: the record, and whether it closes the current one."""
+
+    record: Record
+    close_previous: bool = False
 
 
 def check_prefix(prefix: Sequence[str]) -> tuple[str, ...]:
@@ -50,6 +59,32 @@ def is_duplicate(current: Record, content: str, now: datetime) -> bool:
     duplicate, so a put brings the fact back as a new revision.
     """
     return is_listed(current, now) and normalize(current.content) == normalize(content)
+
+
+def check_close(current: Record, record: Record) -> None:
+    """Raise ValueError if a put with `close_previous` cannot close `current` for `record`.
+
+    The new `valid_from` must be set, and must not be earlier than the `valid_from` of
+    `current`.
+    """
+    if record.valid_from is None:
+        raise ValueError("close_previous needs valid_from or observed_at on the new revision")
+    if current.valid_from is not None and current.valid_from > record.valid_from:
+        raise ValueError(
+            f"key {current.key!r} is valid from {current.valid_from.isoformat()}, which is "
+            f"later than the new valid_from {record.valid_from.isoformat()}"
+        )
+
+
+def superseded(current: Record, record: Record, now: datetime, close_previous: bool) -> Record:
+    """Return `current` with `superseded_by` set to the id of `record`.
+
+    With `close_previous`, its `valid_until` also becomes the `valid_from` of `record`, and
+    its `expired_at` becomes `now`.
+    """
+    if not close_previous:
+        return replace(current, superseded_by=record.id)
+    return replace(current, superseded_by=record.id, valid_until=record.valid_from, expired_at=now)
 
 
 def is_listed(record: Record, now: datetime) -> bool:

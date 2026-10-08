@@ -62,6 +62,7 @@ class Writer(Protocol):
         valid_until: datetime | None = None,
         forget_after: datetime | None = None,
         forget_reason: str = "",
+        close_previous: bool = False,
     ) -> None:
         """Buffer one put. The arguments are those of `Store.put`."""
         ...
@@ -101,6 +102,7 @@ class Store(Protocol):
         valid_until: datetime | None = None,
         forget_after: datetime | None = None,
         forget_reason: str = "",
+        close_previous: bool = False,
     ) -> str:
         """Write a new revision and return its id.
 
@@ -108,6 +110,11 @@ class Store(Protocol):
         current one gets `superseded_by`. If the normalized content equals that of the
         current revision, nothing is written and the current id is returned. If
         `valid_from` is None, it takes the value of `observed_at`.
+
+        With `close_previous` and a current revision, the current revision also gets
+        `valid_until` set to the new `valid_from`, and `expired_at` set to the clock's
+        time. The put raises ValueError and writes nothing if the new `valid_from` is None
+        or is earlier than the `valid_from` of the current revision.
         """
         ...
 

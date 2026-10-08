@@ -32,5 +32,9 @@ each one, and its failure message points to this file.
   `HotdataStore` implement it.
 - A `put` that moves a key between `episode` and another kind raises `ValueError` in
   every driver.
+- `Store.put` and `Writer.put` take `close_previous`, which closes the validity span of
+  the current revision in the same write. `MemoryStore` and `HotdataStore` implement it.
+- A `MemoryStore` writer flush in which one put raises writes nothing, as in
+  `HotdataStore`.
 - The vector rankings of a fused `HotdataStore.search` filter first and rank by a scan, so
   a search in a narrow scope returns the top k rows of that scope.
