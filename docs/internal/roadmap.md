@@ -14,8 +14,8 @@ one pull request and ends with the verification layer that proves it.
 |---|---|---|
 | 0. Documents and measurements | The public contracts and guarantees files, CONTRIBUTING, the Makefile with the first documentation check, the local container setup, and measurements M1 to M6. | closed 2026-10-05, PR #2 |
 | 1. The storage contract, offline | The record, the `Store` protocol, the in-memory driver, the conformance suite, the frozen surfaces, the ledger test, and CI. | closed 2026-10-06, PR #5 |
-| 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | open |
-| 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | planned |
+| 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | closed 2026-10-08, PR #7 |
+| 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | open |
 | 4. The first consumer | A post-mortem loader and a recall at investigation start, in the consumer's own repository, proven by a replay case. | planned |
 | 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | planned |
 | 6. Adapters | A LangGraph `BaseStore` adapter in `hotdata-langchain`, then an MCP server. | planned, out of scope for version 1 |
@@ -41,3 +41,10 @@ A closed phase keeps its row above with the date it closed and the pull request.
   current revision past `forget_after`, so a forgotten fact can come back. Two questions
   moved to phase 3: how `supersede` sets fields of the old record, and how a fact gains a
   source when its content does not change.
+- Phase 2 closed on 2026-10-08 with PR #7, which closed issue #6. It changed the plan for
+  later phases in four ways. The engine allows one vector index per table, so the cue
+  vectors have their own table. The engine refuses an index on an empty table, so
+  `provision` builds over a seed row. A filtered search through a vector index misses rows
+  loaded after the build, so the vector rankings filter after their fetch. The defect is
+  reported to the engine team, and it reproduces in production. One process writes to a
+  database until the engine has a conditional write.
