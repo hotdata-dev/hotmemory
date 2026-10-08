@@ -157,8 +157,17 @@ Observed on 2026-10-08 against the local stack, with the `latest` RuntimeDB imag
 - After a seed row is loaded, indexed, and deleted, the BM25 index and the vector index
   serve rows loaded later. The query plan shows `USearchExec` for the vector ranking, also
   with a `WHERE` filter on the same table.
-- A table alias in the vector ranking makes the engine scan, with no `USearchExec`. The
-  driver writes that ranking with no alias.
+- The form `cosine_distance(t.column, ...) AS distance ... ORDER BY distance`, with a
+  table alias, makes the engine scan, with no `USearchExec`. Without the alias, or with
+  `ORDER BY cosine_distance(...)` directly, the engine uses the index.
+- A filtered search through a plain vector index misses rows loaded after the index build.
+  The index was built over one row, and two rows were loaded after. Then
+  `WHERE kind = 'fact' ORDER BY cosine_distance(e, q) LIMIT 10`, with
+  `USearchExec ... filtered=true` in the plan, returned only the first row. The same
+  query without the `WHERE`, or without the `LIMIT`, or on a table with no index, returned
+  all three. The owner decided on 2026-10-08 that each vector ranking fetches its depth
+  with no filter and filters after, as BM25 and the cues do. `ranking="vector"` scans
+  with the filter first, so that the oracle stays exact.
 - One fused query used both vector indexes and `bm25_search`. Medians of 5 runs, with half
   the records holding cues:
 
