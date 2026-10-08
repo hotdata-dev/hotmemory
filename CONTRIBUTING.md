@@ -62,9 +62,14 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   that will prove it. `tests/test_ledger.py` reads the ledger. A named test that the
   conformance suite does not define makes it fail. A row with no test and no phase also
   makes it fail.
-- From phase 2, tests marked `hotdata` run the Hotdata driver against a real database.
-  They need `HOTMEMORY_TEST_DB` to name a throwaway database. Without it, they skip. They
-  run once for each pull request. They are the only tests that use the network.
+- Tests marked `hotdata` run the Hotdata driver against a running engine, and the
+  conformance suite runs against it as the `hotdata` driver. They need
+  `HOTMEMORY_TEST_URL` to name the engine. Without it, they skip, so `make verify` stays
+  offline. `make integration` sets it to the local stack. A run provisions one database
+  with a new name, empties its tables after each test, and deletes it at the end. They are
+  the only tests that use the network.
+- CI runs two jobs on each pull request. `verify` runs `make verify`. `integration` starts
+  the local stack with `make local-up` and runs `make integration`.
 - No test calls a model. The tests pass a fake embedder. From phase 3, `capture` takes a
   callable, and the tests pass a fake extractor that returns fixed facts.
 - There is no coverage gate, no mutation-testing gate, and no report generator. The output
