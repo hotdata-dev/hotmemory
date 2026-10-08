@@ -45,6 +45,7 @@ def test_store_methods_are_frozen() -> None:
         "delete",
         "list_namespaces",
         "writer",
+        "sweep",
     }, changed("the method set of Store")
 
 

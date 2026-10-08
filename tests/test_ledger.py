@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "docs" / "guarantees.md"
-SUITE = ROOT / "tests" / "test_conformance.py"
+TESTS = ROOT / "tests"
 HEADER = "| Question | Answer | State | Test |"
 TEST_NAME = re.compile(r"`(test_[A-Za-z0-9_]+)`")
 PHASE = re.compile(r"\bphase \d+\b")
@@ -26,11 +26,11 @@ def ledger_rows() -> list[tuple[str, str]]:
 
 
 def defined_tests() -> set[str]:
-    """Return the name of every test function in the conformance suite."""
-    tree = ast.parse(SUITE.read_text(encoding="utf-8"))
+    """Return the name of every test function in the test files."""
     return {
         node.name
-        for node in ast.walk(tree)
+        for path in sorted(TESTS.glob("test_*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
     }
 
@@ -48,8 +48,7 @@ def test_every_named_test_exists() -> None:
         if name not in defined
     ]
     assert not missing, (
-        "docs/guarantees.md names tests that tests/test_conformance.py does not define:\n"
-        + "\n".join(missing)
+        "docs/guarantees.md names tests that no file in tests/ defines:\n" + "\n".join(missing)
     )
 
 

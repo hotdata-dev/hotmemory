@@ -140,10 +140,11 @@ class Store(Protocol):
         filter: Filter | None = None,
         k: int = 10,
     ) -> builtins.list[Hit]:
-        """Return up to `k` current revisions under any of `prefixes`, closest first.
+        """Return up to `k` current revisions under any of `prefixes`, most relevant first.
 
-        With no query text, the order and the records are those of `list`, and each
-        distance is None.
+        Each hit carries the cosine distance between the query and `content`. Each driver
+        defines relevance. With no query text, the order and the records are those of
+        `list`, and each distance is None.
         """
         ...
 
@@ -157,4 +158,12 @@ class Store(Protocol):
 
     def writer(self, max_rows: int = 1000, interval: timedelta = timedelta(seconds=5)) -> Writer:
         """Return a writer that buffers puts. See `Writer`."""
+        ...
+
+    def sweep(self) -> builtins.list[str]:
+        """Delete every revision of each key whose current revision is past `forget_after`.
+
+        A revision is past `forget_after` when that time is at or before the clock's time.
+        Returns the ids of the deleted revisions, sorted.
+        """
         ...

@@ -11,13 +11,15 @@ Each guarantee has one of two states.
 - Answered: a measurement or the design already supports the answer.
 - To measure: a measurement must give the answer before the library relies on it.
 
-A guarantee marked [measured] was observed against a real Hotdata workspace.
+A guarantee marked [measured] was observed against a real Hotdata workspace. A guarantee
+marked [measured, local] was observed against the local stack in [local.md](local.md).
 
-The Test column names the conformance tests in `tests/test_conformance.py` that prove the
-guarantee against every driver. If a named test does not exist, `tests/test_ledger.py`
-fails. A row that no test proves yet names the phase that will prove it. Phase 2 proves
-the rows that only the Hotdata driver can show, and phase 3 proves the rows of the memory
-contract.
+The Test column names the tests that prove the guarantee. A test in
+`tests/test_conformance.py` proves it against every driver. A test in
+`tests/test_hotdata.py`, `tests/test_hotdata_retry.py`, or `tests/test_oracle.py` proves
+a row that only the Hotdata driver can show. If a named test does not exist,
+`tests/test_ledger.py` fails. A row that no test proves yet names the phase that will
+prove it. Phase 3 proves the rows of the memory contract.
 
 ## The ledger
 
@@ -29,17 +31,24 @@ contract.
 | After a synchronous `put` returns, does `list` see the record? | Yes. A read after a write was never stale in 30 trials. | answered [measured] || `test_synchronous_put_is_visible_to_list` |
 | After a synchronous `put` returns, does `search` see the record? | Yes. Without an index, the retrieval query scans the table. With a provider-backed vector index or a BM25 index, the first search after the load returned the new row. | answered [measured], M1 || `test_synchronous_put_is_visible_to_search` |
 | After a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes. The writer records the ids that it flushed. | answered || `test_buffered_put_is_visible_after_flush` |
-| Two processes write to the same table. What happens? | The engine refuses the second load with 409. The driver retries with backoff and stops after a bound. Inside one process, the writer sends one load at a time. | answered [measured], M3 || phase 2 |
-| Two writers put the same key. What happens? | The last writer wins at the row level. Revisions are new rows, so both revisions exist and the later one is current. | answered || `test_last_writer_wins_on_one_key` |
-| Does `delete` remove retained revisions and their embeddings? | Yes. An embedding is a column of its row. After a keyed delete, neither a provider-backed vector index nor a BM25 index returned the deleted row. | answered [measured], M2 || `test_delete_removes_every_revision` |
+| Two processes write to the same table. What happens? | The engine refuses the second load with 409 `RESOURCE_LOCKED`. The driver retries up to 8 attempts, with a backoff from 0.25 seconds that doubles to at most 4 seconds, and then raises the error. Inside one process, the store sends one load at a time for each table. The integration test runs two stores in one process, which the engine cannot tell apart from two processes. | answered [measured], M3 | `test_two_stores_write_one_database_at_once`, `test_a_locked_load_retries_with_a_doubling_backoff`, `test_a_load_stops_after_the_last_attempt` |
+| Two writers in one process put the same key. What happens? | The last writer wins at the row level. Revisions are new rows, so both revisions exist and the later one is current. This holds inside one process only. The next row gives the rule for two processes. | answered | `test_last_writer_wins_on_one_key`, `test_one_store_serializes_writes_on_one_key` |
+| Can two processes write to one database? | Not safely. Two processes that put the same key can both read the same current revision. Both then write the same next revision, and the later load replaces the earlier row, so one revision is lost. One process writes to a database. Other processes can read it. This rule stays until the engine has a conditional write. | answered | `test_one_store_serializes_writes_on_one_key` |
+| Does `delete` remove retained revisions and their embeddings? | Yes. The content vector is a column of its row, and `HotdataStore` deletes the cue rows of every revision with the record rows. After a keyed delete, neither a provider-backed vector index nor a BM25 index returned the deleted row. | answered [measured], M2 | `test_delete_removes_every_revision`, `test_delete_removes_rows_and_cues` |
 | Which filters work in `list` and `search`? | Equality on `kind`, `subject`, `tags`, and `actor`. A range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. A prefix on namespace labels. Any other filter raises an error. | answered || `test_filter_matches_by_equality`, `test_filter_matches_a_time_range`, `test_unknown_filter_key_raises`, `test_prefix_matches_whole_labels` |
 | Does a higher score mean more relevant? | The store returns a distance, and a lower distance is closer. The memory contract returns records in order, with no score. An adapter that needs a score converts the distance. | answered || `test_search_returns_distance_closest_first` |
 | What does `recall(as_of=T)` return? | The records that are valid at T by the as-of rule in [contracts.md](contracts.md). If `history` is consulted, this includes records superseded after T. If not, it excludes them. | answered || phase 3 |
 | Who enforces scope? | The library filters on the allowed scopes of the caller. The platform enforces the database boundary through the API token. A caller that holds the token can go around the library. | answered || phase 3 |
 | Can a consumer tell sources, extractions, and hypotheses apart? | Yes, through `kind`, `sources`, and `actor`. An extracted fact carries the name of the extractor in `actor`. | answered || phase 3 |
-| Is a record deleted after its `forget_after` time passes? | No. It stops appearing in `list` and `search`. The sweeper deletes it on its next run. | answered [measured] || `test_forget_after_hides_without_deleting`, and the sweeper in phase 2 |
+| Is a record deleted after its `forget_after` time passes? | No. It stops appearing in `list` and `search`. The sweeper deletes it on its next run. | answered [measured] || `test_forget_after_hides_without_deleting`, `test_sweep_deletes_keys_past_forget_after` |
+| What does `sweep` delete? | Every revision of each key whose current revision is past its `forget_after`, with the cue vectors of those revisions. A key whose current revision is not past it keeps every revision, also an older revision that is past it. | answered | `test_sweep_deletes_keys_past_forget_after` |
 | A record is past its `forget_after`. Does a `put` of the same content write it again? | Yes. Deduplication applies only to a current revision that `list` can return. The put writes a new revision, and `list` and `search` return it. | answered | `test_put_after_forget_after_writes_a_new_revision` |
 | Can a caller change a stored record? | No. A record is frozen, and the store copies `payload` on the way in and on the way out. A change to a dict that the caller holds does not reach the store. | answered | `test_stored_record_cannot_change` |
+| Where does `HotdataStore` keep an episode? | A `put` of kind `episode` writes to `episode_v1`, and every other kind writes to `memory_v1`. `get`, `history`, `list`, `search`, `delete`, `sweep`, and `list_namespaces` read both tables. The cue vector of a record of either table is a row in `cue_v1`. | answered | `test_episode_goes_to_its_own_table`, `test_key_cannot_cross_the_episode_line` |
+| Is `provision` safe to run again? | Yes. If one database has the name, `provision` opens it after a check of its tables, columns, indexes, and the recorded model and vector size. If more than one database has the name, or the one found has another layout, it raises `LayoutError` and creates nothing. Two processes that provision the same new name at the same moment can both create a database, because the platform has no conditional create. | answered | `test_provision_again_opens_the_same_database`, `test_provision_refuses_a_duplicate_name`, `test_provision_refuses_another_layout`, `test_provision_refuses_another_embedding_model` |
+| Does a plain vector index serve rows loaded after its build? | Only without a filter. With a `WHERE` filter in the same query, the engine searched the index and returned only the rows that were there at the build. So every vector ranking of `HotdataStore` fetches its depth with no filter and filters after. A narrow filter can leave a ranking with fewer rows. | answered [measured, local] 2026-10-08 | `test_filtered_search_finds_every_later_write` |
+| Does `HotdataStore` agree with `MemoryStore`? | Ranked by content vector alone, it returns the same records in the same order, with distances equal within 1e-6. With the fused ranking, it returns the same set when k covers every record. On the test fixture, the largest distance difference was 4.0e-8. | answered [measured, local] 2026-10-08 | `test_vector_ranking_matches_the_oracle`, `test_fused_ranking_returns_the_oracle_set` |
+| Can a `put` move a key between `episode` and another kind? | No. A key holds episodes only, or holds no episode at all. A `put` that crosses that line raises an error and writes nothing. A key can change between `fact`, `profile`, and `procedure`. | answered | `test_key_cannot_cross_the_episode_line` |
 | Can a record have empty content? | No. `put` and a buffered `put` refuse content that is empty after normalization, and write nothing. | answered | `test_put_refuses_empty_content` |
 | Does a write inside a turn reach a `recall` in the same turn? | No, by contract. A consumer reads what was there before its own capture. | answered || phase 3 |
 

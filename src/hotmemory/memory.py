@@ -6,20 +6,21 @@ import builtins
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from types import TracebackType
-from typing import Self
 
 from hotmemory._rules import (
     build_record,
+    check_episode_line,
     check_prefix,
     cosine_distance,
     is_duplicate,
+    is_forgotten,
     is_listed,
     matches,
     newest_first,
     next_revision,
     under_prefix,
 )
+from hotmemory._writer import BufferedWriter, check_count
 from hotmemory.filter import Filter
 from hotmemory.record import JSONValue, Kind, Record, check_key, check_namespace
 from hotmemory.store import Clock, Embedder, Hit
@@ -36,7 +37,7 @@ class MemoryStore:
     `embedder` turns texts into vectors for `search` with query text. Without one, such a
     search raises RuntimeError. `clock` gives `created_at` and the time against which
     `forget_after` is compared. Search ranks by the cosine distance between the query and
-    `content`.
+    `content`, closest first.
     """
 
     def __init__(self, *, embedder: Embedder | None = None, clock: Clock = utc_now) -> None:
@@ -103,7 +104,7 @@ class MemoryStore:
         since: datetime | None = None,
         limit: int = 100,
     ) -> builtins.list[Record]:
-        _check_count("limit", limit)
+        check_count("limit", limit)
         records = self._listed([prefix], filter)
         if since is not None:
             records = [record for record in records if record.created_at >= since]
@@ -116,7 +117,7 @@ class MemoryStore:
         filter: Filter | None = None,
         k: int = 10,
     ) -> builtins.list[Hit]:
-        _check_count("k", k)
+        check_count("k", k)
         records = self._listed(prefixes, filter)
         if query is None:
             return [Hit(_copy(record), None) for record in records[:k]]
@@ -144,10 +145,23 @@ class MemoryStore:
     ) -> MemoryWriter:
         return MemoryWriter(self, max_rows, interval)
 
+    def sweep(self) -> builtins.list[str]:
+        now = self._clock()
+        swept = [
+            slot for slot, revisions in self._revisions.items() if is_forgotten(revisions[-1], now)
+        ]
+        ids = []
+        for slot in swept:
+            for record in self._revisions.pop(slot):
+                self._vectors.pop(record.id, None)
+                ids.append(record.id)
+        return sorted(ids)
+
     def _write(self, draft: Record) -> str:
         slot = (draft.namespace, draft.key)
         revisions = self._revisions.get(slot, [])
         current = revisions[-1] if revisions else None
+        check_episode_line(current, draft.kind)
         now = self._clock()
         if current is not None and is_duplicate(current, draft.content, now):
             return current.id
@@ -156,6 +170,9 @@ class MemoryStore:
             revisions = [*revisions[:-1], replace(current, superseded_by=record.id)]
         self._revisions[slot] = [*revisions, record]
         return record.id
+
+    def _write_many(self, drafts: Sequence[Record]) -> builtins.list[str]:
+        return [self._write(draft) for draft in drafts]
 
     def _slot(self, namespace: Sequence[str], key: str) -> tuple[tuple[str, ...], str]:
         labels = check_namespace(namespace)
@@ -200,97 +217,13 @@ class MemoryStore:
         return vectors
 
 
-class MemoryWriter:
+class MemoryWriter(BufferedWriter):
     """The `Writer` that `MemoryStore.writer` returns."""
 
     def __init__(self, store: MemoryStore, max_rows: int, interval: timedelta) -> None:
-        _check_count("max_rows", max_rows)
-        if max_rows < 1:
-            raise ValueError("max_rows must be 1 or more")
-        self._store = store
-        self._max_rows = max_rows
-        self._interval = interval
-        self._buffer: builtins.list[Record] = []
-        self._flushed: builtins.list[str] = []
-        self._last_flush = store._clock()
-
-    @property
-    def flushed(self) -> builtins.list[str]:
-        return builtins.list(self._flushed)
-
-    def put(
-        self,
-        namespace: Sequence[str],
-        key: str,
-        *,
-        kind: Kind,
-        content: str,
-        subject: str = "",
-        cues: Sequence[str] = (),
-        payload: dict[str, JSONValue] | None = None,
-        tags: Sequence[str] = (),
-        sources: Sequence[str] = (),
-        actor: str = "",
-        observed_at: datetime | None = None,
-        valid_from: datetime | None = None,
-        valid_until: datetime | None = None,
-        forget_after: datetime | None = None,
-        forget_reason: str = "",
-    ) -> None:
-        now = self._store._clock()
-        self._buffer.append(
-            build_record(
-                namespace,
-                key,
-                1,
-                now,
-                kind=kind,
-                content=content,
-                subject=subject,
-                cues=cues,
-                payload=payload,
-                tags=tags,
-                sources=sources,
-                actor=actor,
-                observed_at=observed_at,
-                valid_from=valid_from,
-                valid_until=valid_until,
-                forget_after=forget_after,
-                forget_reason=forget_reason,
-            )
-        )
-        if len(self._buffer) >= self._max_rows or now - self._last_flush >= self._interval:
-            self.flush()
-
-    def flush(self) -> builtins.list[str]:
-        ids = [self._store._write(draft) for draft in self._buffer]
-        self._buffer.clear()
-        self._flushed.extend(ids)
-        self._last_flush = self._store._clock()
-        return ids
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        if exc_type is None:
-            self.flush()
-        else:
-            self._buffer.clear()
+        super().__init__(store._write_many, store._clock, max_rows, interval)
 
 
 def _copy(record: Record) -> Record:
     """Return a record equal to `record` that shares no mutable value with it."""
     return replace(record)
-
-
-def _check_count(name: str, value: int) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must not be negative")

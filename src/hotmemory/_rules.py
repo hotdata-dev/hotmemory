@@ -30,6 +30,18 @@ def next_revision(current: Record | None) -> int:
     return 1 if current is None else current.revision + 1
 
 
+def check_episode_line(current: Record | None, kind: Kind) -> None:
+    """Raise ValueError if a put of `kind` moves the key of `current` across the episode line.
+
+    A key holds episodes only, or holds no episode at all.
+    """
+    if current is not None and (current.kind == "episode") != (kind == "episode"):
+        raise ValueError(
+            f"key {current.key!r} holds kind {current.kind!r}; a put of kind {kind!r} "
+            "cannot move a key between 'episode' and another kind"
+        )
+
+
 def is_duplicate(current: Record, content: str, now: datetime) -> bool:
     """Return True if a put of `content` writes nothing because `current` holds it.
 
@@ -46,9 +58,12 @@ def is_listed(record: Record, now: datetime) -> bool:
     A superseded revision is not listed. A record is not listed once its `forget_after`
     is at or before `now`.
     """
-    if record.superseded_by is not None:
-        return False
-    return record.forget_after is None or record.forget_after > now
+    return record.superseded_by is None and not is_forgotten(record, now)
+
+
+def is_forgotten(record: Record, now: datetime) -> bool:
+    """Return True if `record` is past its `forget_after` at `now`."""
+    return record.forget_after is not None and record.forget_after <= now
 
 
 def matches(record: Record, filter: Filter | None) -> bool:

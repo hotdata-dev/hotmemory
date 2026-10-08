@@ -7,6 +7,7 @@ rules, and points to the files that hold everything else.
 
 ```sh
 make verify       # the full check; run it before each commit
+make integration  # the hotdata tests and the conformance suite; needs make local-up
 make local-up     # start the local RuntimeDB stack (Postgres, RustFS, engine)
 make local-down   # stop it and delete its data
 cp .env.template .env            # then fill in .env; it is ignored by git

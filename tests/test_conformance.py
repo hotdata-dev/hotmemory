@@ -236,3 +236,61 @@ def test_put_refuses_empty_content(store: Store, content: str) -> None:
 
     assert store.get(NS, "disk") is None
     assert store.list_namespaces() == []
+
+
+def test_key_cannot_cross_the_episode_line(store: Store, clock: FakeClock) -> None:
+    store.put(NS, "thread", kind="episode", content="First chunk of the thread.")
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.")
+    clock.advance()
+
+    with pytest.raises(ValueError, match="episode"):
+        store.put(NS, "thread", kind="fact", content="A fact under an episode key.")
+    with pytest.raises(ValueError, match="episode"):
+        store.put(NS, "disk", kind="episode", content="An episode under a fact key.")
+    profile = store.put(NS, "disk", kind="profile", content="The disk is the bottleneck.")
+
+    assert [record.kind for record in store.history(NS, "thread")] == ["episode"]
+    assert [record.kind for record in store.history(NS, "disk")] == ["fact", "profile"]
+    assert profile == "team/alerts/disk@2"
+
+
+def test_filtered_search_finds_every_later_write(store: Store, clock: FakeClock) -> None:
+    keys = ["first", "second", "third", "fourth"]
+    for key in keys:
+        store.put(NS, key, kind="fact", content=f"The disk fills, {key} report.")
+        store.put(NS, f"{key}-cpu", kind="procedure", content=f"Restart the CPU, {key} step.")
+        clock.advance()
+
+    hits = store.search("disk fills report", [NS], Filter(kind="fact"), k=10)
+    assert sorted(hit.record.key for hit in hits) == sorted(keys)
+    nothing = store.search("disk fills report", [("other",)], Filter(kind="fact"), k=10)
+    assert nothing == []
+
+
+def test_sweep_deletes_keys_past_forget_after(store: Store, clock: FakeClock) -> None:
+    soon = clock.now + timedelta(days=1)
+    store.put(NS, "gone", kind="fact", content="Disk fills at night.")
+    clock.advance()
+    store.put(
+        NS,
+        "gone",
+        kind="fact",
+        content="Disk fills at noon.",
+        cues=("when does the disk fill?",),
+        forget_after=soon,
+        forget_reason="temporary",
+    )
+    store.put(NS, "back", kind="fact", content="Comes back.", forget_after=soon)
+    store.put(NS, "kept", kind="fact", content="Kept.", forget_after=soon + timedelta(days=1))
+    store.put(NS, "plain", kind="fact", content="No forget_after.")
+    store.put(NS, "chunk", kind="episode", content="Old chunk.", forget_after=soon)
+    clock.advance(timedelta(days=1))
+    store.put(NS, "back", kind="fact", content="Comes back.")
+
+    assert store.sweep() == ["team/alerts/chunk@1", "team/alerts/gone@1", "team/alerts/gone@2"]
+    assert store.history(NS, "gone") == []
+    assert store.history(NS, "chunk") == []
+    assert [record.revision for record in store.history(NS, "back")] == [1, 2]
+    assert {record.key for record in store.list(NS)} == {"back", "kept", "plain"}
+    assert all(hit.record.key != "gone" for hit in store.search("disk fill", [NS], k=10))
+    assert store.sweep() == []

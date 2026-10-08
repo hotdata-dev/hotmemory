@@ -17,3 +17,18 @@ each one, and its failure message points to this file.
 - `Filter` and `TimeRange`, the exact filters of `list` and `search`, and `Hit`, one search
   result with its distance.
 - `MemoryStore` and `MemoryWriter`, the in-process driver.
+- `hotmemory.hotdata`, in the `hotdata` extra, with `HotdataStore`, the driver over one
+  Hotdata managed database, and `HotdataWriter`. `HotdataStore.provision` creates or opens
+  the database by name, and `HotdataStore.open` opens it by id. `LayoutError` reports a
+  database whose layout differs. `ranking="vector"` ranks a search by content distance
+  alone.
+- `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
+  the OpenAI embeddings API.
+
+### Changed
+
+- `Store` gains `sweep`, which deletes every revision of each key whose current
+  revision is past `forget_after`, and returns the deleted ids. `MemoryStore` and
+  `HotdataStore` implement it.
+- A `put` that moves a key between `episode` and another kind raises `ValueError` in
+  every driver.

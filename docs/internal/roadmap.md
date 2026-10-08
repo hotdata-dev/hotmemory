@@ -13,8 +13,8 @@ one pull request and ends with the verification layer that proves it.
 | Phase | Delivers | Status |
 |---|---|---|
 | 0. Documents and measurements | The public contracts and guarantees files, CONTRIBUTING, the Makefile with the first documentation check, the local container setup, and measurements M1 to M6. | closed 2026-10-05, PR #2 |
-| 1. The storage contract, offline | The record, the `Store` protocol, the in-memory driver, the conformance suite, the frozen surfaces, the ledger test, and CI. | open |
-| 2. The Hotdata driver | `HotdataStore` with two tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | planned |
+| 1. The storage contract, offline | The record, the `Store` protocol, the in-memory driver, the conformance suite, the frozen surfaces, the ledger test, and CI. | closed 2026-10-06, PR #5 |
+| 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | open |
 | 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | planned |
 | 4. The first consumer | A post-mortem loader and a recall at investigation start, in the consumer's own repository, proven by a replay case. | planned |
 | 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | planned |
@@ -35,3 +35,9 @@ A closed phase keeps its row above with the date it closed and the pull request.
   bare container. Fused retrieval needs plain vector indexes and an embedder from the
   caller, because a provider-backed index excludes every other index. The integration leg
   can run against the local stack in CI.
+- Phase 1 closed on 2026-10-06 with PR #5, which closed issue #4. It changed the plan for
+  later phases in three ways. The record refuses more than the brief said: an empty label,
+  a label with `/`, a key with `/` or `@`, and empty content. Deduplication skips a
+  current revision past `forget_after`, so a forgotten fact can come back. Two questions
+  moved to phase 3: how `supersede` sets fields of the old record, and how a fact gains a
+  source when its content does not change.
