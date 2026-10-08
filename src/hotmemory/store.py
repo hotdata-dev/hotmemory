@@ -158,3 +158,11 @@ class Store(Protocol):
     def writer(self, max_rows: int = 1000, interval: timedelta = timedelta(seconds=5)) -> Writer:
         """Return a writer that buffers puts. See `Writer`."""
         ...
+
+    def sweep(self) -> builtins.list[str]:
+        """Delete every revision of each key whose current revision is past `forget_after`.
+
+        A revision is past `forget_after` when that time is at or before the clock's time.
+        Returns the ids of the deleted revisions, sorted.
+        """
+        ...

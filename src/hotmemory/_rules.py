@@ -58,9 +58,12 @@ def is_listed(record: Record, now: datetime) -> bool:
     A superseded revision is not listed. A record is not listed once its `forget_after`
     is at or before `now`.
     """
-    if record.superseded_by is not None:
-        return False
-    return record.forget_after is None or record.forget_after > now
+    return record.superseded_by is None and not is_forgotten(record, now)
+
+
+def is_forgotten(record: Record, now: datetime) -> bool:
+    """Return True if `record` is past its `forget_after` at `now`."""
+    return record.forget_after is not None and record.forget_after <= now
 
 
 def matches(record: Record, filter: Filter | None) -> bool:

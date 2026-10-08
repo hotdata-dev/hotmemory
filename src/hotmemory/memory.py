@@ -13,6 +13,7 @@ from hotmemory._rules import (
     check_prefix,
     cosine_distance,
     is_duplicate,
+    is_forgotten,
     is_listed,
     matches,
     newest_first,
@@ -143,6 +144,18 @@ class MemoryStore:
         self, max_rows: int = 1000, interval: timedelta = timedelta(seconds=5)
     ) -> MemoryWriter:
         return MemoryWriter(self, max_rows, interval)
+
+    def sweep(self) -> builtins.list[str]:
+        now = self._clock()
+        swept = [
+            slot for slot, revisions in self._revisions.items() if is_forgotten(revisions[-1], now)
+        ]
+        ids = []
+        for slot in swept:
+            for record in self._revisions.pop(slot):
+                self._vectors.pop(record.id, None)
+                ids.append(record.id)
+        return sorted(ids)
 
     def _write(self, draft: Record) -> str:
         slot = (draft.namespace, draft.key)

@@ -125,6 +125,7 @@ records the moment that the store found out. To ask what memory held on a given 
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
 | `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. |
+| `sweep` | none | Deletes every revision of each key whose current revision is past its `forget_after` at the time of the clock, and returns the ids that it deleted, sorted. A key whose current revision is not past its `forget_after` keeps all of its revisions. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
 `valid_from`, `valid_until`, `created_at`, and `expired_at`. Any other filter raises an

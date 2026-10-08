@@ -21,3 +21,11 @@ each one, and its failure message points to this file.
   `HotdataStore.open`, which create or open one managed database with the tables of schema
   version 1. `LayoutError` reports a database whose layout differs. The `openai` extra is
   declared.
+
+### Changed
+
+- `Store` gains `sweep`, which deletes every revision of each key whose current
+  revision is past `forget_after`, and returns the deleted ids. `MemoryStore` and
+  `HotdataStore` implement it.
+- A `put` that moves a key between `episode` and another kind raises `ValueError` in
+  every driver.

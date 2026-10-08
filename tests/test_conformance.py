@@ -265,3 +265,32 @@ def test_filtered_search_finds_every_later_write(store: Store, clock: FakeClock)
     assert sorted(hit.record.key for hit in hits) == sorted(keys)
     nothing = store.search("disk fills report", [("other",)], Filter(kind="fact"), k=10)
     assert nothing == []
+
+
+def test_sweep_deletes_keys_past_forget_after(store: Store, clock: FakeClock) -> None:
+    soon = clock.now + timedelta(days=1)
+    store.put(NS, "gone", kind="fact", content="Disk fills at night.")
+    clock.advance()
+    store.put(
+        NS,
+        "gone",
+        kind="fact",
+        content="Disk fills at noon.",
+        cues=("when does the disk fill?",),
+        forget_after=soon,
+        forget_reason="temporary",
+    )
+    store.put(NS, "back", kind="fact", content="Comes back.", forget_after=soon)
+    store.put(NS, "kept", kind="fact", content="Kept.", forget_after=soon + timedelta(days=1))
+    store.put(NS, "plain", kind="fact", content="No forget_after.")
+    store.put(NS, "chunk", kind="episode", content="Old chunk.", forget_after=soon)
+    clock.advance(timedelta(days=1))
+    store.put(NS, "back", kind="fact", content="Comes back.")
+
+    assert store.sweep() == ["team/alerts/chunk@1", "team/alerts/gone@1", "team/alerts/gone@2"]
+    assert store.history(NS, "gone") == []
+    assert store.history(NS, "chunk") == []
+    assert [record.revision for record in store.history(NS, "back")] == [1, 2]
+    assert {record.key for record in store.list(NS)} == {"back", "kept", "plain"}
+    assert all(hit.record.key != "gone" for hit in store.search("disk fill", [NS], k=10))
+    assert store.sweep() == []

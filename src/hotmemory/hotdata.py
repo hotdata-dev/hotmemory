@@ -351,6 +351,28 @@ class HotdataStore:
     ) -> HotdataWriter:
         return HotdataWriter(self, max_rows, interval)
 
+    def sweep(self) -> builtins.list[str]:
+        with self._lock:
+            forgotten = (
+                "SELECT namespace, key FROM {table} WHERE superseded_by IS NULL AND "
+                f"forget_after IS NOT NULL AND forget_after <= {_timestamp(self._clock())}"
+            )
+            ids: builtins.list[str] = []
+            loads: builtins.list[_Load] = []
+            for table in RECORD_TABLES:
+                sql = (
+                    f"SELECT revision.id FROM {_ref(table)} revision JOIN "
+                    f"({forgotten.format(table=_ref(table))}) swept "
+                    "ON revision.namespace = swept.namespace AND revision.key = swept.key"
+                )
+                found = [row[0] for row in self._sql(sql).rows]
+                if found:
+                    rows = pa.table({"id": found})
+                    loads.extend([(table, rows, "delete"), (CUE_TABLE, rows, "delete")])
+                    ids.extend(found)
+            self._load_all(loads)
+            return sorted(ids)
+
     def _listed(self, prefixes: Sequence[Sequence[str]], filter: Filter | None) -> str:
         """Return the SQL condition for the current, unforgotten records that `filter` keeps."""
         if isinstance(prefixes, str):
