@@ -397,3 +397,18 @@ def test_profile_block_matches_its_pinned_string(memory: Memory, clock: FakeCloc
     remember_pinned(memory, clock)
     _, block = memory.profile("disk", [SCOPE])
     assert block == PINNED_PROFILE
+
+
+def test_memory_reads_only_the_allowed_scopes(memory: Memory) -> None:
+    other = ("team", "billing")
+    memory.remember([Fact(kind="fact", subject="disk", content="The disk fills at night.")], SCOPE)
+    memory.remember([Fact(kind="fact", subject="disk", content="The disk bill is due.")], other)
+
+    records, _ = memory.recall("disk", [SCOPE])
+    assert [record.namespace for record in records] == [SCOPE]
+    hits = memory.candidates(Fact(kind="fact", content="The disk bill is due."), [SCOPE])
+    assert [hit.record.namespace for hit in hits] == [SCOPE]
+    _, block = memory.profile("disk", [SCOPE])
+    assert "billing" not in block
+    assert "bill" not in block
+    assert memory.recall("disk", []) == ([], "")
