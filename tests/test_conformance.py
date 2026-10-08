@@ -136,6 +136,32 @@ def test_deduplication_is_exact_on_normalized_content(store: Store, clock: FakeC
     assert len(store.history(NS, "disk")) == 2
 
 
+def test_same_content_with_a_new_source_writes_a_merged_revision(
+    store: Store, clock: FakeClock
+) -> None:
+    content = "The disk fills at night."
+    first = store.put(NS, "disk", kind="fact", content=content, sources=("chat-1",))
+    clock.advance()
+    retried = store.put(NS, "disk", kind="fact", content=content, sources=("chat-1",))
+    clock.advance()
+    merged = store.put(
+        NS, "disk", kind="fact", content=" the disk fills at NIGHT.", sources=("wiki", "chat-1")
+    )
+    clock.advance()
+    known = [
+        store.put(NS, "disk", kind="fact", content=content, sources=sources)
+        for sources in (("wiki",), ())
+    ]
+
+    assert retried == first
+    assert merged == "team/alerts/disk@2"
+    assert known == [merged, merged]
+    current = store.get(NS, "disk")
+    assert current is not None
+    assert current.sources == ("chat-1", "wiki")
+    assert [record.id for record in store.history(NS, "disk")] == [first, merged]
+
+
 def test_synchronous_put_is_visible_to_list(store: Store) -> None:
     record_id = store.put(NS, "disk", kind="fact", content="The disk fills at night.")
     assert [record.id for record in store.list(NS)] == [record_id]

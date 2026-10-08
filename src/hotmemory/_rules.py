@@ -87,6 +87,18 @@ def superseded(current: Record, record: Record, now: datetime, close_previous: b
     return replace(current, superseded_by=record.id, valid_until=record.valid_from, expired_at=now)
 
 
+def with_new_sources(current: Record, record: Record) -> Record | None:
+    """Return `record` with the sources of `current` and then its own, or None if none is new.
+
+    A put whose content duplicates `current` calls this. The merged sources keep their
+    order and hold no repeats.
+    """
+    sources = tuple(dict.fromkeys((*current.sources, *record.sources)))
+    if sources == current.sources:
+        return None
+    return replace(record, sources=sources)
+
+
 def is_listed(record: Record, now: datetime) -> bool:
     """Return True if `list` and `search` can return `record` at `now`.
 

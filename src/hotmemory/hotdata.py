@@ -33,6 +33,7 @@ from hotmemory._rules import (
     is_duplicate,
     next_revision,
     superseded,
+    with_new_sources,
 )
 from hotmemory._writer import BufferedWriter, check_count
 from hotmemory.filter import Filter, TimeRange
@@ -430,10 +431,14 @@ class HotdataStore:
                 slot = (draft.record.namespace, draft.record.key)
                 found = current.get(slot)
                 check_episode_line(found, draft.record.kind)
+                written = draft.record
                 if found is not None and is_duplicate(found, draft.record.content, now):
-                    ids.append(found.id)
-                    continue
-                record = replace(draft.record, revision=next_revision(found), created_at=now)
+                    merged = with_new_sources(found, written)
+                    if merged is None:
+                        ids.append(found.id)
+                        continue
+                    written = merged
+                record = replace(written, revision=next_revision(found), created_at=now)
                 if found is not None:
                     if draft.close_previous:
                         check_close(found, record)

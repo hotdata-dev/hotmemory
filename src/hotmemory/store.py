@@ -108,8 +108,10 @@ class Store(Protocol):
 
         If the key has a current revision, the new revision gets the next number and the
         current one gets `superseded_by`. If the normalized content equals that of the
-        current revision, nothing is written and the current id is returned. If
-        `valid_from` is None, it takes the value of `observed_at`.
+        current revision, nothing is written and the current id is returned, unless the
+        put brings a source that the current revision lacks. Then the new revision gets
+        the current sources followed by the new ones, without repeats. If `valid_from` is
+        None, it takes the value of `observed_at`.
 
         With `close_previous` and a current revision, the current revision also gets
         `valid_until` set to the new `valid_from`, and `expired_at` set to the clock's

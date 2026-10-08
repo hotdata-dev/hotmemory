@@ -22,6 +22,7 @@ from hotmemory._rules import (
     next_revision,
     superseded,
     under_prefix,
+    with_new_sources,
 )
 from hotmemory._writer import BufferedWriter, check_count
 from hotmemory.filter import Filter
@@ -181,9 +182,13 @@ class MemoryStore:
         current = history[-1] if history else None
         check_episode_line(current, draft.record.kind)
         now = self._clock()
+        written = draft.record
         if current is not None and is_duplicate(current, draft.record.content, now):
-            return current.id
-        record = replace(draft.record, revision=next_revision(current), created_at=now)
+            merged = with_new_sources(current, written)
+            if merged is None:
+                return current.id
+            written = merged
+        record = replace(written, revision=next_revision(current), created_at=now)
         if current is not None:
             if draft.close_previous:
                 check_close(current, record)

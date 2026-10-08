@@ -34,6 +34,8 @@ each one, and its failure message points to this file.
   every driver.
 - `Store.put` and `Writer.put` take `close_previous`, which closes the validity span of
   the current revision in the same write. `MemoryStore` and `HotdataStore` implement it.
+- A put whose content duplicates the current revision but brings a new source writes a
+  new revision with the merged sources. Before, it wrote nothing.
 - A `MemoryStore` writer flush in which one put raises writes nothing, as in
   `HotdataStore`.
 - The vector rankings of a fused `HotdataStore.search` filter first and rank by a scan, so
