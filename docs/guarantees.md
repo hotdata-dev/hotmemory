@@ -15,11 +15,12 @@ A guarantee marked [measured] was observed against a real Hotdata workspace. A g
 marked [measured, local] was observed against the local stack in [local.md](local.md).
 
 The Test column names the tests that prove the guarantee. A test in
-`tests/test_conformance.py` proves it against every driver. A test in
-`tests/test_hotdata.py`, `tests/test_hotdata_retry.py`, or `tests/test_oracle.py` proves
-a row that only the Hotdata driver can show. If a named test does not exist,
-`tests/test_ledger.py` fails. A row that no test proves yet names the phase that will
-prove it. Phase 3 proves the rows of the memory contract.
+`tests/test_conformance.py` proves a row of the storage contract against every driver. A
+test in `tests/test_contract.py` proves a row of the memory contract against every driver.
+A test in `tests/test_hotdata.py`, `tests/test_hotdata_retry.py`, or `tests/test_oracle.py`
+proves a row that only the Hotdata driver can show. `tests/test_skill.py` runs the
+commands of the skill file. If a named test does not exist, `tests/test_ledger.py` fails.
+A row that no test proves yet names the phase that will prove it.
 
 ## The ledger
 

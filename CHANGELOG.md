@@ -23,8 +23,8 @@ each one, and its failure message points to this file.
   database whose layout differs. `ranking="vector"` ranks a search by content distance
   alone.
 - `Memory`, the memory contract over one `Store`, with `remember`, `recall`,
-  `candidates`, `supersede`, `forget`, `profile`, and `capture`. `Fact` is the frozen dataclass of one structured fact that `remember`
-  takes.
+  `candidates`, `supersede`, `forget`, `profile`, and `capture`. `Fact` is the frozen
+  dataclass of one structured fact that `remember` takes.
 - `MemoryStore` takes `records`, the revisions that it starts with, and `records()`
   returns every revision that it holds.
 - The skill file `skills/hotmemory/SKILL.md`, with one script in

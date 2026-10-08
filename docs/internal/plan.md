@@ -1,7 +1,8 @@
 # Plan: phase 3, the memory contract
 
-Status: draft, 2026-10-08. This file holds the current phase only. The next phase replaces
-it. The phases themselves are in `roadmap.md`. Section numbers below refer to `brief.md`.
+Status: all tasks done, 2026-10-08, in review. This file holds the current phase only.
+The next phase replaces it. The phases themselves are in `roadmap.md`. Section numbers
+below refer to `brief.md`.
 Phase 2 closed with PR #7. `HotdataStore`, the conformance suite against both drivers, the
 oracle test, and the CI integration job are on `main`.
 
@@ -70,6 +71,27 @@ before task 2 started.
   with `--database`. With `--memory-file`, it opens a `MemoryStore` that loads from and
   saves to a JSON file. The command check in `make verify` uses that file, so it keeps
   state across commands and needs no network.
+
+## Decisions taken during the work
+
+The plan left these details open. The work took the defaults below, and the owner can
+change any of them in review.
+
+- A `put` with `close_previous` and no `valid_from` (and no `observed_at`) raises
+  `ValueError`, because the old span has no time to close at. `Memory.supersede` passes
+  the clock's time when the caller and the fact give none.
+- `Memory.supersede` raises `ValueError` when the key has no current revision.
+- `recall` with no `as_of` keeps every current record. A current record whose span ended
+  shows its span on its line.
+- A record with no sources renders `[sources: none]`. Each run of whitespace in the
+  content renders as one space, so a record is always one line.
+- In the block of `profile`, the namespace counts take the budget first, and the record
+  lines fill what is left. A count is for the namespace exactly, and ends with `+` when
+  `list` reached its limit.
+- `forget` takes the allowed scopes, like every other operation, and refuses an id
+  outside them. `forget(horizon)` reads up to 10,000 records under each scope.
+- `MemoryStore` gains `records` on its constructor and a `records()` method, so the
+  `--memory-file` mode of the scripts saves and loads the whole store.
 
 ## Tasks
 

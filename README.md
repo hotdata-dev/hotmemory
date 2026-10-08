@@ -10,7 +10,7 @@ the data of the consumer.
 
 Status: version 0.0.0, not published. The storage contract exists in Python with two
 drivers. `MemoryStore` runs in process memory. `HotdataStore` keeps records in one Hotdata
-managed database. The memory contract does not exist yet.
+managed database. The memory contract, `Memory`, runs over either driver.
 [docs/internal/roadmap.md](docs/internal/roadmap.md) lists the phases.
 
 The library has two layers:
@@ -18,8 +18,8 @@ The library has two layers:
 - A storage contract. Put, get, list, search, and delete records in a namespace. Records
   are immutable. A new put under the same key creates a new revision.
 - A memory contract. Remember facts, recall them inside a context budget, supersede a
-  fact, and forget by id or by horizon. Extraction from raw text is optional, and it takes
-  a model callable that the caller supplies.
+  fact, forget by id or by horizon, and load the profile of a subject. Extraction from raw
+  text is optional, and it takes an extractor callable that the caller supplies.
 
 The library runs in the process of the consumer and calls the Hotdata API with the API key
 of the consumer. There is no hotmemory server. The first consumer is an incident
@@ -50,6 +50,32 @@ print([r.revision for r in store.history(("team", "alerts"), "disk")])  # [1, 2]
 hits = store.search("disk", [("team",)], Filter(kind="fact"), k=1)
 print(hits[0].record.content)  # The disk fills at noon.
 ```
+
+## Try the memory contract
+
+`Memory` gives an agent the memory operations over any store. `remember` derives each key
+from the subject and the content, so a retried call writes nothing new. `recall` returns
+the records and one block of text, with one line for each record:
+
+```python
+from hotmemory import Fact, Memory, MemoryStore
+
+
+def embed(texts):
+    return [[text.count("disk") + 0.1, text.count("cpu") + 0.1] for text in texts]
+
+
+memory = Memory(MemoryStore(embedder=embed))
+scope = ("team", "alerts")
+memory.remember(
+    [Fact(kind="fact", subject="disk", content="The disk fills at night.", sources=("chat-1",))],
+    scope,
+)
+records, block = memory.recall("disk", [scope])
+print(block)  # - The disk fills at night. [sources: chat-1] [valid: unknown to now]
+```
+
+`skills/hotmemory/SKILL.md` gives an agent the same operations as commands.
 
 ## Store memory in Hotdata
 

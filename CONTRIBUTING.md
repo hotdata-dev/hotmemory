@@ -51,6 +51,8 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   [docs/guarantees.md](docs/guarantees.md) has its tests there. A driver that fails a
   conformance test is not a driver. To add a driver, add it to `DRIVERS` in
   `tests/conftest.py`.
+- `tests/test_contract.py` runs `Memory` over every driver through the same `store`
+  fixture. It pins the rendered blocks of `recall` and `profile` as exact strings.
 - The in-memory driver is the reference for the Hotdata driver. `tests/test_oracle.py`
   builds the same records in both drivers and compares the results of `search`. The
   ranking by content vector alone must return the same records in the same order, with
@@ -76,7 +78,7 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   the only tests that use the network.
 - CI runs two jobs on each pull request. `verify` runs `make verify`. `integration` starts
   the local stack with `make local-up` and runs `make integration`.
-- No test calls a model. The tests pass a fake embedder. From phase 3, `capture` takes a
+- No test calls a model. The tests pass a fake embedder. `capture` takes an extractor
   callable, and the tests pass a fake extractor that returns fixed facts.
 - There is no coverage gate, no mutation-testing gate, and no report generator. The output
   of `make verify` is the report.

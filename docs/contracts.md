@@ -6,8 +6,8 @@ store. This file states both. The behavior that each contract guarantees, and th
 each guarantee, are in [guarantees.md](guarantees.md).
 
 Status: the storage contract exists in Python, with two drivers, `MemoryStore` and
-`HotdataStore`. The memory contract is design, and this file describes it as the library
-will ship it. This file describes schema version 1.
+`HotdataStore`. The memory contract exists in Python as `Memory`, over either driver. This
+file describes schema version 1.
 
 ## The platform under the store
 
@@ -133,7 +133,7 @@ records the moment that the store found out. To ask what memory held on a given 
 | `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, each with the cosine distance between the query and `content`. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. In `MemoryStore`, relevance is that distance, so the hits come closest first. The section on retrieval gives the order of `HotdataStore`. |
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
-| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. |
+| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. If one put in a flush raises an error, the flush writes nothing. |
 | `sweep` | none | Deletes every revision of each key whose current revision is past its `forget_after` at the time of the clock. Returns the deleted ids, sorted. A key whose current revision is not past its `forget_after` keeps all of its revisions. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
@@ -233,7 +233,8 @@ each database. If an embedder returns a vector of another size, the write or sea
 vector on `content_embedding`, and sorted on `created_at`. In `cue_v1`, it
 builds a plain cosine vector index on `cues_embedding`. The engine refuses an index on an
 empty table. So `provision` loads one seed row into each table, builds the indexes, and
-deletes the seed rows.
+deletes the seed rows. The vector indexes stay built, but no ranking uses them until the
+engine fixes the filtered search through the index.
 
 A `put` reads the current revision, then writes the new row and the superseded row in one
 load. If the record has cues, a second load writes its cue row into `cue_v1` at the same
