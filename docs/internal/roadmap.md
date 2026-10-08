@@ -14,7 +14,7 @@ one pull request and ends with the verification layer that proves it.
 |---|---|---|
 | 0. Documents and measurements | The public contracts and guarantees files, CONTRIBUTING, the Makefile with the first documentation check, the local container setup, and measurements M1 to M6. | closed 2026-10-05, PR #2 |
 | 1. The storage contract, offline | The record, the `Store` protocol, the in-memory driver, the conformance suite, the frozen surfaces, the ledger test, and CI. | closed 2026-10-06, PR #5 |
-| 2. The Hotdata driver | `HotdataStore` with three tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | open |
+| 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | open |
 | 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | planned |
 | 4. The first consumer | A post-mortem loader and a recall at investigation start, in the consumer's own repository, proven by a replay case. | planned |
 | 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | planned |

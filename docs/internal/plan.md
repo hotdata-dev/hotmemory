@@ -15,24 +15,35 @@ can sweep records past `forget_after`. `make verify` stays offline and under fiv
 
 ## Decisions this plan takes
 
-The owner agreed to each one on 2026-10-08, and the issue repeats them.
+The owner agreed to each one on 2026-10-08. The issue repeats them as first agreed. The
+layout and the indexes changed after the task 2 probe, and the issue does not show that yet.
 
 - Provisioning. `HotdataStore.provision(name, ...)` is safe to run again. It looks up the
   databases with that name. If it finds exactly one with the expected tables and layout, it
   opens that one. If it finds none, it creates the database, declares the tables, and builds
-  the BM25 indexes. If it finds more than one, or one with a different layout, it raises and
+  the indexes. If it finds more than one, or one with a different layout, it raises and
   creates nothing. Two processes that provision the same new name at the same moment can
   both create a database, because the platform has no conditional create. The docs state
   this race, and the driver does not try to prevent it. A caller can also open a database
   by its id.
-- The layout. `provision` declares three tables: `memory_v1`, `episode_v1`, and a one-row
-  `meta_v1` that records the schema version, the embedding model name, and the vector
-  size. `memory_v1` and `episode_v1` have the record columns and two embedding columns,
-  `content_embedding` and `cues_embedding`. The cues vector embeds the cues joined with
-  newlines. When a record has no cues, the cues vector is null. Vectors are float32 lists, the same as the
-  `hotdata-langchain` vector store. The layout is permanent, so the embedding model and the
-  vector size are fixed for each database. A store refuses an embedder whose vectors have
-  another size.
+- The layout. `provision` declares four tables: `memory_v1`, `episode_v1`, `cue_v1`, and a
+  one-row `meta_v1` that records the schema version, the embedding model name, and the
+  vector size. `memory_v1` and `episode_v1` have the record columns and one embedding
+  column, `content_embedding`. `cue_v1` holds the record id and `cues_embedding` for each
+  record of either table that has cues. The cues vector embeds the cues joined with
+  newlines. A record with no cues has no row in `cue_v1`. Vectors are float32 lists, the
+  same as the `hotdata-langchain` vector store. The layout is permanent, so the embedding
+  model and the vector size are fixed for each database. A store refuses an embedder whose
+  vectors have another size.
+- Indexes. `provision` builds a BM25 index on `content`, a plain cosine vector index on
+  `content_embedding`, and a sorted index on `created_at` in `memory_v1` and `episode_v1`,
+  and a plain cosine vector index on `cues_embedding` in `cue_v1`. The engine refuses a
+  BM25 index or a vector index on an empty table. So `provision` loads one seed row into
+  each table, builds the indexes, and deletes the seed rows. A put with cues loads
+  `memory_v1` or `episode_v1` and `cue_v1` in parallel. The two loads are not atomic. If
+  the cue load fails, the record has no cue row until a retry of the put. If the record
+  load fails, the join drops the stray cue row. The owner agreed to these changes on
+  2026-10-08, after the task 2 probe below.
 - Embedding. Fused search needs BM25 and plain vector indexes on one table, and a
   provider-backed index refuses to share a table (M5). So the client embeds, and the rows
   carry the vectors. RuntimeDB has no call that embeds text and returns the vector. Only
@@ -72,7 +83,7 @@ Worked in order on one branch. Each task is one commit or a few.
 
 1. Close phase 1 in `roadmap.md` and replace `plan.md` with the phase 2 plan.
 2. Packaging: the `hotdata` and `openai` extras, the `hotmemory.hotdata` module, and
-   `HotdataStore.provision` and opening by id, with the three tables and the BM25 indexes.
+   `HotdataStore.provision` and opening by id, with the four tables and their indexes.
    Check first that `hotdata-framework` can list databases by name, declare the layout,
    and read it back.
 3. The write path: `put` reads the current revision and writes the new row and the
@@ -129,6 +140,44 @@ Worked in order on one branch. Each task is one commit or a few.
 - Per commit that touches the driver: `make local-up`, then `make integration`.
 - Before the pull request: the AC5 checks and the name grep for AC8.
 - The cloud needs credentials, and only the owner runs it, from a gitignored `.env`.
+
+## What the task 2 probe found
+
+Observed on 2026-10-08 against the local stack, with the `latest` RuntimeDB image (digest
+`sha256:302371bb1923`) and `hotdata-framework` 0.14.1.
+
+- The framework lists databases by name and opens one by id. A declared table has no
+  columns until its first load. A replace load of an empty parquet file sets the columns,
+  and `information_schema` then reads them back with their types.
+- The engine refuses a BM25 index on an empty table with `No record batches to index`. It
+  refuses a plain vector index on an empty list column, because it cannot detect the
+  vector size. A fixed-size list column avoids the second refusal.
+- The engine refuses a second vector index on one table with `Only one vector index per
+  table is currently supported`. This is why the cues moved to `cue_v1`.
+- After a seed row is loaded, indexed, and deleted, the BM25 index and the vector index
+  serve rows loaded later. The query plan shows `USearchExec` for the vector ranking, also
+  with a `WHERE` filter on the same table.
+- A table alias in the vector ranking makes the engine scan, with no `USearchExec`. The
+  driver writes that ranking with no alias.
+- One fused query used both vector indexes and `bm25_search`. Medians of 5 runs, with half
+  the records holding cues:
+
+  | Rows and dimensions | Cues scanned in `memory_v1` | Cues indexed in `cue_v1` | No cues ranking |
+  |---|---|---|---|
+  | 10,000 and 1,536 | 96 ms | 46 ms | 38 ms |
+  | 100,000 and 64 | 53 ms | 31 ms | 26 ms |
+
+  The cues ranking takes the top 100 cues and then filters through the join. A cues
+  ranking that filters first through the join scans, at 136 ms for 10,000 rows of 1,536
+  dimensions.
+- Loads into two tables at the same time do not refuse each other. Two parallel loads cost
+  958 ms against 932 ms for one load, at 10,000 rows of 1,536 dimensions.
+- 24 puts, each two parallel loads, ran against a second writer that loaded both tables
+  every 0.1 seconds. The engine refused 8 loads with 409, and each succeeded on its second
+  attempt. After the run, every record had its cue row, and every cue row had its record.
+  A second writer that loads with no pause kept the retries out for minutes.
+- `hotdata-framework` 0.14.1 reports a refused query as `Bad Request`, with no message
+  from the engine.
 
 ## Questions left open
 
