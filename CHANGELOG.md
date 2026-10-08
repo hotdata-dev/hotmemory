@@ -22,8 +22,8 @@ each one, and its failure message points to this file.
   the database by name, and `HotdataStore.open` opens it by id. `LayoutError` reports a
   database whose layout differs. `ranking="vector"` ranks a search by content distance
   alone.
-- `Memory`, the memory contract over one `Store`, with `remember`, `recall`, and
-  `candidates`. `Fact` is the frozen dataclass of one structured fact that `remember`
+- `Memory`, the memory contract over one `Store`, with `remember`, `recall`,
+  `candidates`, `supersede`, and `forget`. `Fact` is the frozen dataclass of one structured fact that `remember`
   takes.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
   the OpenAI embeddings API.

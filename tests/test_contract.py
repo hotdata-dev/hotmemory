@@ -167,3 +167,70 @@ def test_candidates_returns_near_records_closest_first(memory: Memory) -> None:
     assert [hit.record.subject for hit in hits] == ["a", "b"]
     assert hits[0].distance is not None and hits[0].distance < 1e-6
     assert memory.store.list(SCOPE) == before
+
+
+def test_supersede_closes_the_record_and_writes_the_next_revision(
+    memory: Memory, clock: FakeClock
+) -> None:
+    night = START - timedelta(days=2)
+    [first] = memory.remember(
+        [Fact(kind="fact", subject="disk", content="disk at night", valid_from=night)], SCOPE
+    )
+    key = derive_key("disk", "disk at night")
+    clock.advance()
+    noon = clock()
+    second = memory.supersede(SCOPE, key, Fact(kind="fact", subject="disk", content="disk at noon"))
+    clock.advance()
+    retried = memory.supersede(
+        SCOPE, key, Fact(kind="fact", subject="disk", content="disk at noon")
+    )
+
+    assert (second, retried) == (f"team/alerts/{key}@2", second)
+    old, new = memory.store.history(SCOPE, key)
+    assert (old.id, old.valid_until, old.expired_at) == (first, noon, noon)
+    assert (new.content, new.valid_from, new.valid_until) == ("disk at noon", noon, None)
+
+
+def test_supersede_refuses_what_it_cannot_close(memory: Memory) -> None:
+    fact = Fact(kind="fact", content="disk at noon")
+    with pytest.raises(ValueError, match="no current revision"):
+        memory.supersede(SCOPE, "missing", fact)
+    [first] = memory.remember([Fact(kind="fact", content="disk at night", valid_from=START)], SCOPE)
+    key = derive_key("", "disk at night")
+    with pytest.raises(ValueError, match="valid_from"):
+        memory.supersede(SCOPE, key, fact, valid_from=START - timedelta(seconds=1))
+    assert [record.id for record in memory.store.history(SCOPE, key)] == [first]
+
+
+def test_forget_by_ids_deletes_every_revision_of_each_key(memory: Memory, clock: FakeClock) -> None:
+    store = memory.store
+    store.put(SCOPE, "disk", kind="fact", content="disk at night")
+    clock.advance()
+    store.put(SCOPE, "disk", kind="fact", content="disk at noon")
+    store.put(SCOPE, "cpu", kind="fact", content="cpu at noon")
+    store.put(("team", "other"), "net", kind="fact", content="net at noon")
+
+    with pytest.raises(ValueError, match="outside"):
+        memory.forget([SCOPE], ids=["team/alerts/disk@1", "team/other/net@1"])
+    assert len(store.history(SCOPE, "disk")) == 2
+
+    deleted = memory.forget([SCOPE], ids=["team/alerts/disk@1"])
+    assert deleted == ["team/alerts/disk@1", "team/alerts/disk@2"]
+    assert store.history(SCOPE, "disk") == []
+    assert store.get(SCOPE, "cpu") is not None
+
+
+def test_forget_by_horizon_deletes_the_keys_due_before_it(memory: Memory) -> None:
+    store = memory.store
+    soon, later = START + timedelta(days=1), START + timedelta(days=3)
+    store.put(SCOPE, "soon", kind="fact", content="disk soon", forget_after=soon)
+    store.put(SCOPE, "later", kind="fact", content="disk later", forget_after=later)
+    store.put(SCOPE, "kept", kind="fact", content="disk kept")
+    store.put(("team", "other"), "soon", kind="fact", content="net soon", forget_after=soon)
+
+    deleted = memory.forget([SCOPE], horizon=START + timedelta(days=2))
+    assert deleted == ["team/alerts/soon@1"]
+    assert sorted(record.key for record in store.list(SCOPE)) == ["kept", "later"]
+    assert store.get(("team", "other"), "soon") is not None
+    with pytest.raises(ValueError, match="exactly one"):
+        memory.forget([SCOPE])

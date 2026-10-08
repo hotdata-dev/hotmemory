@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from hotmemory._rules import check_prefix, under_prefix
 from hotmemory._writer import check_count
 from hotmemory.memory import utc_now
 from hotmemory.record import JSONValue, Kind, Record, check_namespace, normalize
@@ -16,6 +17,7 @@ from hotmemory.store import Clock, Hit, Store
 SUBJECT_LENGTH = 64
 HASH_LENGTH = 16
 DEFAULT_BUDGET = 2000
+FORGET_SCAN = 10_000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -165,6 +167,98 @@ class Memory:
         """
         hits = self._store.search(fact.content, scopes, k=k)
         return sorted(hits, key=lambda hit: hit.distance if hit.distance is not None else 0.0)
+
+    def supersede(
+        self,
+        scope: Sequence[str],
+        key: str,
+        fact: Fact,
+        valid_from: datetime | None = None,
+        actor: str = "",
+    ) -> str:
+        """Close the current revision of `key` and write `fact` as its next revision.
+
+        The new `valid_from` is `valid_from`, else that of `fact`, else the clock's time.
+        The old revision gets `valid_until` set to it and `expired_at` set to now. Raises
+        ValueError if the key has no current revision, or if the old `valid_from` is later
+        than the new one. Returns the id of the current revision after the call.
+        """
+        if self._store.get(scope, key) is None:
+            raise ValueError(f"key {key!r} has no current revision to supersede")
+        start = next((t for t in (valid_from, fact.valid_from) if t is not None), self._clock())
+        return self._store.put(
+            scope,
+            key,
+            kind=fact.kind,
+            content=fact.content,
+            subject=fact.subject,
+            cues=fact.cues,
+            payload=fact.payload,
+            tags=fact.tags,
+            sources=fact.sources,
+            actor=actor,
+            observed_at=fact.observed_at,
+            valid_from=start,
+            valid_until=fact.valid_until,
+            forget_after=fact.forget_after,
+            forget_reason=fact.forget_reason,
+            close_previous=True,
+        )
+
+    def forget(
+        self,
+        scopes: Sequence[Sequence[str]],
+        *,
+        ids: Sequence[str] | None = None,
+        horizon: datetime | None = None,
+    ) -> list[str]:
+        """Delete every revision of the named keys, or of the keys due before `horizon`.
+
+        Pass exactly one of `ids` and `horizon`. Each id names its key. With `horizon`,
+        a key is due when its current revision has a `forget_after` before `horizon`.
+        The candidates come from `list`, up to FORGET_SCAN records under each scope, so a
+        record already past its `forget_after` is left to `Store.sweep`. Raises
+        ValueError, and deletes nothing, if an id is outside `scopes`. Returns the ids of
+        the deleted revisions, sorted.
+        """
+        if (ids is None) == (horizon is None):
+            raise ValueError("pass exactly one of ids and horizon")
+        allowed = _scopes(scopes)
+        slots: dict[tuple[tuple[str, ...], str], None] = {}
+        if ids is not None:
+            if isinstance(ids, str):
+                raise TypeError("ids must be a sequence of ids, not a string")
+            for record_id in ids:
+                namespace, key = _slot(record_id)
+                if not any(under_prefix(namespace, prefix) for prefix in allowed):
+                    raise ValueError(f"id {record_id!r} is outside the allowed scopes")
+                slots[(namespace, key)] = None
+        elif horizon is not None:
+            for prefix in allowed:
+                for record in self._store.list(prefix, limit=FORGET_SCAN):
+                    if record.forget_after is not None and record.forget_after < horizon:
+                        slots[(record.namespace, record.key)] = None
+        deleted: list[str] = []
+        for namespace, key in slots:
+            deleted.extend(record.id for record in self._store.history(namespace, key))
+            self._store.delete(namespace, key)
+        return sorted(deleted)
+
+
+def _scopes(scopes: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
+    """Return each scope in `scopes` as a tuple of labels."""
+    if isinstance(scopes, str):
+        raise TypeError("scopes must be a sequence of scopes, not a string")
+    return [check_prefix(scope) for scope in scopes]
+
+
+def _slot(record_id: str) -> tuple[tuple[str, ...], str]:
+    """Return the namespace and the key that a record id names."""
+    path, separator, _ = record_id.rpartition("@")
+    labels = tuple(path.split("/"))
+    if not separator or len(labels) < 2:
+        raise ValueError(f"not a record id: {record_id!r}")
+    return labels[:-1], labels[-1]
 
 
 def _time(value: datetime | None, missing: str) -> str:
