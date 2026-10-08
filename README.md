@@ -8,10 +8,10 @@ Hotdata table, so an agent can join its memory to its own data in one SQL query.
 the memory systems that we surveyed stores memory as typed columns in the same engine as
 the data of the consumer.
 
-Status: version 0.0.0, not published. The storage contract exists in Python with one
-driver, `MemoryStore`, which runs in process memory. The Hotdata driver and the memory
-contract do not exist yet. [docs/internal/roadmap.md](docs/internal/roadmap.md) lists the
-phases.
+Status: version 0.0.0, not published. The storage contract exists in Python with two
+drivers. `MemoryStore` runs in process memory. `HotdataStore` keeps records in one Hotdata
+managed database. The memory contract does not exist yet.
+[docs/internal/roadmap.md](docs/internal/roadmap.md) lists the phases.
 
 The library has two layers:
 
@@ -50,6 +50,30 @@ print([r.revision for r in store.history(("team", "alerts"), "disk")])  # [1, 2]
 hits = store.search("disk", [("team",)], Filter(kind="fact"), k=1)
 print(hits[0].record.content)  # The disk fills at noon.
 ```
+
+## Store memory in Hotdata
+
+`HotdataStore` needs the `hotdata` extra, and an embedder for every write and search. The
+`openai` extra ships `OpenAIEmbedder`, which reads `OPENAI_API_KEY`. Any callable that turns
+a list of texts into a list of vectors also works. `provision` opens the database with the
+name, or creates it. It reads the connection from `HOTDATA_API_KEY`, `HOTDATA_WORKSPACE`,
+and `HOTDATA_API_URL`:
+
+```python
+from hotmemory.hotdata import HotdataStore
+from hotmemory.openai import OpenAIEmbedder
+
+embedder = OpenAIEmbedder()
+store = HotdataStore.provision(
+    "agent-memory", embedder=embedder, model=embedder.model, dimensions=1536
+)
+store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at night.")
+print([hit.record.id for hit in store.search("disk", [("team",)])])
+```
+
+One process writes to a database. [docs/contracts.md](docs/contracts.md) gives the tables,
+the retrieval query, and the rules of the driver. [docs/local.md](docs/local.md) tells you
+how to run it against a local engine.
 
 ## Documents
 

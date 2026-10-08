@@ -17,9 +17,11 @@ each one, and its failure message points to this file.
 - `Filter` and `TimeRange`, the exact filters of `list` and `search`, and `Hit`, one search
   result with its distance.
 - `MemoryStore` and `MemoryWriter`, the in-process driver.
-- `hotmemory.hotdata`, in the `hotdata` extra, with `HotdataStore.provision` and
-  `HotdataStore.open`, which create or open one managed database with the tables of schema
-  version 1. `LayoutError` reports a database whose layout differs.
+- `hotmemory.hotdata`, in the `hotdata` extra, with `HotdataStore`, the driver over one
+  Hotdata managed database, and `HotdataWriter`. `HotdataStore.provision` creates or opens
+  the database by name, and `HotdataStore.open` opens it by id. `LayoutError` reports a
+  database whose layout differs. `ranking="vector"` ranks a search by content distance
+  alone.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
   the OpenAI embeddings API.
 

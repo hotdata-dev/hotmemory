@@ -4,7 +4,8 @@
 
 - [uv](https://docs.astral.sh/uv/) installs the development tools and runs the scripts.
 - GNU Make runs the targets below.
-- Docker Desktop runs the local RuntimeDB stack. You need it only for `make local-up`.
+- Docker Desktop runs the local RuntimeDB stack. You need it only for `make local-up` and
+  `make integration`.
 
 ## The one command
 

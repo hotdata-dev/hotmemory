@@ -2,8 +2,8 @@
 
 RuntimeDB is the Hotdata query engine. The library can use a local RuntimeDB in place of a
 cloud workspace, with no API key and no cloud service. This page tells you how to start it
-and how to point the library at it. The Hotdata driver that reads the variables below
-comes in phase 2. Today, the measurement scripts use the stack.
+and how to point `HotdataStore` at it. The integration tests and the measurement scripts
+also use the stack.
 
 ## Start the stack
 
@@ -70,6 +70,26 @@ export HOTDATA_API_KEY=local
   workspace list, which the local engine does not serve.
 - `HOTDATA_API_KEY` can be any value that is not empty. The engine does not read it, but
   `HotdataClient.from_env()` in `hotdata-framework` refuses an empty key. This statement comes from the framework source.
+
+Then `HotdataStore.provision` creates or opens a database on the local engine. This
+example uses a toy embedder, so it needs no model:
+
+```python
+from hotmemory.hotdata import HotdataStore
+
+
+def embed(texts):
+    return [[text.count("disk") + 0.1, text.count("cpu") + 0.1] for text in texts]
+
+
+store = HotdataStore.provision("local-memory", embedder=embed, model="toy", dimensions=2)
+store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at night.")
+print(store.get(("team", "alerts"), "disk").id)  # team/alerts/disk@1
+```
+
+`make integration` runs the tests marked `hotdata` and the conformance suite against the
+stack. It sets `HOTMEMORY_TEST_URL` to `http://localhost:3000`, and needs none of the
+variables above. To run the tests against another engine, set `HOTMEMORY_TEST_URL`.
 
 `scripts/measure_local.py` needs none of these. It reads `HOTMEMORY_LOCAL_URL`, which
 defaults to `http://localhost:3000`.

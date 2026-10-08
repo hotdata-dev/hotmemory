@@ -37,7 +37,7 @@ class MemoryStore:
     `embedder` turns texts into vectors for `search` with query text. Without one, such a
     search raises RuntimeError. `clock` gives `created_at` and the time against which
     `forget_after` is compared. Search ranks by the cosine distance between the query and
-    `content`.
+    `content`, closest first.
     """
 
     def __init__(self, *, embedder: Embedder | None = None, clock: Clock = utc_now) -> None:

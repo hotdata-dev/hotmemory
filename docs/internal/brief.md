@@ -174,7 +174,7 @@ store found out. A replay that asks what memory held on a given day reads `creat
 | `get` | namespace, key, optional revision | Returns the current revision, or the named one. Returns None when absent. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first. No model, no embedding. The filter is equality on `kind`, `subject`, `tags`, and `actor`, and a range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. |
-| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions ranked by relevance, closest first, with a distance. The same filter as `list`. With no query text it is `list`. |
+| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions ranked by relevance, each with its content distance. The same filter as `list`. With no query text it is `list`. |
 | `delete` | namespace, key | Removes every revision of the key. Hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix. |
 | `writer` | optional row count, optional interval | A context manager. Every `put` inside it is buffered. The buffer flushes on exit, or at a row count, or at an interval, and the writer records the ids it flushed. |
@@ -194,16 +194,18 @@ Two drivers ship in version 1.
   relevance with the same cosine distance the engine uses, and it refuses any filter it
   does not model. The offline suite runs against it, and it is the oracle for the other
   driver.
-- `HotdataStore`. One managed database, two tables per schema version, keyed loads, a
-  serialized writer, and the ranking query in section 3.4. The integration leg runs against
+- `HotdataStore`. One managed database, two record tables per schema version and two
+  tables beside them (`cue_v1` and `meta_v1`, from phase 2), keyed loads, a serialized
+  writer, and the ranking query in section 3.4. `docs/contracts.md` states the layout. The integration leg runs against
   it. Against the local RuntimeDB stack it is also the development driver, so no third
   driver is needed for working offline. The integration leg can run against that stack in
   CI, with plain vector indexes in place of provider-backed ones. [measured, M6]
 
 ### 3.4 Tables and retrieval
 
-Two tables per schema version, because facts and raw material have different shapes and
-different write patterns.
+Two record tables per schema version, because facts and raw material have different
+shapes and different write patterns. Phase 2 added a cue table and a meta table beside
+them, because the engine allows one vector index per table.
 
 The `memory` table holds facts, profiles, and procedures: small rows, revisioned, searched
 often, and the rows that `profile` renders. The `episode` table holds raw material: a
@@ -384,9 +386,9 @@ Documentation is verified like code, with checks that need no judgement.
 
 ### 6.6 The integration leg
 
-Tests marked `hotdata` run `HotdataStore` against a real database. They need
-`HOTMEMORY_TEST_DB` to name a throwaway database that the run created and will delete.
-They skip when the variable is unset. They run once per pull request, at the end, because
+Tests marked `hotdata` run `HotdataStore` against a real engine. They need
+`HOTMEMORY_TEST_URL` to name the engine. Each run provisions a throwaway database and
+deletes it at the end. They skip when the variable is unset. They run once per pull request, at the end, because
 one run costs minutes. They are the only tests that touch a network.
 
 ### 6.7 What is not in the harness

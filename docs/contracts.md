@@ -5,9 +5,9 @@ implements. The memory contract is the surface that an agent calls, and it is bu
 store. This file states both. The behavior that each contract guarantees, and the proof for
 each guarantee, are in [guarantees.md](guarantees.md).
 
-Status: the storage contract exists in Python, with `MemoryStore` as its only driver.
-`HotdataStore` and the memory contract are design, and this file describes them as the
-library will ship them. This file describes schema version 1.
+Status: the storage contract exists in Python, with two drivers, `MemoryStore` and
+`HotdataStore`. The memory contract is design, and this file describes it as the library
+will ship it. This file describes schema version 1.
 
 ## The platform under the store
 
@@ -48,13 +48,21 @@ API owns and loads from files. The facts below shape the contracts. A fact marke
 - RuntimeDB, the Hotdata query engine, runs on a laptop with a Postgres container and an
   S3-compatible storage container. The bare engine image alone refuses managed tables.
   [measured 2026-10-05] [local.md](local.md) tells you how to start the stack.
+- The engine refuses a BM25 index or a plain vector index on an empty table. It allows
+  one vector index per table. [measured, local, 2026-10-08]
+- A filtered search through a plain vector index returns only the rows that were in the
+  table when the index was built. The same search with no filter returns the later rows
+  too. [measured, local, 2026-10-08]
+- `bm25_search` reads its query text as query syntax. Text such as `disk: full` or
+  `(really` makes it refuse the query. [measured, local, 2026-10-08]
 
 The contracts take these decisions from the facts:
 
 - Records are immutable. A revision is a new row, and the new row marks the old row as
   superseded. This gives history, supersession, and safe concurrency on a store whose
   write is a keyed row replace.
-- Each table has one writer. The driver sends one load at a time and retries on 409.
+- One process writes to a database. Inside that process, the driver sends one write at a
+  time and retries a load that the engine refuses with 409.
 - A write is synchronous and slow, or buffered and flushed. The API has both.
   [guarantees.md](guarantees.md) gives the visibility rule for each one.
 - Expiry is a column and a sweeper. The platform deletes nothing.
@@ -104,9 +112,10 @@ record and when it returns one, so a change to a dict that a caller holds never 
 store. Every timestamp carries a time zone. The record
 refuses a value that the table above does not allow.
 
-The public record has no embedding field. If the caller supplies an embedder, the Hotdata
-driver adds embedding columns. If the caller uses a provider-backed index, the driver adds
-none. The driver configuration selects one of the two.
+The public record has no embedding field. The Hotdata driver keeps the vectors in columns
+of its own tables, and `HotdataStore` needs an embedder from the caller to fill them. It
+has no mode with a provider-backed index, because that index cannot share a table with the
+BM25 index.
 
 A record has two clocks. `valid_until` records the change in the world. `expired_at`
 records the moment that the store found out. To ask what memory held on a given day, read `created_at` and
@@ -117,15 +126,15 @@ records the moment that the store found out. To ask what memory held on a given 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. A key holds episodes only, or holds no episode at all, so a `put` that moves a key between `episode` and another kind raises an error. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. A key holds episodes only, or holds no episode at all. A `put` that moves a key between `episode` and another kind raises an error. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |
-| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, closest first, each with a distance. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. |
+| `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, each with the cosine distance between the query and `content`. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. In `MemoryStore`, relevance is that distance, so the hits come closest first. The section on retrieval gives the order of `HotdataStore`. |
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
 | `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. |
-| `sweep` | none | Deletes every revision of each key whose current revision is past its `forget_after` at the time of the clock, and returns the ids that it deleted, sorted. A key whose current revision is not past its `forget_after` keeps all of its revisions. |
+| `sweep` | none | Deletes every revision of each key whose current revision is past its `forget_after` at the time of the clock. Returns the deleted ids, sorted. A key whose current revision is not past its `forget_after` keeps all of its revisions. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
 `valid_from`, `valid_until`, `created_at`, and `expired_at`. Any other filter raises an
@@ -157,22 +166,23 @@ Version 1 ships two drivers.
   query text raises an error. The clock is a callable that returns the current time, and
   the default reads the system clock. `MemoryStore` ranks by the cosine distance between
   the query and `content` only. It does not rank by BM25 or by `cues`.
-- `HotdataStore` uses one managed database, two tables per schema version, keyed loads, a
-  serialized writer, and the retrieval query below. With the local RuntimeDB stack, it is also
-  the development driver.
+- `HotdataStore` uses one managed database, keyed loads, a lock for its writes, and the
+  retrieval query below. It needs the `hotdata` extra. With the local RuntimeDB stack, it
+  is also the development driver. The section on `HotdataStore` below gives the details.
 
 ### Tables and retrieval
 
-Each schema version has two tables, because facts and raw material have different shapes
-and different write patterns.
+Each schema version has two record tables, because facts and raw material have different
+shapes and different write patterns.
 
 The `memory` table holds facts, profiles, and procedures. Its rows are small, revisioned,
 and searched often, and `profile` renders them. The `episode` table holds raw material: a
-thread, a document, or a post-mortem, cut into chunks of a fixed size. It is append-only
-and never revisioned. If a fact is not enough, a consumer searches it. The `sources` of a
-fact name the episode keys that it came from. Thus a consumer can go from a fact to its
-evidence in one join. Tabular data is never copied into either table. It stays in the
-tables of the consumer, and a fact points at it.
+thread, a document, or a post-mortem, cut into chunks of a fixed size. A consumer appends
+to it and does not revise it, but the store does not enforce this. If a fact is not
+enough, a consumer searches it. The `sources` of a fact name the episode keys that it came
+from. Thus a consumer can go from a fact to its evidence in one join. Tabular data is
+never copied into either table. It stays in the tables of the consumer, and a fact points
+at it.
 
 Each row holds one fact and not one document, for this reason. If a document is one
 record, each small revision is a near-duplicate of the whole document. The cosine distance
@@ -180,36 +190,91 @@ between two versions is close to zero, and that is the duplicate problem that a 
 layer exists to prevent. Small facts revise, supersede, and render into a profile without
 this problem. Markdown is a good format for the `content` of an episode chunk.
 
-Retrieval is one SQL query over the `memory` table, in three stages.
-
-1. Exact filters come first: namespace labels, validity at the as-of time, `kind`,
-   `subject`, `tags`, and `forget_after`. These are plain predicates, and they make the
-   candidate set smaller before any ranking.
-2. The query ranks the remaining rows by BM25 over `content` and by vector distance over
-   `content` and over `cues`. It fuses the rankings by reciprocal rank fusion (it adds
-   `1 / (60 + rank)` from each ranking). Fusion is ordinary SQL with common table
-   expressions and needs no engine function.
-3. A sorted index on `created_at` serves recency order and the sweeper.
-
-Stage 2 needs a BM25 index and vector indexes on one table. A provider-backed vector index
-cannot share a table with another index, so stage 2 needs plain vector indexes and an
-embedder that the caller supplies. With a provider-backed index and no BM25 index, stage 2
-ranks by meaning only. Measurement M5 in [guarantees.md](guarantees.md) confirmed both
-rules on 2026-10-05.
-
-`bm25_search` ranks the whole table, and the filters of stage 1 apply after it. The BM25
-fetch depth must therefore be wide enough that enough rows survive the filters. Also,
-`bm25_search` refuses to run without a BM25 index, so the driver always builds one.
-
 A cue is the question that a record answers. The extractor or the caller writes it at
 capture time. A query that resembles the question matches the cue, even when the
 query and the content share no words. Cues are optional, and retrieval on content alone
 always works.
 
+### HotdataStore
+
+`HotdataStore.provision(name, embedder=..., model=..., dimensions=...)` opens the database
+with that name, or creates it. It is safe to run again.
+
+- If exactly one database has the name, `provision` checks its tables, columns, indexes,
+  and the model name and vector size that the database records. If they match, it opens
+  the database. If not, it raises `LayoutError`.
+- If more than one database has the name, it raises `LayoutError` and creates nothing.
+- If no database has the name, it creates one, declares the tables, and builds the indexes.
+- Two processes that provision the same new name at the same moment can both create a
+  database, because the platform has no conditional create. The driver does not prevent
+  this.
+
+`HotdataStore.open(database_id, ...)` opens a database by its id, after the same checks.
+`client` is a `HotdataClient` from `hotdata-framework`, and defaults to
+`HotdataClient.from_env()`.
+
+The database holds four tables for schema version 1.
+
+| Table | Rows |
+|---|---|
+| `memory_v1` | The records of kind `fact`, `profile`, and `procedure`. It has one column for each field of the record, and `content_embedding`, the vector of `content`. |
+| `episode_v1` | The records of kind `episode`, with the same columns. |
+| `cue_v1` | One row for each record that has cues: the record id and `cues_embedding`, the vector of the cues joined with newlines. |
+| `meta_v1` | One row: the schema version, the embedding model name, and the vector size. |
+
+`namespace` is stored as the labels joined with `/`, `payload` as JSON text, and each
+timestamp in UTC to the microsecond. The embedding model and the vector size are fixed for
+each database. If an embedder returns a vector of another size, the write or search raises
+`ValueError`, and a write sends nothing.
+
+`provision` builds three indexes in each record table: BM25 on `content`, plain cosine
+vector on `content_embedding`, and sorted on `created_at`. In `cue_v1`, it
+builds a plain cosine vector index on `cues_embedding`. The engine refuses an index on an
+empty table. So `provision` loads one seed row into each table, builds the indexes, and
+deletes the seed rows.
+
+A `put` reads the current revision, then writes the new row and the superseded row in one
+load. If the record has cues, a second load writes its cue row into `cue_v1` at the same
+time. The two loads are not atomic. If the cue load fails, the record has no cue row, and
+the cue ranking misses it until a retry. If the record load fails, the cue row is left,
+and the search drops it. A writer sends one load per table at each flush. `delete` and
+`sweep` delete the rows of every revision from the record table and from `cue_v1`.
+
+A store holds a lock across the read and the load of each write, so one store writes in
+order. One process writes to a database. Two processes that put the same key can both read
+the same current revision and both write the next one. Then the later load replaces the
+earlier row. This rule stays until the engine has a conditional write.
+
+If the engine refuses a load with `409 RESOURCE_LOCKED`, the driver tries it again, up to
+8 attempts in all. The wait starts at 0.25 seconds and doubles to at most 4 seconds. After
+the last attempt, the driver raises the error.
+
+A `search` with query text runs one SQL query over both record tables and `cue_v1`. If
+the filter sets `kind`, the query reads only the record table of that kind. With
+`ranking="fused"`, the default, the query has three parts.
+
+1. Three rankings: BM25 over `content` in each record table, the cosine distance of
+   `content_embedding`, and the cosine distance of `cues_embedding`. BM25 reads only the
+   words of the query, each as a quoted term, so no query text can break the query.
+2. Each ranking fetches its top rows with no filter, and then applies the exact filters:
+   namespace labels, `superseded_by`, `forget_after`, and the `Filter`. The fetch depth is
+   100 rows, or 10 rows for each requested hit if that is more. A narrow filter can leave
+   a ranking with fewer rows than k. The vector rankings cannot filter first, because a
+   filtered search through the vector index misses rows loaded after its build.
+3. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking, and the query returns
+   the k rows with the highest sum. Ties go to the smaller content distance, then to the
+   newer row.
+
+The fused order is not the order of the distance, so a later hit can have a smaller
+distance than an earlier one. With `ranking="vector"`, the query ranks by the content
+distance alone, after the filters, by a scan. That order is the order of `MemoryStore`.
+
 Reads are fast because the table is small. A memory table holds thousands of rows, and a
 filtered scan of that is fast without an index. Measurement M5 found that the vector
 index saves engine time from about ten thousand rows. In the cloud, one request costs about
-400 ms at every size. That cost hides the saving up to at least one hundred thousand rows. [measured 2026-10-05]
+400 ms at every size. That cost hides the saving up to at least one hundred thousand rows.
+[measured 2026-10-05] Whether the sorted index on `created_at` serves `list` and `sweep`
+was not observed.
 
 ## The memory contract
 
