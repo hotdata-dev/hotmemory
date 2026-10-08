@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from hotdata_framework import HotdataClient
 
+from hotmemory import Filter
 from hotmemory.hotdata import (
     CUE_TABLE,
     EPISODE_TABLE,
@@ -267,3 +268,26 @@ def test_embedder_of_another_size_writes_nothing(client: HotdataClient, name: st
     with pytest.raises(ValueError, match="dimensions|floats"):
         store.put(NS, "disk", kind="fact", content="The disk fills at night.")
     assert rows(store, MEMORY_TABLE) == []
+
+
+def test_vector_ranking_matches_by_content_alone(client: HotdataClient, name: str) -> None:
+    store = HotdataStore.provision(
+        name, embedder=fake_embedder, model=MODEL, dimensions=DIMENSIONS, client=client
+    )
+    vector = HotdataStore(
+        client,
+        store.database,
+        embedder=fake_embedder,
+        model=MODEL,
+        dimensions=DIMENSIONS,
+        ranking="vector",
+    )
+    for key in ("one", "two", "three"):
+        vector.put(NS, key, kind="fact", content=f"disk report {key}")
+        vector.put(NS, f"{key}-x", kind="procedure", content=f"disk report {key}")
+
+    hits = vector.search("disk report two", [NS], Filter(kind="fact"), k=10)
+    assert [hit.record.key for hit in hits][:1] == ["two"]
+    assert sorted(hit.record.key for hit in hits) == ["one", "three", "two"]
+    distances = [hit.distance for hit in hits]
+    assert distances == sorted(distances, key=lambda distance: distance or 0.0)

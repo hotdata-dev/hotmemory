@@ -252,3 +252,16 @@ def test_key_cannot_cross_the_episode_line(store: Store, clock: FakeClock) -> No
     assert [record.kind for record in store.history(NS, "thread")] == ["episode"]
     assert [record.kind for record in store.history(NS, "disk")] == ["fact", "profile"]
     assert profile == "team/alerts/disk@2"
+
+
+def test_filtered_search_finds_every_later_write(store: Store, clock: FakeClock) -> None:
+    keys = ["first", "second", "third", "fourth"]
+    for key in keys:
+        store.put(NS, key, kind="fact", content=f"The disk fills, {key} report.")
+        store.put(NS, f"{key}-cpu", kind="procedure", content=f"Restart the CPU, {key} step.")
+        clock.advance()
+
+    hits = store.search("disk fills report", [NS], Filter(kind="fact"), k=10)
+    assert sorted(hit.record.key for hit in hits) == sorted(keys)
+    nothing = store.search("disk fills report", [("other",)], Filter(kind="fact"), k=10)
+    assert nothing == []

@@ -7,15 +7,16 @@ from __future__ import annotations
 
 import builtins
 import json
+import re
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,10 +27,12 @@ from hotdata_framework.client import IndexType, ManagedLoadMode, VectorMetric
 from hotmemory._rules import (
     build_record,
     check_episode_line,
+    check_prefix,
     is_duplicate,
     next_revision,
 )
-from hotmemory._writer import BufferedWriter
+from hotmemory._writer import BufferedWriter, check_count
+from hotmemory.filter import Filter, TimeRange
 from hotmemory.memory import utc_now
 from hotmemory.record import (
     SCHEMA_VERSION,
@@ -39,7 +42,7 @@ from hotmemory.record import (
     check_key,
     check_namespace,
 )
-from hotmemory.store import Clock, Embedder
+from hotmemory.store import Clock, Embedder, Hit
 
 SCHEMA = "public"
 MEMORY_TABLE = f"memory_v{SCHEMA_VERSION}"
@@ -50,6 +53,10 @@ TABLES = (MEMORY_TABLE, EPISODE_TABLE, CUE_TABLE, META_TABLE)
 RECORD_TABLES = (MEMORY_TABLE, EPISODE_TABLE)
 SEED_ID = "seed"
 META_ID = "meta"
+NEWEST_FIRST = "created_at DESC, id ASC"
+RRF_CONSTANT = 60
+MIN_DEPTH = 100
+DEPTH_PER_RESULT = 10
 LOAD_ATTEMPTS = 8
 FIRST_BACKOFF = 0.25
 MAX_BACKOFF = 4.0
@@ -83,6 +90,7 @@ RECORD_SCHEMA = pa.schema(
         ("content_embedding", _VECTOR),
     ]
 )
+READ_COLUMNS = tuple(name for name in RECORD_SCHEMA.names if name != "content_embedding")
 _Load = tuple[str, pa.Table, ManagedLoadMode]
 """One load: the table, the rows, and the load mode."""
 
@@ -121,6 +129,10 @@ INDEXES = (
 )
 
 
+Ranking = Literal["fused", "vector"]
+"""How `search` ranks: by fusion of BM25 and both vector rankings, or by content vector only."""
+
+
 class LayoutError(RuntimeError):
     """A database does not have the layout that this version of hotmemory declares."""
 
@@ -132,6 +144,11 @@ class HotdataStore:
     `dimensions` floats. `model` names the embedding model. Both are recorded in the
     database when it is provisioned, and every later open must name the same values.
     `clock` gives `created_at` and the time against which `forget_after` is compared.
+
+    `ranking="fused"`, the default, ranks a search by reciprocal rank fusion of BM25 over
+    `content`, cosine distance over the content vectors, and cosine distance over the cue
+    vectors. `ranking="vector"` ranks by the content cosine distance alone, as `MemoryStore`
+    does. In both, `Hit.distance` is the content cosine distance.
     """
 
     def __init__(
@@ -143,13 +160,17 @@ class HotdataStore:
         model: str,
         dimensions: int,
         clock: Clock = utc_now,
+        ranking: Ranking = "fused",
     ) -> None:
+        if ranking not in ("fused", "vector"):
+            raise ValueError(f"ranking must be 'fused' or 'vector', got {ranking!r}")
         self.client = client
         self.database = database
         self._embedder = embedder
         self._model = model
         self._dimensions = dimensions
         self._clock = clock
+        self._ranking = ranking
         self._lock = threading.Lock()
         self._sleep: Callable[[float], None] = time.sleep
 
@@ -255,6 +276,63 @@ class HotdataStore:
         )
         return self._write_many([draft])[0]
 
+    def get(self, namespace: Sequence[str], key: str, revision: int | None = None) -> Record | None:
+        labels = check_namespace(namespace)
+        check_key(key)
+        where = _slot_condition(labels, key)
+        if revision is not None:
+            where += f" AND revision = {int(revision)}"
+        found = self._records(RECORD_TABLES, where, "revision DESC", 1)
+        return found[0] if found else None
+
+    def history(self, namespace: Sequence[str], key: str) -> builtins.list[Record]:
+        labels = check_namespace(namespace)
+        check_key(key)
+        return self._records(RECORD_TABLES, _slot_condition(labels, key), "revision ASC")
+
+    def list(
+        self,
+        prefix: Sequence[str],
+        filter: Filter | None = None,
+        since: datetime | None = None,
+        limit: int = 100,
+    ) -> builtins.list[Record]:
+        check_count("limit", limit)
+        where = self._listed([prefix], filter)
+        if since is not None:
+            where += f" AND created_at >= {_timestamp(since)}"
+        return self._records(_tables(filter), where, NEWEST_FIRST, limit)
+
+    def list_namespaces(self, prefix: Sequence[str] = ()) -> builtins.list[tuple[str, ...]]:
+        condition = _prefix_condition(check_prefix(prefix)) or "TRUE"
+        union = " UNION ".join(
+            f"SELECT DISTINCT namespace FROM {_ref(table)} WHERE {condition}"
+            for table in RECORD_TABLES
+        )
+        rows = self._sql(union).rows
+        return sorted({tuple(row[0].split("/")) for row in rows})
+
+    def search(
+        self,
+        query: str | None,
+        prefixes: Sequence[Sequence[str]],
+        filter: Filter | None = None,
+        k: int = 10,
+    ) -> builtins.list[Hit]:
+        check_count("k", k)
+        where = self._listed(prefixes, filter)
+        tables = _tables(filter)
+        if query is None:
+            return [Hit(record, None) for record in self._records(tables, where, NEWEST_FIRST, k)]
+        if k == 0:
+            return []
+        vector = _vector(self._embed([query])[0])
+        if self._ranking == "vector":
+            sql = _vector_query(tables, where, vector, k)
+        else:
+            sql = _fused_query(tables, where, vector, _bm25_text(query), k)
+        return [Hit(_record(row), float(row["distance"])) for row in self._sql(sql).to_records()]
+
     def delete(self, namespace: Sequence[str], key: str) -> None:
         labels = check_namespace(namespace)
         check_key(key)
@@ -272,6 +350,43 @@ class HotdataStore:
         self, max_rows: int = 1000, interval: timedelta = timedelta(seconds=5)
     ) -> HotdataWriter:
         return HotdataWriter(self, max_rows, interval)
+
+    def _listed(self, prefixes: Sequence[Sequence[str]], filter: Filter | None) -> str:
+        """Return the SQL condition for the current, unforgotten records that `filter` keeps."""
+        if isinstance(prefixes, str):
+            raise TypeError("prefixes must be a sequence of prefixes, not a string")
+        labels = [check_prefix(prefix) for prefix in prefixes]
+        conditions = [
+            "superseded_by IS NULL",
+            f"(forget_after IS NULL OR forget_after > {_timestamp(self._clock())})",
+        ]
+        if not labels:
+            conditions.append("FALSE")
+        elif all(prefix for prefix in labels):
+            conditions.append(
+                "(" + " OR ".join(_prefix_condition(prefix) for prefix in labels) + ")"
+            )
+        conditions.extend(_filter_conditions(filter))
+        return " AND ".join(conditions)
+
+    def _records(
+        self,
+        tables: Sequence[str],
+        where: str,
+        order: str,
+        limit: int | None = None,
+    ) -> builtins.list[Record]:
+        """Return the records in `tables` that match `where`, in `order`."""
+        if limit == 0:
+            return []
+        columns = ", ".join(READ_COLUMNS)
+        union = " UNION ALL ".join(
+            f"SELECT {columns} FROM {_ref(table)} WHERE {where}" for table in tables
+        )
+        sql = f"SELECT * FROM ({union}) ORDER BY {order}"
+        if limit is not None:
+            sql += f" LIMIT {limit}"
+        return [_record(row) for row in self._sql(sql).to_records()]
 
     def _write_many(self, drafts: Sequence[Record]) -> builtins.list[str]:
         """Write `drafts` in order, with one load per table, and return the id of each.
@@ -527,6 +642,150 @@ def _table(kind: Kind) -> str:
 def _text(value: str) -> str:
     """Return `value` as a SQL string literal."""
     return "'" + value.replace("'", "''") + "'"
+
+
+def _tables(filter: Filter | None) -> tuple[str, ...]:
+    """Return the record tables that can hold a record that `filter` keeps."""
+    if filter is None or filter.kind is None:
+        return RECORD_TABLES
+    return (_table(filter.kind),)
+
+
+def _prefix_condition(prefix: tuple[str, ...]) -> str:
+    """Return the SQL condition that keeps the namespaces under `prefix`, by whole labels.
+
+    An empty prefix gives an empty string, which keeps every namespace.
+    """
+    if not prefix:
+        return ""
+    path = "/".join(prefix)
+    return f"(namespace = {_text(path)} OR starts_with(namespace, {_text(path + '/')}))"
+
+
+def _filter_conditions(filter: Filter | None) -> builtins.list[str]:
+    """Return one SQL condition for each field that `filter` sets."""
+    if filter is None:
+        return []
+    conditions = []
+    for name in ("kind", "subject", "actor"):
+        value = getattr(filter, name)
+        if value is not None:
+            conditions.append(f"{name} = {_text(value)}")
+    if filter.tags:
+        tags = ", ".join(_text(tag) for tag in filter.tags)
+        conditions.append(f"array_has_all(tags, ARRAY[{tags}])")
+    for name in ("valid_from", "valid_until", "created_at", "expired_at"):
+        window: TimeRange | None = getattr(filter, name)
+        if window is None:
+            continue
+        conditions.append(f"{name} IS NOT NULL")
+        if window.start is not None:
+            conditions.append(f"{name} >= {_timestamp(window.start)}")
+        if window.end is not None:
+            conditions.append(f"{name} < {_timestamp(window.end)}")
+    return conditions
+
+
+def _timestamp(value: datetime) -> str:
+    """Return `value` as a SQL timestamp literal in UTC, to the microsecond."""
+    utc = value.astimezone(UTC)
+    return f"TIMESTAMP '{utc.strftime('%Y-%m-%dT%H:%M:%S.%f')}Z'"
+
+
+def _depth(k: int) -> int:
+    """Return how many rows each ranking fetches before the filters and the fusion."""
+    return max(MIN_DEPTH, DEPTH_PER_RESULT * k)
+
+
+def _bm25_text(query: str) -> str:
+    """Return the words of `query` as quoted terms, so that BM25 reads no query syntax."""
+    return " ".join(f'"{word}"' for word in re.findall(r"\w+", query))
+
+
+def _vector(values: Sequence[float]) -> str:
+    """Return `values` as a SQL array literal."""
+    return "ARRAY[" + ", ".join(repr(float(value)) for value in values) + "]"
+
+
+def _union(tables: Sequence[str], select: str, where: str) -> str:
+    """Return `select` over each table in `tables`, filtered by `where`, joined by UNION ALL."""
+    return " UNION ALL ".join(
+        f"SELECT {select} FROM {_ref(table)} WHERE {where}" for table in tables
+    )
+
+
+def _vector_query(tables: Sequence[str], where: str, vector: str, k: int) -> str:
+    """Return the query that ranks by the content cosine distance alone, filters first.
+
+    The table alias and the named distance keep the engine from the vector index, so the
+    query scans and stays exact. A filtered search through the index misses rows loaded
+    after the index build.
+    """
+    columns = ", ".join(f"scanned.{column}" for column in READ_COLUMNS)
+    rows = " UNION ALL ".join(
+        f"SELECT {columns}, cosine_distance(scanned.content_embedding, {vector}) AS distance "
+        f"FROM {_ref(table)} scanned WHERE {where}"
+        for table in tables
+    )
+    return f"SELECT * FROM ({rows}) ORDER BY distance ASC, {NEWEST_FIRST} LIMIT {k}"
+
+
+def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: int) -> str:
+    """Return the query that fuses BM25, content vector, and cue vector rankings.
+
+    Each ranking keeps only the rows that `where` keeps, numbers them from 1, and adds
+    1 / (RRF_CONSTANT + rank) to the score of each row. BM25 ranks each table on its own,
+    because BM25 scores of two tables do not compare. Every ranking fetches its depth
+    before the filter applies, so a narrow filter can leave it with fewer rows. The vector
+    rankings carry no filter, because a filtered search through the vector index misses
+    rows loaded after the index build.
+    """
+    depth = _depth(k)
+    rank = "ROW_NUMBER() OVER (ORDER BY {order}) AS rank"
+    parts = []
+    rankings = []
+    for table in tables:
+        name = f"text_{table}"
+        parts.append(
+            f"{name} AS (SELECT id, {rank.format(order='score DESC, id ASC')} FROM "
+            f"bm25_search('{_ref(table)}', 'content', {_text(text)}, {depth}) WHERE {where})"
+        )
+        rankings.append(name)
+    nearest = " UNION ALL ".join(
+        f"SELECT * FROM (SELECT id, cosine_distance(content_embedding, {vector}) AS distance "
+        f"FROM {_ref(table)} ORDER BY distance ASC LIMIT {depth})"
+        for table in tables
+    )
+    parts.append(
+        f"content_rank AS (SELECT candidate.id, "
+        f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} "
+        f"FROM ({nearest}) candidate WHERE candidate.id IN ({_union(tables, 'id', where)}))"
+    )
+    rankings.append("content_rank")
+    parts.append(
+        f"cue_rank AS (SELECT candidate.id, "
+        f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} FROM ("
+        f"SELECT id, cosine_distance(cues_embedding, {vector}) AS distance FROM {_ref(CUE_TABLE)} "
+        f"ORDER BY distance ASC LIMIT {depth}) candidate "
+        f"WHERE candidate.id IN ({_union(tables, 'id', where)}))"
+    )
+    rankings.append("cue_rank")
+    ranked = " UNION ALL ".join(
+        f"SELECT id, rank FROM {name} WHERE rank <= {depth}" for name in rankings
+    )
+    parts.append(
+        f"fused AS (SELECT id, sum(1.0 / ({RRF_CONSTANT} + rank)) AS score "
+        f"FROM ({ranked}) GROUP BY id)"
+    )
+    columns = ", ".join(READ_COLUMNS)
+    rows = _union(tables, f"{columns}, content_embedding", where)
+    return (
+        f"WITH {', '.join(parts)} "
+        f"SELECT {', '.join(f'r.{column}' for column in READ_COLUMNS)}, "
+        f"cosine_distance(r.content_embedding, {vector}) AS distance FROM fused "
+        f"JOIN ({rows}) r ON r.id = fused.id "
+        f"ORDER BY fused.score DESC, distance ASC, r.created_at DESC, r.id ASC LIMIT {k}"
+    )
 
 
 def _slot_condition(namespace: tuple[str, ...], key: str) -> str:
