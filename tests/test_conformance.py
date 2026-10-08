@@ -236,3 +236,19 @@ def test_put_refuses_empty_content(store: Store, content: str) -> None:
 
     assert store.get(NS, "disk") is None
     assert store.list_namespaces() == []
+
+
+def test_key_cannot_cross_the_episode_line(store: Store, clock: FakeClock) -> None:
+    store.put(NS, "thread", kind="episode", content="First chunk of the thread.")
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.")
+    clock.advance()
+
+    with pytest.raises(ValueError, match="episode"):
+        store.put(NS, "thread", kind="fact", content="A fact under an episode key.")
+    with pytest.raises(ValueError, match="episode"):
+        store.put(NS, "disk", kind="episode", content="An episode under a fact key.")
+    profile = store.put(NS, "disk", kind="profile", content="The disk is the bottleneck.")
+
+    assert [record.kind for record in store.history(NS, "thread")] == ["episode"]
+    assert [record.kind for record in store.history(NS, "disk")] == ["fact", "profile"]
+    assert profile == "team/alerts/disk@2"

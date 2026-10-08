@@ -40,6 +40,7 @@ contract.
 | Is a record deleted after its `forget_after` time passes? | No. It stops appearing in `list` and `search`. The sweeper deletes it on its next run. | answered [measured] || `test_forget_after_hides_without_deleting`, and the sweeper in phase 2 |
 | A record is past its `forget_after`. Does a `put` of the same content write it again? | Yes. Deduplication applies only to a current revision that `list` can return. The put writes a new revision, and `list` and `search` return it. | answered | `test_put_after_forget_after_writes_a_new_revision` |
 | Can a caller change a stored record? | No. A record is frozen, and the store copies `payload` on the way in and on the way out. A change to a dict that the caller holds does not reach the store. | answered | `test_stored_record_cannot_change` |
+| Can a `put` move a key between `episode` and another kind? | No. A key holds episodes only, or holds no episode at all. A `put` that crosses that line raises an error and writes nothing. A key can change between `fact`, `profile`, and `procedure`. | answered | `test_key_cannot_cross_the_episode_line` |
 | Can a record have empty content? | No. `put` and a buffered `put` refuse content that is empty after normalization, and write nothing. | answered | `test_put_refuses_empty_content` |
 | Does a write inside a turn reach a `recall` in the same turn? | No, by contract. A consumer reads what was there before its own capture. | answered || phase 3 |
 

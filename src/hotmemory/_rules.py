@@ -30,6 +30,18 @@ def next_revision(current: Record | None) -> int:
     return 1 if current is None else current.revision + 1
 
 
+def check_episode_line(current: Record | None, kind: Kind) -> None:
+    """Raise ValueError if a put of `kind` moves the key of `current` across the episode line.
+
+    A key holds episodes only, or holds no episode at all.
+    """
+    if current is not None and (current.kind == "episode") != (kind == "episode"):
+        raise ValueError(
+            f"key {current.key!r} holds kind {current.kind!r}; a put of kind {kind!r} "
+            "cannot move a key between 'episode' and another kind"
+        )
+
+
 def is_duplicate(current: Record, content: str, now: datetime) -> bool:
     """Return True if a put of `content` writes nothing because `current` holds it.
 

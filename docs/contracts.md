@@ -117,7 +117,7 @@ records the moment that the store found out. To ask what memory held on a given 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. A key holds episodes only, or holds no episode at all, so a `put` that moves a key between `episode` and another kind raises an error. |
 | `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |
