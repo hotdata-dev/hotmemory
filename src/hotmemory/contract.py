@@ -8,16 +8,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from hotmemory._rules import check_prefix, under_prefix
+from hotmemory._rules import check_prefix, newest_first, under_prefix
 from hotmemory._writer import check_count
+from hotmemory.filter import Filter
 from hotmemory.memory import utc_now
-from hotmemory.record import JSONValue, Kind, Record, check_namespace, normalize
+from hotmemory.record import KINDS, JSONValue, Kind, Record, check_namespace, normalize
 from hotmemory.store import Clock, Hit, Store
 
 SUBJECT_LENGTH = 64
 HASH_LENGTH = 16
 DEFAULT_BUDGET = 2000
 FORGET_SCAN = 10_000
+PROFILE_LIMIT = 100
+COUNT_LIMIT = 1000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -243,6 +246,55 @@ class Memory:
             deleted.extend(record.id for record in self._store.history(namespace, key))
             self._store.delete(namespace, key)
         return sorted(deleted)
+
+    def profile(
+        self, subject: str, scopes: Sequence[Sequence[str]], budget: int = DEFAULT_BUDGET
+    ) -> tuple[list[Record], str]:
+        """Return the current records of `subject` under `scopes`, and their block.
+
+        The block groups the records by kind, in the order of `Kind`, newest first in each
+        group. A line `<kind>:` starts each group. The block ends with `namespaces:` and
+        one line `- <namespace>: <count>` for each namespace under `scopes`. The count is
+        the number of current records in that namespace, read with `list` up to
+        COUNT_LIMIT, and shows a `+` when `list` reached the limit. The namespace lines
+        take the budget first, and the record lines fill what is left, by whole lines.
+        The list holds the records of the block, in block order.
+        """
+        check_count("budget", budget)
+        allowed = _scopes(scopes)
+        found: dict[str, Record] = {}
+        for prefix in allowed:
+            for record in self._store.list(prefix, Filter(subject=subject), limit=PROFILE_LIMIT):
+                found[record.id] = record
+        body: list[tuple[str, Record | None]] = []
+        for kind in KINDS:
+            group = sorted((r for r in found.values() if r.kind == kind), key=newest_first)
+            if group:
+                body.append((f"{kind}:", None))
+                body.extend((render_line(record), record) for record in group)
+        tail = ["namespaces:", *self._counts(allowed)]
+        tail = tail[: fit_lines(tail, budget)]
+        if len(tail) < 2:
+            tail = []
+        left = budget - len("\n".join(tail)) - (1 if tail else 0)
+        kept = body[: fit_lines([line for line, _ in body], left)]
+        while kept and kept[-1][1] is None:
+            kept.pop()
+        lines = [line for line, _ in kept] + tail
+        return [record for _, record in kept if record is not None], "\n".join(lines)
+
+    def _counts(self, allowed: Sequence[tuple[str, ...]]) -> list[str]:
+        """Return one line `- <namespace>: <count>` for each namespace under `allowed`."""
+        namespaces = sorted(
+            {ns for prefix in allowed for ns in self._store.list_namespaces(prefix)}
+        )
+        lines = []
+        for namespace in namespaces:
+            records = self._store.list(namespace, limit=COUNT_LIMIT)
+            count = sum(1 for record in records if record.namespace == namespace)
+            more = "+" if len(records) == COUNT_LIMIT else ""
+            lines.append(f"- {'/'.join(namespace)}: {count}{more}")
+        return lines
 
 
 def _scopes(scopes: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:

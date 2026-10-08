@@ -23,7 +23,7 @@ each one, and its failure message points to this file.
   database whose layout differs. `ranking="vector"` ranks a search by content distance
   alone.
 - `Memory`, the memory contract over one `Store`, with `remember`, `recall`,
-  `candidates`, `supersede`, and `forget`. `Fact` is the frozen dataclass of one structured fact that `remember`
+  `candidates`, `supersede`, `forget`, and `profile`. `Fact` is the frozen dataclass of one structured fact that `remember`
   takes.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
   the OpenAI embeddings API.

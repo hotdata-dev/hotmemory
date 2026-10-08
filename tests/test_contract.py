@@ -234,3 +234,64 @@ def test_forget_by_horizon_deletes_the_keys_due_before_it(memory: Memory) -> Non
     assert store.get(("team", "other"), "soon") is not None
     with pytest.raises(ValueError, match="exactly one"):
         memory.forget([SCOPE])
+
+
+def test_profile_groups_the_subject_by_kind_and_ends_with_counts(
+    memory: Memory, clock: FakeClock
+) -> None:
+    other = ("team", "alerts", "night")
+    memory.remember([Fact(kind="procedure", subject="disk", content="Rotate the logs.")], SCOPE)
+    clock.advance()
+    memory.remember(
+        [
+            Fact(kind="fact", subject="disk", content="The disk fills at night."),
+            Fact(kind="fact", subject="cpu", content="The CPU spikes at noon."),
+        ],
+        SCOPE,
+    )
+    clock.advance()
+    memory.remember(
+        [Fact(kind="fact", subject="disk", content="The disk is a 2 TB volume.")], other
+    )
+
+    records, block = memory.profile("disk", [SCOPE])
+    assert [(record.kind, record.content) for record in records] == [
+        ("fact", "The disk is a 2 TB volume."),
+        ("fact", "The disk fills at night."),
+        ("procedure", "Rotate the logs."),
+    ]
+    lines = block.split("\n")
+    assert [line for line in lines if not line.startswith("- ")] == [
+        "fact:",
+        "procedure:",
+        "namespaces:",
+    ]
+    assert lines[-2:] == ["- team/alerts: 3", "- team/alerts/night: 1"]
+
+
+def test_profile_counts_show_the_list_limit(
+    memory: Memory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("hotmemory.contract.COUNT_LIMIT", 2)
+    facts = [Fact(kind="fact", subject="disk", content=f"disk fact {n}") for n in range(3)]
+    memory.remember(facts, SCOPE)
+
+    _, block = memory.profile("cpu", [SCOPE])
+    assert block == "namespaces:\n- team/alerts: 2+"
+
+
+def test_profile_keeps_the_counts_inside_the_budget(memory: Memory) -> None:
+    facts = [Fact(kind="fact", subject="disk", content=f"disk fact {n}") for n in range(3)]
+    memory.remember(facts, SCOPE)
+    tail = "namespaces:\n- team/alerts: 3"
+
+    records, block = memory.profile("disk", [SCOPE], budget=len(tail) + 1)
+    assert (records, block) == ([], tail)
+    records, block = memory.profile("disk", [SCOPE], budget=len(tail) - 1)
+    assert (records, block) == ([], "")
+    full_records, full = memory.profile("disk", [SCOPE])
+    first_two = full.split("\n")[:2]
+    budget = len("\n".join(first_two)) + 1 + len(tail)
+    records, block = memory.profile("disk", [SCOPE], budget=budget)
+    assert block == "\n".join([*first_two, tail])
+    assert records == full_records[:1]
