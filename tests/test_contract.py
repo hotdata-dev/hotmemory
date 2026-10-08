@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 
-from hotmemory import Fact, Memory, Store
+from hotmemory import Fact, Memory, Record, Store
 from hotmemory.contract import derive_key
 
 from .conftest import START, FakeClock
@@ -295,3 +295,33 @@ def test_profile_keeps_the_counts_inside_the_budget(memory: Memory) -> None:
     records, block = memory.profile("disk", [SCOPE], budget=budget)
     assert block == "\n".join([*first_two, tail])
     assert records == full_records[:1]
+
+
+def test_capture_remembers_what_the_extractor_returns(memory: Memory) -> None:
+    memory.remember([Fact(kind="fact", subject="disk", content="The disk fills at night.")], SCOPE)
+    seen: list[tuple[str, object, list[str]]] = []
+    observed = START - timedelta(minutes=5)
+    stated = START - timedelta(hours=1)
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        seen.append((text, observed_at, [record.content for record in current]))
+        return [
+            Fact(kind="fact", subject="disk", content="The disk fills at noon."),
+            Fact(kind="fact", subject="cpu", content="The CPU spikes.", observed_at=stated),
+        ]
+
+    ids = memory.capture(
+        "disk fills", SCOPE, extractor, actor="fake-extractor", observed_at=observed
+    )
+
+    assert seen == [("disk fills", observed, ["The disk fills at night."])]
+    records = [memory.store.get(SCOPE, record_id.split("/")[-1].split("@")[0]) for record_id in ids]
+    assert [(r.content, r.actor, r.observed_at) for r in records if r is not None] == [
+        ("The disk fills at noon.", "fake-extractor", observed),
+        ("The CPU spikes.", "fake-extractor", stated),
+    ]
+
+
+def test_capture_with_no_facts_writes_nothing(memory: Memory) -> None:
+    assert memory.capture("nothing here", SCOPE, lambda text, observed_at, current: []) == []
+    assert memory.store.list(SCOPE) == []

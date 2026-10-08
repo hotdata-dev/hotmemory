@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from typing import TypeAlias
 
 from hotmemory._rules import check_prefix, newest_first, under_prefix
 from hotmemory._writer import check_count
@@ -43,6 +44,10 @@ class Fact:
     valid_until: datetime | None = None
     forget_after: datetime | None = None
     forget_reason: str = ""
+
+
+Extractor: TypeAlias = Callable[[str, datetime | None, list[Record]], Sequence[Fact]]
+"""Takes the text, `observed_at`, and the current records, and returns the facts to remember."""
 
 
 def is_valid_at(record: Record, when: datetime) -> bool:
@@ -295,6 +300,27 @@ class Memory:
             more = "+" if len(records) == COUNT_LIMIT else ""
             lines.append(f"- {'/'.join(namespace)}: {count}{more}")
         return lines
+
+    def capture(
+        self,
+        text: str,
+        scope: Sequence[str],
+        extractor: Extractor,
+        actor: str = "",
+        observed_at: datetime | None = None,
+    ) -> list[str]:
+        """Call `extractor` on `text` and remember the facts that it returns.
+
+        The extractor gets `text`, `observed_at`, and the records that `recall` returns for
+        `text` under `scope`. A fact with no `observed_at` gets `observed_at`. Returns the
+        ids that `remember` returns.
+        """
+        current, _ = self.recall(text, [scope])
+        facts = [
+            fact if fact.observed_at is not None else replace(fact, observed_at=observed_at)
+            for fact in extractor(text, observed_at, current)
+        ]
+        return self.remember(facts, scope, actor)
 
 
 def _scopes(scopes: Sequence[Sequence[str]]) -> list[tuple[str, ...]]:
