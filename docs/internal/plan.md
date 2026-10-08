@@ -16,8 +16,8 @@ its recall. Every ledger row that names phase 3 names a test.
 
 ## Decisions this plan takes
 
-The owner agreed to the first four on 2026-10-08. The rest are proposed defaults, and the
-owner has not agreed to them yet. Agree or change each one before task 2 starts.
+The owner agreed to all of them on 2026-10-08: the first four with the plan, and the rest
+before task 2 started.
 
 - Supersede (agreed). `put` and `Writer.put` gain `close_previous: bool = False`. The
   rule applies when it is True and the key has a current revision. Then the superseded
@@ -40,29 +40,31 @@ owner has not agreed to them yet. Agree or change each one before task 2 starts.
   BM25 ranking keeps its fetch depth, because `bm25_search` ranks the whole table. The
   vector indexes stay built. After the engine fixes the filtered index search, a later
   change can let the vector rankings use the index again.
-- Keys (proposed). `remember` derives the key from the subject and the content. Each
-  character of the subject outside `[A-Za-z0-9_-]` becomes `-`. Then come `-` and the first
+- Keys (agreed). `remember` derives the key from the subject and the content. Each
+  character of the subject outside `[A-Za-z0-9_-]` becomes `-`, and the result keeps its
+  first 64 characters. Then come `-` and the first
   16 hex characters of the SHA-256 of the normalized content. An empty subject gives the
   key `fact-` and the hash. The derived key never contains `/` or `@`.
-- Facts (proposed). `remember` takes a sequence of `Fact`, a frozen dataclass with `kind`,
+- Facts (agreed). `remember` takes a sequence of `Fact`, a frozen dataclass with `kind`,
   `content`, and the optional record fields. `Fact` joins `__all__`, with a changelog
   entry.
-- The rendered block (proposed). `recall` and `profile` return a list of records and one
+- The rendered block (agreed). `recall` and `profile` return a list of records and one
   text block. Each record is one line: `- <content> [sources: a, b] [valid: <from> to
   <until>]`. Dates are in ISO 8601, with `unknown` and `now` for null ends. The block holds
-  whole lines only, and stops before the first line that passes the character budget. The
-  block never holds an instruction.
-- Forget (proposed). `forget(ids=...)` deletes the key of each id, every revision.
+  whole lines only, and stops before the first line that passes the character budget. In
+  the block of `profile`, a line `<kind>:` starts each group of records. The block never
+  holds an instruction.
+- Forget (agreed). `forget(ids=...)` deletes the key of each id, every revision.
   `forget(horizon=T)` deletes every key whose current revision has a `forget_after` before
   T. `Store` gains nothing. `forget(horizon)` lists the candidates and deletes them one key
   at a time, and `sweep` stays the fast path for a horizon of now.
-- Profile counts (proposed). The block of `profile` ends with each namespace that the
+- Profile counts (agreed). The block of `profile` ends with each namespace that the
   allowed scopes reach, with its count of current records. The count comes from `list`
   with a limit of 1000, and a count at the limit shows as `1000+`.
-- Capture (proposed). The extractor is a callable. It takes the text, `observed_at`, and
+- Capture (agreed). The extractor is a callable. It takes the text, `observed_at`, and
   the list of current records that `recall` returns, and it returns a list of `Fact`.
   `capture` calls `remember` on the result. The tests pass a fake extractor.
-- The skill file (proposed). `skills/hotmemory/SKILL.md` has a name and a description in
+- The skill file (agreed). `skills/hotmemory/SKILL.md` has a name and a description in
   front matter, and one example for each memory operation. `skills/hotmemory/scripts/`
   holds one command-line entry point for each operation. A script opens `HotdataStore`
   with `--database`. With `--memory-file`, it opens a `MemoryStore` that loads from and
@@ -122,7 +124,6 @@ Worked in order on one branch. Each task is one commit or a few.
 - After the engine ships a conditional write: replace the one-process rule with a
   compare-and-set on the revision.
 - A search over history, so that `recall(as_of=T)` can return a fact superseded after T.
-- The proposed decisions above, until the owner agrees to them.
 
 ## Stop and ask if
 
