@@ -48,8 +48,11 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   [docs/guarantees.md](docs/guarantees.md) has its tests there. A driver that fails a
   conformance test is not a driver. To add a driver, add it to `DRIVERS` in
   `tests/conftest.py`.
-- The in-memory driver is the reference for the Hotdata driver. From phase 2, a test
-  builds the same records in both drivers and compares the results of `search`.
+- The in-memory driver is the reference for the Hotdata driver. `tests/test_oracle.py`
+  builds the same records in both drivers and compares the results of `search`. The
+  ranking by content vector alone must return the same records in the same order, with
+  distances equal within 1e-6. The fused ranking must return the same set when k covers
+  every record.
 - Four surfaces are frozen: the names in `__all__`, the method set of the `Store`
   protocol, the fields and field types of the record for each schema version, and the
   filter keys of `list` and `search`. A test compares each surface against a literal set.
