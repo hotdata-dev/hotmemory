@@ -257,11 +257,13 @@ the filter sets `kind`, the query reads only the record table of that kind. With
    `content_embedding`, and the cosine distance of `cues_embedding`. BM25 reads only the
    words of the query, each as a quoted term, so query syntax in the text cannot break the
    query. A query with no words gives BM25 no terms, and the two vector rankings still rank.
-2. Each ranking fetches its top rows with no filter, and then applies the exact filters:
-   namespace labels, `superseded_by`, `forget_after`, and the `Filter`. The fetch depth is
-   100 rows, or 10 rows for each requested hit if that is more. A narrow filter can leave
-   a ranking with fewer rows than k. The vector rankings cannot filter first, because a
-   filtered search through the vector index misses rows loaded after its build.
+2. Each ranking keeps its top rows, to a depth of 100 rows, or 10 rows for each requested
+   hit if that is more. The exact filters are the namespace labels, `superseded_by`,
+   `forget_after`, and the `Filter`. The two vector rankings apply the filters first and
+   then rank every row that is left by a scan, so a narrow scope keeps its recall. They do
+   not use the vector index, because a filtered search through the index misses rows
+   loaded after its build. BM25 fetches its top rows from the whole table and then
+   applies the filters, so a narrow filter can leave BM25 with fewer rows than k.
 3. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking, and the query returns
    the k rows with the highest sum. Ties go to the smaller content distance, then to the
    newer row.

@@ -32,3 +32,5 @@ each one, and its failure message points to this file.
   `HotdataStore` implement it.
 - A `put` that moves a key between `episode` and another kind raises `ValueError` in
   every driver.
+- The vector rankings of a fused `HotdataStore.search` filter first and rank by a scan, so
+  a search in a narrow scope returns the top k rows of that scope.
