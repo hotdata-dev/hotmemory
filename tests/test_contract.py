@@ -454,3 +454,122 @@ def test_memory_reads_only_the_allowed_scopes(memory: Memory) -> None:
     assert "billing" not in block
     assert "bill" not in block
     assert memory.recall("disk", []) == ([], "")
+
+
+DOCUMENT = """# 2026-08-12 Post-mortem: the pool ran out
+
+## Summary
+
+The pool ran out of nodes.
+
+## Root cause
+
+The node group was at its ceiling.
+
+## Appendix
+
+```sh
+# list the pods
+kubectl get pods
+```
+"""
+TITLE = "# 2026-08-12 Post-mortem: the pool ran out"
+
+
+def first_sentence(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+    """Return one fact with the first body line of the chunk, or none for a fence."""
+    body = text.split("\n\n")[2] if text.count("\n\n") > 1 else ""
+    if not body or body.startswith("```"):
+        return []
+    return [Fact(kind="fact", subject="pool", content=body, sources=("post-mortems",))]
+
+
+def test_load_stores_each_chunk_as_an_episode_and_links_its_facts(memory: Memory) -> None:
+    seen: list[str] = []
+    observed = START - timedelta(days=50)
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        seen.append(text)
+        return first_sentence(text, observed_at, current)
+
+    episodes, facts = memory.load(
+        "pool-ran-out",
+        DOCUMENT,
+        SCOPE,
+        extractor,
+        actor="loader",
+        observed_at=observed,
+        chunk_chars=60,
+    )
+
+    keys = [f"pool-ran-out-{n:04d}" for n in range(1, 5)]
+    assert episodes == [f"team/alerts/{key}@1" for key in keys]
+    assert [text.split("\n\n")[0] for text in seen] == [
+        TITLE,
+        f"{TITLE} > ## Summary",
+        f"{TITLE} > ## Root cause",
+        f"{TITLE} > ## Appendix",
+    ]
+    stored = [memory.store.get(SCOPE, key) for key in keys]
+    assert [(r.kind, r.content, r.actor, r.observed_at) for r in stored if r] == [
+        ("episode", text, "loader", observed) for text in seen
+    ]
+    records = [memory.store.get(SCOPE, fact.split("/")[-1].split("@")[0]) for fact in facts]
+    assert [(r.content, r.sources, r.observed_at) for r in records if r] == [
+        ("The pool ran out of nodes.", ("post-mortems", episodes[1]), observed),
+        ("The node group was at its ceiling.", ("post-mortems", episodes[2]), observed),
+    ]
+    assert len(facts) == 2
+
+
+def test_a_second_load_of_the_same_text_writes_nothing_new(
+    memory: Memory, clock: FakeClock
+) -> None:
+    calls: list[str] = []
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        calls.append(text)
+        return first_sentence(text, observed_at, current)
+
+    first = memory.load("pool-ran-out", DOCUMENT, SCOPE, extractor, chunk_chars=60)
+    before = memory.store.list(SCOPE, limit=1000)
+    clock.advance()
+    again = memory.load("pool-ran-out", DOCUMENT, SCOPE, extractor, chunk_chars=60)
+
+    assert again == (first[0], [])
+    assert len(calls) == 4
+    assert memory.store.list(SCOPE, limit=1000) == before
+    assert all(len(memory.store.history(SCOPE, r.key)) == 1 for r in before)
+
+
+def test_load_of_an_edited_chunk_writes_its_next_revision(memory: Memory, clock: FakeClock) -> None:
+    memory.load("pool-ran-out", DOCUMENT, SCOPE, first_sentence, chunk_chars=60)
+    clock.advance()
+    edited = DOCUMENT.replace("at its ceiling", "at its configured ceiling")
+    episodes, facts = memory.load("pool-ran-out", edited, SCOPE, first_sentence, chunk_chars=60)
+
+    assert episodes[2] == "team/alerts/pool-ran-out-0003@2"
+    assert [episodes[0], episodes[1], episodes[3]] == [
+        f"team/alerts/pool-ran-out-{n:04d}@1" for n in (1, 2, 4)
+    ]
+    record = memory.store.get(SCOPE, facts[0].split("/")[-1].split("@")[0])
+    assert record is not None and record.sources == ("post-mortems", episodes[2])
+
+
+def test_load_of_a_blank_document_writes_nothing(memory: Memory) -> None:
+    assert memory.load("empty", " \n\n", SCOPE, first_sentence) == ([], [])
+    assert memory.store.list(SCOPE) == []
+
+
+@pytest.mark.parametrize("document", ["", "a/b", "a@b"])
+def test_load_refuses_a_document_that_is_not_a_key(memory: Memory, document: str) -> None:
+    with pytest.raises(ValueError, match="key"):
+        memory.load(document, DOCUMENT, SCOPE, first_sentence)
+    assert memory.store.list(SCOPE) == []
+
+
+def test_load_refuses_a_key_that_holds_a_fact(memory: Memory) -> None:
+    memory.store.put(SCOPE, "pool-ran-out-0001", kind="fact", content="Not an episode.")
+    with pytest.raises(ValueError, match="episode"):
+        memory.load("pool-ran-out", DOCUMENT, SCOPE, first_sentence)
+    assert [record.key for record in memory.store.list(SCOPE)] == ["pool-ran-out-0001"]

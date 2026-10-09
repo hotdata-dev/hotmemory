@@ -83,6 +83,52 @@ questions of the first draft.
   facts that name the class of a failure as well as its specific cause, because the
   replay case depends on the class.
 
+## Decisions taken during the work
+
+The plan left these choices open. The owner can change any of them in review.
+
+- `Filter.kind` keeps a single kind as a string, and turns a list into a tuple. An empty
+  tuple raises an error, because it would match nothing.
+- The counts in the block of `profile` leave episodes out too, because the block names
+  what `recall` can reach. A namespace that holds only episodes shows a count of 0.
+- `candidates` still searches every kind. The plan names only `recall` and `profile`.
+- `chunk_chars` bounds the body of a chunk and does not count the prefix. The first
+  heading of a post-mortem is a long sentence, so the prefix can reach about 250
+  characters.
+- The consumer's post-mortems have blocks over 2,000 characters that are tables and
+  lists, not fences. So a block that does not fit is cut at line ends, and only a single
+  line longer than `chunk_chars` is cut at that size. A cut pipe table repeats its header
+  row and delimiter row in each later piece, at the consumer's request, so that the
+  extractor keeps the column names.
+- When a long section is cut into blocks, its heading stays with the block after it if
+  both fit, so that no chunk holds a heading alone.
+- The prefix is the first heading, then the heading path, with a heading equal to the one
+  before it left out, so a path under the title does not repeat the title. A document
+  with no heading gives chunks with no prefix.
+- The extractor sees the chunk with its prefix, because the prefix tells it the document
+  and the section.
+- A fence starts with three or more backticks or tildes and ends with the same character
+  at least as many times. A heading underlined with `===` or `---` is not a heading. The
+  consumer's files have neither form.
+- A document of blank lines writes nothing and returns two empty lists. A chunk for which
+  the extractor returns no fact still gets its episode.
+- A chunk whose episode is current with the same content is skipped, and the extractor is
+  not called for it. Then a second load writes nothing new even when the extractor calls
+  a model, and it costs no model call. The second load returns the episode ids and no
+  fact ids.
+- The facts of a chunk are written before its episode. If a load stops inside a chunk, the
+  episode is missing, so the next load runs that chunk again.
+- The facts are remembered chunk by chunk, as `capture` does, so the extractor of a later
+  chunk sees the facts of the earlier chunks in its current records.
+- An episode gets the chunk as content, the actor, and `observed_at`. It has no subject
+  and no sources. A fact gets its own sources, then the id of its episode.
+- `load` refuses a key that holds a fact before it calls the extractor for that chunk. The
+  chunks before it stay written.
+- A key number above 9999 gets more than four digits.
+- An edited document writes the next revision of each changed episode. If it gets fewer
+  chunks, its old last episodes stay current. The consumer loads each document once in
+  this phase, so this waits for a later phase.
+
 ## Tasks
 
 Worked in order. Tasks 1 to 6 are the hotmemory pull request. Tasks 7 to 11 are the

@@ -299,6 +299,7 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 | `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
 | `profile` | subject, scopes, budget in characters | Returns the current records of kind `fact`, `profile`, and `procedure` for the subject, grouped by `kind`, as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
 | `capture` | text, scope, extractor, actor, observed_at | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. The extractor is a plain callable. The library ships no model and names no model. |
+| `load` | document, text, scope, extractor, actor, observed_at, chunk_chars | Cuts a Markdown document into chunks, and stores chunk n as a record of kind `episode` under the key `<document>-<n>`, with n from 1 in four digits. For each chunk, it calls the extractor as `capture` does, on the chunk with its heading prefix. Each fact gets the id of the episode of its chunk added to its `sources`. The facts of a chunk are written before its episode. A chunk whose episode is current with the same content is skipped, and the extractor is not called for it, so a second load of the same text writes nothing new. It returns the ids of the episodes and the ids of the facts that the extractor returned. The document must be a valid key. |
 
 The key of a fact has two parts joined by `-`. The first part is the subject, with each
 character outside `[A-Za-z0-9_-]` changed to `-`, cut to its first 64 characters. An empty
@@ -329,6 +330,30 @@ count with `+` is a lower bound, and it can be far below the true count when a
 sub-namespace is large. The counts take the budget
 first, and the record lines fill what is left, by whole lines. A group line with no record
 after it is dropped.
+
+`load` cuts a document in four steps.
+
+1. It cuts the document into sections at each Markdown heading, a line that starts with
+   one to six `#` and a space. A line inside a fenced code block, which starts and ends
+   with three or more backticks or tildes, is never a heading, so a shell comment in a
+   fence does not start a section.
+2. It keeps each section that fits in `chunk_chars` characters whole. It cuts a longer
+   section into blocks at blank lines outside fences, and keeps the heading with the
+   block after it when both fit. It cuts a block that does not fit at line ends. A pipe
+   table that is cut repeats its header row and delimiter row at the top of each later
+   piece. A line longer than `chunk_chars` is cut at that size.
+3. It packs the pieces in order into chunks of at most `chunk_chars` characters, joined by
+   a blank line.
+4. It starts each chunk with a prefix line and a blank line. The prefix is the first
+   heading of the document, then the heading path of the first line of the chunk, joined
+   by ` > `, such as `# Title > ## Root cause`. A heading equal to the one before it is
+   left out. A document with no heading gives chunks with no prefix. `chunk_chars` does
+   not count the prefix.
+
+A document of blank lines gives no chunk, and `load` writes nothing. A chunk for which the
+extractor returns no fact still gets its episode. If the text of a chunk changes, a
+second load writes the next revision of its episode and calls the extractor again. If a
+document gets fewer chunks, the episodes of its old last chunks stay current.
 
 An episode is the evidence that a fact names in `sources`, so `recall` and `profile` leave
 it out. A consumer reads an episode with `get`, or joins the two record tables in SQL. A
