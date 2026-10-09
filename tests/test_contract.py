@@ -573,3 +573,17 @@ def test_load_refuses_a_key_that_holds_a_fact(memory: Memory) -> None:
     with pytest.raises(ValueError, match="episode"):
         memory.load("pool-ran-out", DOCUMENT, SCOPE, first_sentence)
     assert [record.key for record in memory.store.list(SCOPE)] == ["pool-ran-out-0001"]
+
+
+def test_a_loaded_fact_is_valid_from_the_observed_time(memory: Memory) -> None:
+    observed = START - timedelta(days=50)
+    memory.load(
+        "pool-ran-out", DOCUMENT, SCOPE, first_sentence, observed_at=observed, chunk_chars=60
+    )
+
+    records, _ = memory.recall("pool nodes ceiling", [SCOPE], as_of=observed)
+    assert [record.valid_from for record in records] == [observed, observed]
+    assert memory.recall("pool nodes ceiling", [SCOPE], as_of=observed - timedelta(days=1)) == (
+        [],
+        "",
+    )

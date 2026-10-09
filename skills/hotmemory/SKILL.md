@@ -1,6 +1,6 @@
 ---
 name: hotmemory
-description: Store and read an agent's long-term memory with hotmemory. Use it to remember and recall facts with their sources, to find near duplicates, and to replace or forget a fact. It also loads the profile of a subject. Each record keeps its sources and the time span in which it is valid.
+description: Store and read an agent's long-term memory with hotmemory. Use it to remember and recall facts with their sources, to find near duplicates, and to replace or forget a fact. It also loads the profile of a subject, and loads a Markdown document as episodes and facts. Each record keeps its sources and the time span in which it is valid.
 ---
 
 # hotmemory
@@ -87,6 +87,20 @@ records. `extractors.py` holds an example that makes one fact from each sentence
 ```sh
 python scripts/capture.py --memory-file memory.json --scope team/alerts --actor sentence-splitter \
   --extractor extractors:one_fact_per_sentence --text "The CPU spikes at noon. The disk fills at noon."
+```
+
+## Load a document
+
+Store a Markdown document as episodes, one for each chunk, and run an extractor on each
+chunk. A chunk starts at a heading, never inside a code block, and starts with the first
+heading of the document and its heading path. Each fact names the episode of its chunk in
+its sources. `recall` never returns an episode. The script prints the episode ids and then
+the fact ids. If you load the same file again, it writes nothing and calls no extractor.
+
+```sh
+python scripts/load.py --memory-file memory.json --scope team/alerts --document disk-incident \
+  --file examples/disk-incident.md --extractor extractors:one_fact_per_prose_sentence \
+  --observed-at 2026-10-02T12:00:00+00:00
 ```
 
 ## Forget facts

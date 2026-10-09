@@ -350,6 +350,10 @@ after it is dropped.
    left out. A document with no heading gives chunks with no prefix. `chunk_chars` does
    not count the prefix.
 
+A fact with no `observed_at` gets the one passed to `load`. A fact with no `valid_from`
+then takes its `observed_at`, as every `put` does, so `recall` with an `as_of` before that
+time leaves the fact out.
+
 A document of blank lines gives no chunk, and `load` writes nothing. A chunk for which the
 extractor returns no fact still gets its episode. If the text of a chunk changes, a
 second load writes the next revision of its episode and calls the extractor again. If a

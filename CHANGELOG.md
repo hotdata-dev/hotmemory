@@ -31,7 +31,7 @@ each one, and its failure message points to this file.
   stores each chunk as an episode, and runs an extractor on each chunk. Each fact names
   the episode of its chunk in `sources`.
 - The skill file `skills/hotmemory/SKILL.md`, with one script in
-  `skills/hotmemory/scripts/` for each memory operation.
+  `skills/hotmemory/scripts/` for each memory operation, including `load.py`.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
   the OpenAI embeddings API.
 
