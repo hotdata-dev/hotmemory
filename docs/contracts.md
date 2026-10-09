@@ -94,7 +94,7 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `cues` | tuple of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
 | `payload` | JSON object | Structured data that the consumer defines. The store never reads it. |
 | `tags` | tuple of strings | Free labels. You can filter on them. |
-| `sources` | tuple of strings | References to the origin of the record: a thread id, a document path, a run id, an episode key. The length of the list is the corroboration count. |
+| `sources` | tuple of strings | References to the origin of the record: a thread id, a document path, a run id, an episode id. The length of the list is the corroboration count. |
 | `actor` | string | Who wrote this revision: a user id, an agent name, or an extractor name. |
 | `created_at` | timestamp | When the store wrote this revision. System clock. |
 | `observed_at` | timestamp or null | The time of the source. A post-mortem that you load a year later keeps the incident date here. |
@@ -181,10 +181,11 @@ shapes and different write patterns.
 
 The `memory` table holds facts, profiles, and procedures. Its rows are small, revisioned,
 and searched often, and `profile` renders them. The `episode` table holds raw material: a
-thread, a document, or a post-mortem, cut into chunks of a fixed size. A consumer appends
-to it and does not revise it, but the store does not enforce this. If a fact is not
-enough, a consumer searches it. The `sources` of a fact name the episode keys that it came
-from. Thus a consumer can go from a fact to its evidence in one join. Tabular data is
+thread, a document, or a post-mortem, cut into chunks. `load` cuts a Markdown document at
+its headings into chunks of at most a set size. It writes a new revision of an episode
+only when the text of its chunk changed. If a fact is not enough, a consumer searches the
+episodes with a `kind` filter. The `sources` of a fact name the ids of the episodes that
+it came from. Thus a consumer can go from a fact to its evidence in one join. Tabular data is
 never copied into either table. It stays in the tables of the consumer, and a fact points
 at it.
 
@@ -391,6 +392,6 @@ These three rules apply to every operation:
   and calls the Hotdata API. A service becomes necessary only for a client in another
   language, for extraction that must run centrally, or for scope enforcement above the API
   key.
-- Extraction on the server. `capture` takes a callable and does nothing more.
+- Extraction on the server. `capture` and `load` take a callable and do nothing more.
 - A third driver. The local RuntimeDB stack covers offline development.
 - Access control beyond scope filtering.

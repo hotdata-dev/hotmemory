@@ -120,6 +120,10 @@ The plan left these choices open. The owner can change any of them in review.
   episode is missing, so the next load runs that chunk again.
 - The facts are remembered chunk by chunk, as `capture` does, so the extractor of a later
   chunk sees the facts of the earlier chunks in its current records.
+- `load` does not set `valid_from` on a fact. A fact with no `valid_from` takes its
+  `observed_at` in `put`, and `load` fills `observed_at`, so `recall` with `as_of` before
+  the date of a document leaves out its facts. The consumer asked about this, and a test
+  proves it.
 - An episode gets the chunk as content, the actor, and `observed_at`. It has no subject
   and no sources. A fact gets its own sources, then the id of its episode.
 - `load` refuses a key that holds a fact before it calls the extractor for that chunk. The
