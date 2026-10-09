@@ -9,9 +9,9 @@ are on `main`.
 
 When this phase closes, the first consumer, an incident investigator built on Hotdata,
 uses hotmemory in its own repository. It loads past post-mortems into a memory database.
-At the start of an investigation, it recalls from that memory. A replay case runs a repeat
-incident twice. With memory, the cause of the prior incident reaches the first round.
-Without memory, it does not. The survey (section 2.8) names this as the first proof of the
+At the start of an investigation, it recalls from that memory. A replay case runs an
+incident of a class that two earlier post-mortems describe. With memory, the first round
+names a prior incident of that class. Without memory, it does not. The survey (section 2.8) names this as the first proof of the
 library.
 
 The phase spans two repositories, with one pull request in each. This file plans both
@@ -28,30 +28,60 @@ Testing needs no release and no deploy. The replay runs the consumer's graph in 
 process against frozen data. The memory lives in the local stack or in a throwaway
 database. hotmemory stays unpublished.
 
-## Decisions this plan proposes
+## Decisions
 
-The owner has not agreed to these yet. Agree or change each one before task 2 starts.
+The owner agreed to these on 2026-10-09, after the consumer's agent answered the questions
+of the first draft. Items marked proposed still need the owner's agreement before task 2.
 
-- The loader. `Memory` gains `load(document, text, scope, extractor, actor,
-  observed_at)`. It cuts `text` into paragraphs on blank lines. It packs whole paragraphs
-  into chunks of at most `chunk_chars` characters (2,000 by default), and cuts a longer
-  paragraph at that size. It writes each chunk as a record of kind `episode` with the key
+- The replay case (agreed). The case is an incident of a class that two earlier
+  post-mortems describe: a node group that cannot grow, so a RuntimeDB pod stays Pending.
+  The specific causes differ, and no person linked the case to the earlier incidents. So
+  the case proves that a prior incident of the same class reaches the first round, and
+  not that one cause repeated. The consumer's issue names the incidents. Its data is
+  frozen with no expiry.
+- The pass rule (agreed). The case is noisy, so each arm runs 3 times. With memory, at
+  least 2 of 3 first-round reports name one of the two prior incidents by date or title.
+  Without memory, none does. No evidence table holds those texts, so only memory can
+  supply them.
+- The cutoff (agreed). The replay uses no fact from after the incident start, in two ways.
+  The consumer's loader loads only the post-mortems dated before the incident, and the
+  recall passes `as_of` set to the incident start.
+- The chunking (agreed). `Memory.load` cuts a document on Markdown headings first. It
+  never cuts inside a fenced code block, because such a block can hold blank lines and
+  lines that start with `#`. Then it packs the sections into chunks of at most
+  `chunk_chars` characters (2,000 by default), and cuts a longer section on blank lines
+  outside fences, then at that size. Each stored chunk starts with the first heading of
+  the document and the heading path of the chunk, so that a chunk cut from a late section
+  still says which document and section it belongs to.
+- The loader (proposed). `Memory` gains `load(document, text, scope, extractor, actor,
+  observed_at)`. It writes each chunk as a record of kind `episode` with the key
   `<document>-<n>`, where `n` counts from 1 with four digits. Then it calls the extractor
   on each chunk, as `capture` does. Each fact that comes back gets the id of its chunk in
-  `sources`. It returns the ids of the episodes and of the facts. A second load
-  of the same text writes nothing new, because the episode keys and the fact keys repeat.
-- Episodes stay out of recall. `recall` and `profile` read facts, profiles, and procedures
-  only. A fact names its episodes in `sources`, so a consumer reaches the evidence with
-  `get`, or in one SQL join. For this, `Filter.kind` takes one kind or a tuple of kinds. In
-  `HotdataStore`, a filter without `episode` reads only `memory_v1`. The filter key stays
-  `kind`, and the wider type gets a changelog entry.
-- The dependency. The consumer pins hotmemory to a git commit. Publishing to PyPI waits for
-  a working version 1, as before.
-- The setting. The recall at investigation start sits behind a setting of the consumer
-  that defaults to off. Its pull request can merge and ship without a change in behavior.
-- One writer. In this phase, only the loader writes to the memory database, and it runs as
-  a command, never inside an investigation. An investigation only reads. A capture after
-  an investigation is later work, and needs the one-writer rule settled first.
+  `sources`. It returns the ids of the episodes and of the facts. A second load of the
+  same text writes nothing new, because the episode keys and the fact keys repeat.
+- Episodes stay out of recall (proposed, and the consumer agrees). `recall` and `profile`
+  read facts, profiles, and procedures only. A fact names its episodes in `sources`, so a
+  consumer reaches the evidence with `get`, or in one SQL join. For this, `Filter.kind`
+  takes one kind or a tuple of kinds. In `HotdataStore`, a filter without `episode` reads
+  only `memory_v1`. The filter key stays `kind`, and the wider type gets a changelog
+  entry.
+- The dependency (proposed). The consumer pins hotmemory to the GitHub archive URL of the
+  merge commit, because its image builder has no `git`. Publishing to PyPI waits for a
+  working version 1, as before.
+- The setting (proposed, and the consumer agrees). The recall at investigation start sits
+  behind a setting of the consumer that defaults to off. A merge to the consumer's main
+  branch builds an image but does not deploy it, so the pull request can merge without a
+  change in behavior.
+- One writer (proposed, and the consumer agrees). In this phase, only the loader writes to
+  the memory database, and it runs as a command, never inside an investigation. An
+  investigation only reads. A capture after an investigation is later work, and needs the
+  one-writer rule settled first.
+- The consumer's shape (proposed). One namespace for incidents, with the affected
+  component as the subject. The recall searches by the alert title and the first summary
+  of the investigation, and runs beside the evidence load, so a cold engine start stays
+  off the critical path. The block has a budget of 4,000 characters. The extractor writes
+  facts that name the class of a failure as well as its specific cause, because the
+  replay case depends on the class.
 
 ## Tasks
 
@@ -62,10 +92,12 @@ consumer's pull request, and its own issue gives their detail.
 2. `Filter.kind` takes a tuple of kinds, in both drivers, with conformance tests and a
    changelog entry.
 3. `recall` and `profile` leave episodes out, with tests over both drivers.
-4. `Memory.load`, the chunking, and the episode sources, with tests over both drivers.
+4. `Memory.load`, the chunking by headings and fences with the heading path, and the
+   episode sources, with tests over both drivers.
 5. A `load` script and example in the skill file, run by the command check.
 6. The ledger rows for the loader and for the episodes in recall, and the docs audit.
-7. Choose the replay case, and freeze its data before its retention window closes.
+7. Write the replay case and its pass rule into the consumer's eval suite. Its data is
+   already frozen.
 8. The post-mortem source and the extractor of the consumer.
 9. The loader command of the consumer, run against a local or throwaway memory database.
 10. The recall at investigation start, behind the setting, with its block in the first
@@ -79,30 +111,25 @@ consumer's pull request, and its own issue gives their detail.
   passes on the hotmemory pull request.
 - AC3. `Memory.load` and the episode rule have tests that run against both drivers.
 - AC4. A second load of the same text writes nothing new.
-- AC5. The replay case passes as the consumer's issue defines it. With memory, the report
-  of the first round cites the prior cause. Without memory, it does not.
+- AC5. The replay case passes by the pass rule above: at least 2 of 3 runs with memory
+  name a prior incident of the class, and none of 3 runs without memory does.
 - AC6. With the setting off, the consumer behaves as before.
 - AC7. No public text names a private repository, a customer, or a deployment detail. A
   grep for the known names proves it over the files, the commit messages, the pull
   request, and the issue. The pull request describes the grep without the names.
 
-## Questions for the consumer
+## Answers from the consumer
 
-The consumer's agent answers these before task 2, because the answers can change the
-loader.
+The consumer's agent answered the questions of the first draft on 2026-10-09. The
+decisions above take its answers. In short:
 
-- Which incident is the replay case, and which earlier incident does its cause repeat?
-  Where does its frozen data live? On what date does its retention window close?
-- Where do the post-mortems live, in what format, and how many are there? How long is a
-  typical one?
-- What does the consumer's extractor need? Does it fit the callable of `capture`: the
-  text, `observed_at`, and the current records, returning a list of `Fact`?
-- What scope and subject fit the consumer? For example, a namespace for each service, and
-  the alert or the service as the subject.
-- Where in the graph does the first round start, and how big can the memory block be?
-- What does a merge to the consumer's main branch trigger: an image build, a deploy, or
-  both?
-- Does the consumer need a field that is not in the record?
+- The post-mortems are Markdown files with fixed sections and an appendix of shell
+  commands. Most are 8,000 to 42,000 characters long. At 2,000 characters a chunk, a full
+  load is about 110 extractor calls.
+- The extractor fits the callable of `capture`. It calls a model that the consumer
+  configures.
+- The consumer needs no field that the record does not have. The episode key keeps the
+  document name, and `observed_at` carries the incident date.
 
 ## Verification
 
