@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -43,11 +44,12 @@ class TimeRange:
 class Filter:
     """Exact filters for `list` and `search`. A field that is None does not filter.
 
-    `kind`, `subject`, and `actor` match by equality. `tags` matches a record that holds
-    every tag named. The four time fields match a record whose value lies in the range.
+    `kind` takes one kind or a tuple of kinds, and matches a record of any kind named.
+    `subject` and `actor` match by equality. `tags` matches a record that holds every tag
+    named. The four time fields match a record whose value lies in the range.
     """
 
-    kind: Kind | None = None
+    kind: Kind | tuple[Kind, ...] | None = None
     subject: str | None = None
     tags: tuple[str, ...] | None = None
     actor: str | None = None
@@ -57,8 +59,8 @@ class Filter:
     expired_at: TimeRange | None = None
 
     def __post_init__(self) -> None:
-        if self.kind is not None and self.kind not in KINDS:
-            raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {self.kind!r}")
+        if self.kind is not None:
+            object.__setattr__(self, "kind", _check_kind(self.kind))
         for name in ("subject", "actor"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, str):
@@ -74,3 +76,33 @@ class Filter:
             value = getattr(self, name)
             if value is not None and not isinstance(value, TimeRange):
                 raise TypeError(f"Filter.{name} must be a TimeRange")
+
+
+def kinds_of(filter: Filter | None) -> tuple[Kind, ...] | None:
+    """Return the kinds that `filter` keeps, or None if it does not filter by kind."""
+    if filter is None or filter.kind is None:
+        return None
+    return (filter.kind,) if isinstance(filter.kind, str) else filter.kind
+
+
+def _check_kind(value: object) -> Kind | tuple[Kind, ...]:
+    """Return `value` as one kind or a tuple of kinds, or raise if a kind is not allowed.
+
+    A string stays a string. A sequence becomes a tuple, and must hold at least one kind.
+    """
+    if isinstance(value, str):
+        return _one_kind(value)
+    if not isinstance(value, Sequence):
+        raise TypeError("Filter.kind must be a kind or a tuple of kinds")
+    kinds = tuple(_one_kind(item) for item in value)
+    if not kinds:
+        raise ValueError("Filter.kind must name at least one kind")
+    return kinds
+
+
+def _one_kind(value: object) -> Kind:
+    """Return `value` if it is one of `KINDS`, or raise ValueError."""
+    for kind in KINDS:
+        if value == kind:
+            return kind
+    raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {value!r}")

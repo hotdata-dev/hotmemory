@@ -43,6 +43,9 @@ def test_filter_refuses_an_unknown_key() -> None:
     ("fields", "error"),
     [
         ({"kind": "note"}, ValueError),
+        ({"kind": ("fact", "note")}, ValueError),
+        ({"kind": ()}, ValueError),
+        ({"kind": 1}, TypeError),
         ({"subject": 1}, TypeError),
         ({"actor": 1}, TypeError),
         ({"tags": "disk"}, TypeError),
@@ -59,3 +62,8 @@ def test_filter_refuses_an_unsupported_value(
 
 def test_filter_tags_become_a_tuple() -> None:
     assert Filter(tags=["disk"]).tags == ("disk",)  # type: ignore[arg-type]
+
+
+def test_filter_kind_takes_one_kind_or_a_tuple_of_kinds() -> None:
+    assert Filter(kind="fact").kind == "fact"
+    assert Filter(kind=["fact", "procedure"]).kind == ("fact", "procedure")  # type: ignore[arg-type]

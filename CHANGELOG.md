@@ -27,8 +27,11 @@ each one, and its failure message points to this file.
   dataclass of one structured fact that `remember` takes.
 - `MemoryStore` takes `records`, the revisions that it starts with, and `records()`
   returns every revision that it holds.
+- `Memory.load`, which cuts a Markdown document into chunks by headings and fences,
+  stores each chunk as an episode, and runs an extractor on each chunk. Each fact names
+  the episode of its chunk in `sources`.
 - The skill file `skills/hotmemory/SKILL.md`, with one script in
-  `skills/hotmemory/scripts/` for each memory operation.
+  `skills/hotmemory/scripts/` for each memory operation, including `load.py`.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over
   the OpenAI embeddings API.
 
@@ -47,3 +50,9 @@ each one, and its failure message points to this file.
   `HotdataStore`.
 - The vector rankings of a fused `HotdataStore.search` filter first and rank by a scan, so
   a search in a narrow scope returns the top k rows of that scope.
+- `Filter.kind` takes one kind or a tuple of kinds, and matches a record of any kind named.
+  The filter key stays `kind`. In `HotdataStore`, a filter without `episode` reads only
+  `memory_v1`.
+- `Memory.recall` and `Memory.profile` read the records of kind `fact`, `profile`, and
+  `procedure` only. They never return an episode, and the counts of `profile` leave
+  episodes out.

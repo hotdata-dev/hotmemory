@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from hotmemory.filter import Filter
+from hotmemory.filter import Filter, kinds_of
 from hotmemory.record import JSONValue, Kind, Record, check_label, normalize
 
 
@@ -117,7 +117,8 @@ def matches(record: Record, filter: Filter | None) -> bool:
     """Return True if `record` satisfies every field that `filter` sets."""
     if filter is None:
         return True
-    if filter.kind is not None and record.kind != filter.kind:
+    kinds = kinds_of(filter)
+    if kinds is not None and record.kind not in kinds:
         return False
     if filter.subject is not None and record.subject != filter.subject:
         return False

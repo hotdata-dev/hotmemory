@@ -9,7 +9,8 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TypeAlias
 
-from hotmemory._rules import check_prefix, newest_first, under_prefix
+from hotmemory._chunks import chunk_document
+from hotmemory._rules import check_prefix, is_duplicate, newest_first, next_revision, under_prefix
 from hotmemory._writer import check_count
 from hotmemory.filter import Filter
 from hotmemory.memory import utc_now
@@ -21,16 +22,19 @@ from hotmemory.record import (
     check_key,
     check_namespace,
     normalize,
+    record_id,
 )
 from hotmemory.store import Clock, Hit, Store
 
 SUBJECT_LENGTH = 64
 HASH_LENGTH = 16
 DEFAULT_BUDGET = 2000
+DEFAULT_CHUNK_CHARS = 2000
 FORGET_SCAN = 10_000
 PROFILE_LIMIT = 100
 COUNT_LIMIT = 1000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
+RECALLED_KINDS: tuple[Kind, ...] = ("fact", "profile", "procedure")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -163,13 +167,14 @@ class Memory:
     ) -> tuple[list[Record], str]:
         """Return the top current records for `query` under `scopes`, and their block.
 
-        The search returns up to `k` current records. With `as_of`, only the ones valid at
-        `as_of` remain. The block holds one line for each record, in order, and stops
-        before the first line that would pass `budget` characters. The list holds the
-        records of the block.
+        The search returns up to `k` current records of the kinds in RECALLED_KINDS, so
+        it never returns an episode. With `as_of`, only the ones valid at `as_of` remain.
+        The block holds one line for each record, in order, and stops before the first
+        line that would pass `budget` characters. The list holds the records of the block.
         """
         check_count("budget", budget)
-        records = [hit.record for hit in self._store.search(query, scopes, k=k)]
+        recalled = Filter(kind=RECALLED_KINDS)
+        records = [hit.record for hit in self._store.search(query, scopes, recalled, k=k)]
         if as_of is not None:
             records = [record for record in records if is_valid_at(record, as_of)]
         lines = [render_line(record) for record in records]
@@ -266,12 +271,13 @@ class Memory:
     ) -> tuple[list[Record], str]:
         """Return the current records of `subject` under `scopes`, and their block.
 
-        The block groups the records by kind, in the order of `Kind`, newest first in each
+        It reads only the kinds in RECALLED_KINDS, so it never returns an episode. The
+        block groups the records by kind, in the order of `Kind`, newest first in each
         group. A line `<kind>:` starts each group. The block ends with `namespaces:` and
         one line `- <namespace>: <count>` for each namespace under `scopes`. The count is
-        the number of current records in that namespace, read with `list` up to
-        COUNT_LIMIT, and shows a `+` when `list` reached the limit. `list` matches the
-        namespace as a prefix, so the records of its sub-namespaces share that window,
+        the number of current records of those kinds in that namespace, read with `list`
+        up to COUNT_LIMIT, and shows a `+` when `list` reached the limit. `list` matches
+        the namespace as a prefix, so the records of its sub-namespaces share that window,
         and a `+` count is a lower bound. The namespace lines
         take the budget first, and the record lines fill what is left, by whole lines.
         The list holds the records of the block, in block order.
@@ -280,7 +286,8 @@ class Memory:
         allowed = _scopes(scopes)
         found: dict[str, Record] = {}
         for prefix in allowed:
-            for record in self._store.list(prefix, Filter(subject=subject), limit=PROFILE_LIMIT):
+            where = Filter(subject=subject, kind=RECALLED_KINDS)
+            for record in self._store.list(prefix, where, limit=PROFILE_LIMIT):
                 found[record.id] = record
         body: list[tuple[str, Record | None]] = []
         for kind in KINDS:
@@ -306,7 +313,7 @@ class Memory:
         )
         lines = []
         for namespace in namespaces:
-            records = self._store.list(namespace, limit=COUNT_LIMIT)
+            records = self._store.list(namespace, Filter(kind=RECALLED_KINDS), limit=COUNT_LIMIT)
             count = sum(1 for record in records if record.namespace == namespace)
             more = "+" if len(records) == COUNT_LIMIT else ""
             lines.append(f"- {'/'.join(namespace)}: {count}{more}")
@@ -326,9 +333,72 @@ class Memory:
         `text` under `scope`. A fact with no `observed_at` gets `observed_at`. Returns the
         ids that `remember` returns.
         """
+        return self._extract(text, scope, extractor, actor, observed_at, ())
+
+    def load(
+        self,
+        document: str,
+        text: str,
+        scope: Sequence[str],
+        extractor: Extractor,
+        actor: str = "",
+        observed_at: datetime | None = None,
+        chunk_chars: int = DEFAULT_CHUNK_CHARS,
+    ) -> tuple[list[str], list[str]]:
+        """Cut the Markdown `text` into chunks, store each as an episode, and extract facts.
+
+        The chunks are those of docs/contracts.md, with bodies of at most `chunk_chars`
+        characters. Chunk n is stored as an episode under the key `<document>-<n>`, with n
+        from 1 in four digits. For each chunk, the extractor runs as in `capture`, on the
+        chunk with its heading prefix, and each fact gets the id of the episode added to
+        its `sources`. The facts of a chunk are written before its episode. A chunk whose
+        episode is current with the same content is skipped, and the extractor is not
+        called for it. Raises ValueError if `document` is not a valid key. Returns the ids
+        of the episodes, in order, and the ids of the facts that the extractor returned.
+        """
+        check_key(document)
+        check_count("chunk_chars", chunk_chars)
+        if chunk_chars < 1:
+            raise ValueError("chunk_chars must be 1 or more")
+        namespace = check_namespace(scope)
+        episodes: list[str] = []
+        facts: list[str] = []
+        for number, chunk in enumerate(chunk_document(text, chunk_chars), start=1):
+            key = f"{document}-{number:04d}"
+            check_key(key)
+            current = self._store.get(namespace, key)
+            if current is not None and current.kind != "episode":
+                raise ValueError(f"key {key!r} holds kind {current.kind!r}, not an episode")
+            if current is not None and is_duplicate(current, chunk, self._clock()):
+                episodes.append(current.id)
+                continue
+            episode = record_id(namespace, key, next_revision(current))
+            facts.extend(self._extract(chunk, namespace, extractor, actor, observed_at, (episode,)))
+            written = self._store.put(
+                namespace, key, kind="episode", content=chunk, actor=actor, observed_at=observed_at
+            )
+            if written != episode:
+                raise RuntimeError(f"episode {key!r} was written as {written!r}, not {episode!r}")
+            episodes.append(written)
+        return episodes, facts
+
+    def _extract(
+        self,
+        text: str,
+        scope: Sequence[str],
+        extractor: Extractor,
+        actor: str,
+        observed_at: datetime | None,
+        sources: tuple[str, ...],
+    ) -> list[str]:
+        """Call `extractor` as `capture` does, add `sources` to each fact, and remember them."""
         current, _ = self.recall(text, [scope])
         facts = [
-            fact if fact.observed_at is not None else replace(fact, observed_at=observed_at)
+            replace(
+                fact,
+                observed_at=observed_at if fact.observed_at is None else fact.observed_at,
+                sources=tuple(dict.fromkeys((*fact.sources, *sources))),
+            )
             for fact in extractor(text, observed_at, current)
         ]
         return self.remember(facts, scope, actor)

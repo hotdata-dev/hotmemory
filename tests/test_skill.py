@@ -35,7 +35,7 @@ def test_every_command_in_the_skill_file_exits_zero(tmp_path: Path) -> None:
     shutil.copytree(SKILL, folder, ignore=shutil.ignore_patterns("__pycache__"))
     path = os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")])
     found = commands()
-    assert len(found) == 7
+    assert len(found) == 8
     for command in found:
         result = subprocess.run(
             command,
@@ -50,3 +50,6 @@ def test_every_command_in_the_skill_file_exits_zero(tmp_path: Path) -> None:
     records = (folder / "memory.json").read_text(encoding="utf-8")
     assert "The disk fills at noon." in records
     assert "The CPU spikes at noon." not in records
+    assert '"key": "disk-incident-0001"' in records
+    assert "The noon batch doubled the log volume." in records
+    assert records.count("team/alerts/disk-incident-0001@1") > 1

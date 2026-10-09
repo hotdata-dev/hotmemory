@@ -19,7 +19,10 @@ The library has two layers:
   are immutable. A new put under the same key creates a new revision.
 - A memory contract. Remember facts, recall them inside a context budget, supersede a
   fact, forget by id or by horizon, and load the profile of a subject. Extraction from raw
-  text is optional, and it takes an extractor callable that the caller supplies.
+  text is optional, and it takes an extractor callable that the caller supplies. `load`
+  cuts a Markdown document into chunks, stores each chunk as an episode, and extracts
+  facts that name their episode as a source. `recall` and `profile` return facts,
+  profiles, and procedures, never episodes.
 
 The library runs in the process of the consumer and calls the Hotdata API with the API key
 of the consumer. There is no hotmemory server. The first consumer is an incident
@@ -73,6 +76,29 @@ memory.remember(
 )
 records, block = memory.recall("disk", [scope])
 print(block)  # - The disk fills at night. [sources: chat-1] [valid: unknown to now]
+```
+
+`load` takes a document name, the Markdown text, a scope, and an extractor. The extractor
+gets each chunk, with the first heading and the heading path of the chunk at its top:
+
+```python
+from hotmemory import Fact, Memory, MemoryStore
+
+
+def embed(texts):
+    return [[text.count("disk") + 0.1, text.count("cpu") + 0.1] for text in texts]
+
+
+def last_line(text, observed_at, current):
+    return [Fact(kind="fact", subject="disk", content=text.splitlines()[-1])]
+
+
+memory = Memory(MemoryStore(embedder=embed))
+text = "# Disk incident\n\n## Root cause\n\nThe disk fills at night.\n"
+episodes, facts = memory.load("disk-incident", text, ("team", "alerts"), last_line)
+print(episodes)  # ['team/alerts/disk-incident-0001@1']
+episode = memory.store.get(("team", "alerts"), "disk-incident-0001")
+print(episode.content.splitlines()[0])  # # Disk incident
 ```
 
 `skills/hotmemory/SKILL.md` gives an agent the same operations as commands.

@@ -36,7 +36,7 @@ from hotmemory._rules import (
     with_new_sources,
 )
 from hotmemory._writer import BufferedWriter, check_count
-from hotmemory.filter import Filter, TimeRange
+from hotmemory.filter import Filter, TimeRange, kinds_of
 from hotmemory.memory import utc_now
 from hotmemory.record import (
     SCHEMA_VERSION,
@@ -679,9 +679,11 @@ def _text(value: str) -> str:
 
 def _tables(filter: Filter | None) -> tuple[str, ...]:
     """Return the record tables that can hold a record that `filter` keeps."""
-    if filter is None or filter.kind is None:
+    kinds = kinds_of(filter)
+    if kinds is None:
         return RECORD_TABLES
-    return (_table(filter.kind),)
+    needed = {_table(kind) for kind in kinds}
+    return tuple(table for table in RECORD_TABLES if table in needed)
 
 
 def _prefix_condition(prefix: tuple[str, ...]) -> str:
@@ -700,7 +702,10 @@ def _filter_conditions(filter: Filter | None) -> builtins.list[str]:
     if filter is None:
         return []
     conditions = []
-    for name in ("kind", "subject", "actor"):
+    kinds = kinds_of(filter)
+    if kinds is not None:
+        conditions.append(f"kind IN ({', '.join(_text(kind) for kind in kinds)})")
+    for name in ("subject", "actor"):
         value = getattr(filter, name)
         if value is not None:
             conditions.append(f"{name} = {_text(value)}")

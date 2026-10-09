@@ -27,7 +27,8 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 - [CONTRIBUTING.md](CONTRIBUTING.md): the checks inside `make verify` and the test rules.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
 - `src/hotmemory/`: the library. `tests/test_conformance.py` is the conformance suite.
-- `skills/hotmemory/`: the skill file for agents and one script for each memory operation.
+- `skills/hotmemory/`: the skill file for agents, one script for each memory operation, and
+  an example document for the `load` script.
   `tests/test_skill.py` runs every command in the skill file.
 
 ## Rules

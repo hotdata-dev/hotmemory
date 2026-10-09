@@ -94,7 +94,7 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `cues` | tuple of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
 | `payload` | JSON object | Structured data that the consumer defines. The store never reads it. |
 | `tags` | tuple of strings | Free labels. You can filter on them. |
-| `sources` | tuple of strings | References to the origin of the record: a thread id, a document path, a run id, an episode key. The length of the list is the corroboration count. |
+| `sources` | tuple of strings | References to the origin of the record: a thread id, a document path, a run id, an episode id. The length of the list is the corroboration count. |
 | `actor` | string | Who wrote this revision: a user id, an agent name, or an extractor name. |
 | `created_at` | timestamp | When the store wrote this revision. System clock. |
 | `observed_at` | timestamp or null | The time of the source. A post-mortem that you load a year later keeps the incident date here. |
@@ -141,6 +141,8 @@ The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accept
 error. In Python, the filter is a frozen dataclass with one optional field for each key, so
 an unknown key cannot be written, and a value of the wrong type raises an error.
 
+- A `kind` filter names one kind or a tuple of kinds. It matches a record of any kind
+  that it names. An empty tuple raises an error.
 - A `tags` filter matches a record that holds every tag that the filter names.
 - A range includes its start and excludes its end. A side that is not given is open.
 - A null timestamp on a record never matches a range. This is the SQL rule for null.
@@ -179,10 +181,11 @@ shapes and different write patterns.
 
 The `memory` table holds facts, profiles, and procedures. Its rows are small, revisioned,
 and searched often, and `profile` renders them. The `episode` table holds raw material: a
-thread, a document, or a post-mortem, cut into chunks of a fixed size. A consumer appends
-to it and does not revise it, but the store does not enforce this. If a fact is not
-enough, a consumer searches it. The `sources` of a fact name the episode keys that it came
-from. Thus a consumer can go from a fact to its evidence in one join. Tabular data is
+thread, a document, or a post-mortem, cut into chunks. `load` cuts a Markdown document at
+its headings into chunks of at most a set size. It writes a new revision of an episode
+only when the text of its chunk changed. If a fact is not enough, a consumer searches the
+episodes with a `kind` filter. The `sources` of a fact name the ids of the episodes that
+it came from. Thus a consumer can go from a fact to its evidence in one join. Tabular data is
 never copied into either table. It stays in the tables of the consumer, and a fact points
 at it.
 
@@ -253,7 +256,8 @@ If the engine refuses a load with `409 RESOURCE_LOCKED`, the driver tries it aga
 the last attempt, the driver raises the error.
 
 A `search` with query text runs one SQL query over both record tables and `cue_v1`. If
-the filter sets `kind`, the query reads only the record table of that kind. With
+the filter sets `kind`, the query reads only the record tables of the kinds that it names.
+A filter without `episode` reads only `memory_v1`. With
 `ranking="fused"`, the default, the query has three parts.
 
 1. Three rankings: BM25 over `content` in each record table, the cosine distance of
@@ -290,12 +294,13 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 | Operation | Arguments | Behavior |
 |---|---|---|
 | `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer, so if one fact is refused, none is written. |
-| `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions in the allowed scopes for the top k records. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
+| `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions of kind `fact`, `profile`, and `procedure` in the allowed scopes for the top k records. It never returns an episode. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
 | `candidates` | fact, scopes, k | Returns the top k hits of `search` for the content of the fact, sorted by distance, closest first. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
 | `supersede` | scope, key of the record to close, new fact, optional valid_from, actor | Closes the named record and writes the new fact as the next revision under its key, in one `put` with `close_previous`. The new `valid_from` is the argument, else that of the fact, else now. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the key has no current revision, or the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
 | `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
-| `profile` | subject, scopes, budget in characters | Returns the current records for the subject, grouped by `kind`, as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
+| `profile` | subject, scopes, budget in characters | Returns the current records of kind `fact`, `profile`, and `procedure` for the subject, grouped by `kind`, as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
 | `capture` | text, scope, extractor, actor, observed_at | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. The extractor is a plain callable. The library ships no model and names no model. |
+| `load` | document, text, scope, extractor, actor, observed_at, chunk_chars | Cuts a Markdown document into chunks, and stores chunk n as a record of kind `episode` under the key `<document>-<n>`, with n from 1 in four digits. For each chunk, it calls the extractor as `capture` does, on the chunk with its heading prefix. Each fact gets the id of the episode of its chunk added to its `sources`. The facts of a chunk are written before its episode. A chunk whose episode is current with the same content is skipped, and the extractor is not called for it, so a second load of the same text writes nothing new. It returns the ids of the episodes and the ids of the facts that the extractor returned. The document must be a valid key. |
 
 The key of a fact has two parts joined by `-`. The first part is the subject, with each
 character outside `[A-Za-z0-9_-]` changed to `-`, cut to its first 64 characters. An empty
@@ -315,16 +320,49 @@ lines only, joined by newlines. It stops before the first line that would make i
 than the budget. The list holds the records of the block.
 
 The block of `profile` has a group for each kind that has records, in the order fact,
-profile, procedure, episode. A line `<kind>:` starts each group, and its records follow
+profile, procedure. A line `<kind>:` starts each group, and its records follow
 in the line format of `recall`, newest first. Then a line `namespaces:` starts the counts,
 with one line `- <namespace>: <count>` for each namespace under the scopes. The count is
-the number of current records in that namespace exactly, read with `list` up to 1000
+the number of current records of kind `fact`, `profile`, and `procedure` in that namespace
+exactly, read with `list` up to 1000
 records. If `list` reached that limit, the count ends with `+`. `list` matches the
 namespace as a prefix, so the records of its sub-namespaces share the window of 1000. A
 count with `+` is a lower bound, and it can be far below the true count when a
 sub-namespace is large. The counts take the budget
 first, and the record lines fill what is left, by whole lines. A group line with no record
 after it is dropped.
+
+`load` cuts a document in four steps.
+
+1. It cuts the document into sections at each Markdown heading, a line that starts with
+   one to six `#` and a space. A line inside a fenced code block, which starts and ends
+   with three or more backticks or tildes, is never a heading, so a shell comment in a
+   fence does not start a section.
+2. It keeps each section that fits in `chunk_chars` characters whole. It cuts a longer
+   section into blocks at blank lines outside fences, and keeps the heading with the
+   block after it when both fit. It cuts a block that does not fit at line ends. A pipe
+   table that is cut repeats its header row and delimiter row at the top of each later
+   piece. A line longer than `chunk_chars` is cut at that size.
+3. It packs the pieces in order into chunks of at most `chunk_chars` characters, joined by
+   a blank line.
+4. It starts each chunk with a prefix line and a blank line. The prefix is the first
+   heading of the document, then the heading path of the first line of the chunk, joined
+   by ` > `, such as `# Title > ## Root cause`. A heading equal to the one before it is
+   left out. A document with no heading gives chunks with no prefix. `chunk_chars` does
+   not count the prefix.
+
+A fact with no `observed_at` gets the one passed to `load`. A fact with no `valid_from`
+then takes its `observed_at`, as every `put` does, so `recall` with an `as_of` before that
+time leaves the fact out.
+
+A document of blank lines gives no chunk, and `load` writes nothing. A chunk for which the
+extractor returns no fact still gets its episode. If the text of a chunk changes, a
+second load writes the next revision of its episode and calls the extractor again. If a
+document gets fewer chunks, the episodes of its old last chunks stay current.
+
+An episode is the evidence that a fact names in `sources`, so `recall` and `profile` leave
+it out. A consumer reads an episode with `get`, or joins the two record tables in SQL. A
+namespace that holds only episodes shows a count of 0 in the block of `profile`.
 
 A record is valid at time T when `valid_from` is null or at most T, and `valid_until` is
 null or after T. A null `valid_from` means the start of time.
@@ -354,6 +392,6 @@ These three rules apply to every operation:
   and calls the Hotdata API. A service becomes necessary only for a client in another
   language, for extraction that must run centrally, or for scope enforcement above the API
   key.
-- Extraction on the server. `capture` takes a callable and does nothing more.
+- Extraction on the server. `capture` and `load` take a callable and do nothing more.
 - A third driver. The local RuntimeDB stack covers offline development.
 - Access control beyond scope filtering.
