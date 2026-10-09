@@ -1,6 +1,6 @@
 # Plan: phase 4, the first consumer
 
-Status: draft, 2026-10-09. This file holds the current phase only. The next phase replaces
+Status: agreed, 2026-10-09. This file holds the current phase only. The next phase replaces
 it. The phases themselves are in `roadmap.md`. Section numbers below refer to `brief.md`.
 Phase 3 closed with PR #9. `Memory`, the skill file, and the filter-first vector rankings
 are on `main`.
@@ -30,8 +30,8 @@ database. hotmemory stays unpublished.
 
 ## Decisions
 
-The owner agreed to these on 2026-10-09, after the consumer's agent answered the questions
-of the first draft. Items marked proposed still need the owner's agreement before task 2.
+The owner agreed to all of these on 2026-10-09, after the consumer's agent answered the
+questions of the first draft.
 
 - The replay case (agreed). The case is an incident of a class that two earlier
   post-mortems describe: a node group that cannot grow, so a RuntimeDB pod stays Pending.
@@ -53,30 +53,30 @@ of the first draft. Items marked proposed still need the owner's agreement befor
   outside fences, then at that size. Each stored chunk starts with the first heading of
   the document and the heading path of the chunk, so that a chunk cut from a late section
   still says which document and section it belongs to.
-- The loader (proposed). `Memory` gains `load(document, text, scope, extractor, actor,
+- The loader (agreed). `Memory` gains `load(document, text, scope, extractor, actor,
   observed_at)`. It writes each chunk as a record of kind `episode` with the key
   `<document>-<n>`, where `n` counts from 1 with four digits. Then it calls the extractor
   on each chunk, as `capture` does. Each fact that comes back gets the id of its chunk in
   `sources`. It returns the ids of the episodes and of the facts. A second load of the
   same text writes nothing new, because the episode keys and the fact keys repeat.
-- Episodes stay out of recall (proposed, and the consumer agrees). `recall` and `profile`
+- Episodes stay out of recall (agreed). `recall` and `profile`
   read facts, profiles, and procedures only. A fact names its episodes in `sources`, so a
   consumer reaches the evidence with `get`, or in one SQL join. For this, `Filter.kind`
   takes one kind or a tuple of kinds. In `HotdataStore`, a filter without `episode` reads
   only `memory_v1`. The filter key stays `kind`, and the wider type gets a changelog
   entry.
-- The dependency (proposed). The consumer pins hotmemory to the GitHub archive URL of the
+- The dependency (agreed). The consumer pins hotmemory to the GitHub archive URL of the
   merge commit, because its image builder has no `git`. Publishing to PyPI waits for a
   working version 1, as before.
-- The setting (proposed, and the consumer agrees). The recall at investigation start sits
+- The setting (agreed). The recall at investigation start sits
   behind a setting of the consumer that defaults to off. A merge to the consumer's main
   branch builds an image but does not deploy it, so the pull request can merge without a
   change in behavior.
-- One writer (proposed, and the consumer agrees). In this phase, only the loader writes to
+- One writer (agreed). In this phase, only the loader writes to
   the memory database, and it runs as a command, never inside an investigation. An
   investigation only reads. A capture after an investigation is later work, and needs the
   one-writer rule settled first.
-- The consumer's shape (proposed). One namespace for incidents, with the affected
+- The consumer's shape (agreed). One namespace for incidents, with the affected
   component as the subject. The recall searches by the alert title and the first summary
   of the investigation, and runs beside the evidence load, so a cold engine start stays
   off the critical path. The block has a budget of 4,000 characters. The extractor writes
