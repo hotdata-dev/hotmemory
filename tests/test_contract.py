@@ -351,6 +351,21 @@ def test_capture_with_no_facts_writes_nothing(memory: Memory) -> None:
     assert memory.store.list(SCOPE) == []
 
 
+def test_recall_and_profile_leave_episodes_out(memory: Memory) -> None:
+    memory.store.put(
+        SCOPE, "thread-0001", kind="episode", subject="disk", content="The disk fills at night."
+    )
+    memory.store.put((*SCOPE, "chat"), "thread-0002", kind="episode", content="The disk is full.")
+    [fact] = memory.remember([Fact(kind="fact", subject="disk", content="The disk fills.")], SCOPE)
+
+    records, block = memory.recall("The disk fills at night.", [SCOPE])
+    assert [record.id for record in records] == [fact]
+    assert "night" not in block
+    records, block = memory.profile("disk", [SCOPE])
+    assert [record.id for record in records] == [fact]
+    assert block.split("\n")[-3:] == ["namespaces:", "- team/alerts: 1", "- team/alerts/chat: 0"]
+
+
 PINNED_RECALL = (
     "- The disk fills at night. [sources: chat-1, wiki] "
     "[valid: 2026-10-01T00:00:00Z to 2026-10-04T00:00:00Z]\n"
@@ -403,6 +418,9 @@ def remember_pinned(memory: Memory, clock: FakeClock) -> None:
         clock.advance()
     memory.remember(
         [Fact(kind="fact", subject="net", content="The link drops.")], (*SCOPE, "night")
+    )
+    memory.store.put(
+        SCOPE, "thread-0001", kind="episode", subject="disk", content="The disk fills at night."
     )
 
 

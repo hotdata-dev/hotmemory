@@ -50,3 +50,6 @@ each one, and its failure message points to this file.
 - `Filter.kind` takes one kind or a tuple of kinds, and matches a record of any kind named.
   The filter key stays `kind`. In `HotdataStore`, a filter without `episode` reads only
   `memory_v1`.
+- `Memory.recall` and `Memory.profile` read the records of kind `fact`, `profile`, and
+  `procedure` only. They never return an episode, and the counts of `profile` leave
+  episodes out.

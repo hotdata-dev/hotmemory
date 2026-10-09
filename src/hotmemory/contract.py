@@ -31,6 +31,7 @@ FORGET_SCAN = 10_000
 PROFILE_LIMIT = 100
 COUNT_LIMIT = 1000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
+RECALLED_KINDS: tuple[Kind, ...] = ("fact", "profile", "procedure")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -163,13 +164,14 @@ class Memory:
     ) -> tuple[list[Record], str]:
         """Return the top current records for `query` under `scopes`, and their block.
 
-        The search returns up to `k` current records. With `as_of`, only the ones valid at
-        `as_of` remain. The block holds one line for each record, in order, and stops
-        before the first line that would pass `budget` characters. The list holds the
-        records of the block.
+        The search returns up to `k` current records of the kinds in RECALLED_KINDS, so
+        it never returns an episode. With `as_of`, only the ones valid at `as_of` remain.
+        The block holds one line for each record, in order, and stops before the first
+        line that would pass `budget` characters. The list holds the records of the block.
         """
         check_count("budget", budget)
-        records = [hit.record for hit in self._store.search(query, scopes, k=k)]
+        recalled = Filter(kind=RECALLED_KINDS)
+        records = [hit.record for hit in self._store.search(query, scopes, recalled, k=k)]
         if as_of is not None:
             records = [record for record in records if is_valid_at(record, as_of)]
         lines = [render_line(record) for record in records]
@@ -266,12 +268,13 @@ class Memory:
     ) -> tuple[list[Record], str]:
         """Return the current records of `subject` under `scopes`, and their block.
 
-        The block groups the records by kind, in the order of `Kind`, newest first in each
+        It reads only the kinds in RECALLED_KINDS, so it never returns an episode. The
+        block groups the records by kind, in the order of `Kind`, newest first in each
         group. A line `<kind>:` starts each group. The block ends with `namespaces:` and
         one line `- <namespace>: <count>` for each namespace under `scopes`. The count is
-        the number of current records in that namespace, read with `list` up to
-        COUNT_LIMIT, and shows a `+` when `list` reached the limit. `list` matches the
-        namespace as a prefix, so the records of its sub-namespaces share that window,
+        the number of current records of those kinds in that namespace, read with `list`
+        up to COUNT_LIMIT, and shows a `+` when `list` reached the limit. `list` matches
+        the namespace as a prefix, so the records of its sub-namespaces share that window,
         and a `+` count is a lower bound. The namespace lines
         take the budget first, and the record lines fill what is left, by whole lines.
         The list holds the records of the block, in block order.
@@ -280,7 +283,8 @@ class Memory:
         allowed = _scopes(scopes)
         found: dict[str, Record] = {}
         for prefix in allowed:
-            for record in self._store.list(prefix, Filter(subject=subject), limit=PROFILE_LIMIT):
+            where = Filter(subject=subject, kind=RECALLED_KINDS)
+            for record in self._store.list(prefix, where, limit=PROFILE_LIMIT):
                 found[record.id] = record
         body: list[tuple[str, Record | None]] = []
         for kind in KINDS:
@@ -306,7 +310,7 @@ class Memory:
         )
         lines = []
         for namespace in namespaces:
-            records = self._store.list(namespace, limit=COUNT_LIMIT)
+            records = self._store.list(namespace, Filter(kind=RECALLED_KINDS), limit=COUNT_LIMIT)
             count = sum(1 for record in records if record.namespace == namespace)
             more = "+" if len(records) == COUNT_LIMIT else ""
             lines.append(f"- {'/'.join(namespace)}: {count}{more}")
