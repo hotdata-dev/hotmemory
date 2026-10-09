@@ -141,6 +141,8 @@ The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accept
 error. In Python, the filter is a frozen dataclass with one optional field for each key, so
 an unknown key cannot be written, and a value of the wrong type raises an error.
 
+- A `kind` filter names one kind or a tuple of kinds. It matches a record of any kind
+  that it names. An empty tuple raises an error.
 - A `tags` filter matches a record that holds every tag that the filter names.
 - A range includes its start and excludes its end. A side that is not given is open.
 - A null timestamp on a record never matches a range. This is the SQL rule for null.
@@ -253,7 +255,8 @@ If the engine refuses a load with `409 RESOURCE_LOCKED`, the driver tries it aga
 the last attempt, the driver raises the error.
 
 A `search` with query text runs one SQL query over both record tables and `cue_v1`. If
-the filter sets `kind`, the query reads only the record table of that kind. With
+the filter sets `kind`, the query reads only the record tables of the kinds that it names.
+A filter without `episode` reads only `memory_v1`. With
 `ranking="fused"`, the default, the query has three parts.
 
 1. Three rankings: BM25 over `content` in each record table, the cosine distance of

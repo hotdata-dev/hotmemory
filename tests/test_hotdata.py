@@ -219,6 +219,26 @@ def test_episode_goes_to_its_own_table(store: HotdataStore) -> None:
         store.put(NS, "thread", kind="fact", content="Not an episode.")
 
 
+def test_filter_without_episode_reads_only_the_memory_table(
+    store: HotdataStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.put(NS, "thread", kind="episode", content="The disk filled on Monday.")
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.")
+    queries: list[str] = []
+    original = store._sql
+
+    def spy(sql: str) -> Any:
+        queries.append(sql)
+        return original(sql)
+
+    monkeypatch.setattr(store, "_sql", spy)
+    facts = Filter(kind=("fact", "profile", "procedure"))
+    assert [record.key for record in store.list(NS, facts)] == ["disk"]
+    assert [hit.record.key for hit in store.search("disk", [NS], facts)] == ["disk"]
+    assert queries
+    assert all(EPISODE_TABLE not in sql and MEMORY_TABLE in sql for sql in queries)
+
+
 def test_writer_sends_one_load_per_table(store: HotdataStore) -> None:
     loads: list[str] = []
     original = store._load

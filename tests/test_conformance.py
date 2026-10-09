@@ -216,6 +216,7 @@ def test_delete_removes_every_revision(store: Store, clock: FakeClock) -> None:
 
 FILTER_CASES: list[tuple[str, dict[str, Any], Filter]] = [
     ("kind", {"kind": "procedure"}, Filter(kind="procedure")),
+    ("kinds", {"kind": "procedure"}, Filter(kind=("procedure", "profile"))),
     ("subject", {"subject": "db-1"}, Filter(subject="db-1")),
     ("actor", {"actor": "extractor"}, Filter(actor="extractor")),
     ("tags", {"tags": ("disk", "night")}, Filter(tags=("night", "disk"))),
@@ -235,6 +236,22 @@ def test_filter_matches_by_equality(
 
     assert [record.id for record in store.list(NS, where)] == [wanted.id]
     assert [hit.record.id for hit in store.search("one", [NS], where)] == [wanted.id]
+
+
+def test_filter_kind_tuple_matches_any_kind_named(store: Store) -> None:
+    store.put(NS, "disk", kind="fact", content="The disk fills at night.")
+    store.put(NS, "rotate", kind="procedure", content="Rotate the disk logs.")
+    store.put(NS, "thread", kind="episode", content="The disk filled on Monday.")
+
+    def keys(where: Filter) -> list[str]:
+        listed = sorted(record.key for record in store.list(NS, where))
+        found = sorted(hit.record.key for hit in store.search("disk", [NS], where))
+        assert listed == found
+        return listed
+
+    assert keys(Filter(kind=("fact", "procedure", "profile"))) == ["disk", "rotate"]
+    assert keys(Filter(kind=("episode", "fact"))) == ["disk", "thread"]
+    assert keys(Filter(kind=("episode",))) == ["thread"]
 
 
 def test_filter_matches_a_time_range(store: Store, clock: FakeClock) -> None:

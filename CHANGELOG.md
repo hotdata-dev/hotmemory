@@ -47,3 +47,6 @@ each one, and its failure message points to this file.
   `HotdataStore`.
 - The vector rankings of a fused `HotdataStore.search` filter first and rank by a scan, so
   a search in a narrow scope returns the top k rows of that scope.
+- `Filter.kind` takes one kind or a tuple of kinds, and matches a record of any kind named.
+  The filter key stays `kind`. In `HotdataStore`, a filter without `episode` reads only
+  `memory_v1`.
