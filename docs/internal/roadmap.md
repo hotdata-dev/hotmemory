@@ -6,7 +6,8 @@ phase opens or closes, and not in between. The detail of the open phase lives in
 
 Rules. One phase is open at a time. A phase closes when every issue it opened is closed, or
 is listed under Deferred below with a reason. The next phase opens only then. Each phase is
-one pull request and ends with the verification layer that proves it.
+one pull request in each repository that it touches, and ends with the verification layer
+that proves it.
 
 ## Phases
 
@@ -15,8 +16,8 @@ one pull request and ends with the verification layer that proves it.
 | 0. Documents and measurements | The public contracts and guarantees files, CONTRIBUTING, the Makefile with the first documentation check, the local container setup, and measurements M1 to M6. | closed 2026-10-05, PR #2 |
 | 1. The storage contract, offline | The record, the `Store` protocol, the in-memory driver, the conformance suite, the frozen surfaces, the ledger test, and CI. | closed 2026-10-06, PR #5 |
 | 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | closed 2026-10-08, PR #7 |
-| 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | open |
-| 4. The first consumer | A post-mortem loader and a recall at investigation start, in the consumer's own repository, proven by a replay case. | planned |
+| 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | closed 2026-10-08, PR #9 |
+| 4. The first consumer | A document loader in hotmemory. A post-mortem loader and a recall at investigation start in the consumer's own repository, proven by a replay case. Two pull requests, one in each repository. | open |
 | 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | planned |
 | 6. Adapters | A LangGraph `BaseStore` adapter in `hotdata-langchain`, then an MCP server. | planned, out of scope for version 1 |
 
@@ -48,3 +49,11 @@ A closed phase keeps its row above with the date it closed and the pull request.
   loaded after the build, so the vector rankings filter after their fetch. The defect is
   reported to the engine team, and it reproduces in production. One process writes to a
   database until the engine has a conditional write.
+- Phase 3 closed on 2026-10-08 with PR #9, which closed issue #8. It changed the plan for
+  later phases in four ways. The vector rankings of `HotdataStore` filter first and rank
+  by a scan, so the vector indexes serve no query until the engine fixes the filtered
+  index search. At 100,000 rows of 64 dimensions, a search in a 1 percent scope took 97 ms
+  locally. `put` gained `close_previous`, and a put of the same content with a new source
+  writes a merged revision. `recall` reads current revisions only, so a search over
+  history is still open. A count in the block of `profile` is a lower bound when a
+  sub-namespace fills the window of `list`.
