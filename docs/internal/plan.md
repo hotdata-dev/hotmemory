@@ -83,7 +83,8 @@ stay with this plan.
   GPT-4o. The benchmark leaves the reader to the caller, and its generation script runs
   readers from GPT-4o to small open models. So GPT-4o as the reader is our choice, made so
   that the numbers compare with the published ones. The extractor is Claude Haiku 4.5.
-  The runner reads `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from the environment.
+  The runner reads `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from the environment. (Changed
+  during the work: see the extractor under "Decisions taken during the work".)
 - The time rules (agreed). The runner sorts the sessions of a question by date before it
   loads them, because 211 haystacks are out of order. The session date becomes
   `observed_at` in UTC. `recall` takes `as_of` at 23:59:59 on the date of the question,
@@ -146,6 +147,11 @@ change any of them in review.
   it sorts the relevance of the whole haystack. A check outside the repository ran the
   reference `evaluate_retrieval` and the port on 2,000 random rankings, and the largest
   difference was 2.2e-16 (observed).
+- The extractor is `gpt-4o-mini-2024-07-18` and not Claude Haiku 4.5. The owner chose
+  this on 2026-10-10, because no Anthropic key is available. LongMemEval has no extractor,
+  so the benchmark sets nothing here. The reader and the judge stay `gpt-4o-2024-08-06`.
+  The chat calls read their key from `OPENAI_MODEL_KEY`, and the embedder keeps
+  `OPENAI_API_KEY`. The `bench` group needs no Anthropic package.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
