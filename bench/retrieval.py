@@ -196,6 +196,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     rankings = RANKINGS if args.ranking == "both" else (args.ranking,)
     questions = [question for question in load(DATA_DIR / DATA_FILE) if question.is_scored]
     questions = questions[: args.limit]
+    commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     embedder = embed.openai_embedder()
@@ -233,7 +234,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             "ks": list(KS),
             "questions": len(questions),
             "limit": args.limit,
-            "hotmemory_commit": _commit(),
+            "hotmemory_commit": commit,
             "run_id": run_id,
             "started_at": started.isoformat(),
             "duration_s": round(time.perf_counter() - clock_start, 1),
