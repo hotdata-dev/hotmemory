@@ -141,6 +141,11 @@ change any of them in review.
   model and the cut text, and the cache keeps 32-bit vectors in a SQLite file.
 - An episode has the source `session:<id>`, and the namespace of a question is
   `("bench", "lme_s", <run>, <question id>)`.
+- The metrics take a ranked list of session ids and the set of evidence ids. The ideal
+  ranking of `ndcg_any@k` puts every evidence id first, as the reference code does when
+  it sorts the relevance of the whole haystack. A check outside the repository ran the
+  reference `evaluate_retrieval` and the port on 2,000 random rankings, and the largest
+  difference was 2.2e-16 (observed).
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
