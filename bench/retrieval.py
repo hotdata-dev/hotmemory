@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
@@ -32,6 +33,8 @@ from hotmemory import Embedder, Filter, Hit, MemoryStore, Store
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 K = 50
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+RETRIES = 3
+DROPPED = "Remote end closed connection without response"
 Mode = Literal["isolated", "shared"]
 RANKINGS = ("fused", "vector")
 
@@ -69,7 +72,7 @@ def run(
 
     def write(question: Question) -> None:
         started = time.perf_counter()
-        write_episodes(first, scope(run_id, question), question)
+        retried(lambda: write_episodes(first, scope(run_id, question), question), target)
         write_s.append(time.perf_counter() - started)
 
     def query(question: Question) -> None:
@@ -94,7 +97,7 @@ def run(
         if mode == "isolated":
             query(question)
             started = time.perf_counter()
-            target.empty(first, scope(run_id, question))
+            retried(partial(target.empty, first, scope(run_id, question)), target)
             delete_s.append(time.perf_counter() - started)
         _progress("written" if mode == "shared" else "done", count, len(questions))
     if mode == "shared":
@@ -104,9 +107,29 @@ def run(
     timings = {
         "write_s": _spread(write_s),
         "delete_s": _spread(delete_s),
-        "search_ms": {name: _spread(values) for name, values in search_ms.items()},
+        "first_search_ms": {
+            name: round(values[0], 3) for name, values in search_ms.items() if values
+        },
+        "search_ms_after_first": {name: _spread(values[1:]) for name, values in search_ms.items()},
     }
     return rows, timings
+
+
+def retried(call: Callable[[], object], target: Target, attempts: int = RETRIES) -> None:
+    """Run `call`, and run it again when the connection closed without a response.
+
+    The Hotdata SDK can drop a pooled connection on a long cloud load. A write is safe to
+    run again, because a put with unchanged content writes nothing. `target.engine`
+    counts the retries.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            call()
+            return
+        except Exception as error:
+            if attempt == attempts or DROPPED not in str(error):
+                raise
+            target.engine["retries"] = target.engine.get("retries", 0) + 1
 
 
 def summarize(rows: Sequence[dict[str, Any]], ranking: str) -> dict[str, Any]:
@@ -139,10 +162,13 @@ def hotdata_target(
 
     from hotmemory.hotdata import EPISODE_TABLE, HotdataStore
 
+    started = time.perf_counter()
     if location == "local":
         client = HotdataClient("local", "local", host=url)
     else:
         client = HotdataClient.from_env()
+    client.list_managed_databases()
+    first_call_s = round(time.perf_counter() - started, 3)
     provisioned = HotdataStore.provision(
         f"hotmemory-bench-{run_id}",
         embedder=embedder,
@@ -171,6 +197,7 @@ def hotdata_target(
             store._load(EPISODE_TABLE, pa.table({"id": ids}), "delete")
 
     engine = {
+        "first_call_s": first_call_s,
         "framework": importlib.metadata.version("hotdata-framework"),
         "image": _local_image() if location == "local" else None,
     }

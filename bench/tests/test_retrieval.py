@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from bench.data import load
-from bench.retrieval import memory_target, run, summarize
+from bench.retrieval import memory_target, retried, run, summarize
 from tests.conftest import fake_embedder
 
 FIXTURE = Path(__file__).with_name("fixture.json")
@@ -31,3 +33,27 @@ def test_run_shared_keeps_every_question() -> None:
     assert timings["delete_s"] == {"count": 0}
     for row, question in zip(rows, questions, strict=True):
         assert {s for s, _ in row["ranked"]["vector"]} == {s.id for s in question.episodes()}
+
+
+def test_retried_runs_again_on_a_dropped_connection() -> None:
+    target = memory_target(fake_embedder)
+    calls: list[int] = []
+
+    def flaky() -> None:
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("Remote end closed connection without response")
+
+    retried(flaky, target)
+    assert len(calls) == 3
+    assert target.engine["retries"] == 2
+
+
+def test_retried_raises_other_errors() -> None:
+    target = memory_target(fake_embedder)
+
+    def broken() -> None:
+        raise RuntimeError("Bad Request")
+
+    with pytest.raises(RuntimeError, match="Bad Request"):
+        retried(broken, target)
