@@ -1,6 +1,6 @@
 # Plan: phase 5, a public benchmark
 
-Status: proposed, 2026-10-10. The owner has not agreed to the decisions yet. This file
+Status: agreed, 2026-10-10. This file
 holds the current phase only. The next phase replaces it. The phases themselves are in
 `roadmap.md`. Phase 4 closed with PR #11 and the consumer's pull request. `Memory.load`,
 the tuple `Filter.kind`, and the episode rule are on `main`.
@@ -24,17 +24,18 @@ memory and not only the feature of one consumer.
 
 ## Decisions
 
-All of these are proposed. The owner agrees to them, or changes them, before task 2.
+The owner agreed to all of these on 2026-10-10, and asked to keep the phase simple and
+stay with this plan.
 
-- The benchmark (proposed). LongMemEval-S, from the cleaned data file of 2025-09, which is
+- The benchmark (agreed). LongMemEval-S, from the cleaned data file of 2025-09, which is
   under MIT. LoCoMo, MemoryBench, and DolphinBench wait, for the reasons in the research
   notes of 2026-10-08. The roadmap lists them under Deferred.
-- The runner (proposed). The runner lives in `bench/` at the root of the repository,
+- The runner (agreed). The runner lives in `bench/` at the root of the repository,
   outside the package. Its dependencies are in a `bench` dependency group, so the library
   gains no runtime dependency. The data downloads to a folder that git ignores. Ruff and
   mypy check `bench/`. Its offline tests use a small fixture in the shape of the data, and
   `make verify` runs them, so it stays under five seconds. No benchmark run is in CI.
-- The retrieval score (proposed). One episode for each session, with the user turns of
+- The retrieval score (agreed). One episode for each session, with the user turns of
   that session as its content, as in the session-level retrieval of the reference code.
   The episode key is the session id, with `-` for each character outside
   `[A-Za-z0-9_-]`. The episode keeps the session id in `sources`. A search with
@@ -44,30 +45,30 @@ All of these are proposed. The owner agrees to them, or changes them, before tas
   scores: not the abstention questions, and not the questions with no evidence in a user
   turn. The research notes count 419 such questions from the data. Task 3 counts them
   again with the reference rules.
-- One question at a time (proposed). Each question gets its own namespace. The runner
+- One question at a time (agreed). Each question gets its own namespace. The runner
   loads its sessions, searches, and then deletes its rows before the next question. Thus
   the tables hold one question at a time, as the reference code builds one index for each
   question. This matters for the fused ranking. BM25 takes its top rows from the whole
   table, and the scope filter applies after that. With 500 questions in one table, BM25
   finds almost no row in the scope of one question. A second run keeps every question in
   one table, and the report shows the difference as a known limit of the fused ranking.
-- The rankings and the drivers (proposed). The main numbers come from `HotdataStore` on
+- The rankings and the drivers (agreed). The main numbers come from `HotdataStore` on
   the local stack, for both `ranking="fused"` and `ranking="vector"`. `MemoryStore` runs
   the first 20 questions with the same embedder. Its vector ranking must give the same
   sessions in the same order as the vector ranking of `HotdataStore`. The oracle test
   already asks this.
-- The embedder (proposed). `OpenAIEmbedder` with `text-embedding-3-small`, through a cache
+- The embedder (agreed). `OpenAIEmbedder` with `text-embedding-3-small`, through a cache
   on disk that git ignores. The cache key is the model name and the text, so a second run
   calls no model, and the runs can be repeated.
-- Where it runs (proposed). The ingest and the scores run on the local stack. A separate
+- Where it runs (agreed). The ingest and the scores run on the local stack. A separate
   run of 20 questions on a cloud database measures the latency of `search` at p50, p95,
   and p99. It reports the first call to a cold engine as its own number. The report names
   the setup of every number, local or cloud.
-- The end-to-end sample (proposed). 9 questions of each of the 6 question types, 54 in all,
+- The end-to-end sample (agreed). 9 questions of each of the 6 question types, 54 in all,
   chosen with a fixed seed. The list of question ids is committed, so every arm and every
   later run uses the same questions. A full run of 500 questions waits for the owner's yes,
   because its cost is about ten times higher.
-- The end-to-end arms (proposed). Three arms run on the sample, with the same reader and
+- The end-to-end arms (agreed). Three arms run on the sample, with the same reader and
   judge.
   1. Full context: the reader gets every session of the question. This is the baseline
      that the paper reports, about 60 percent with GPT-4o.
@@ -75,18 +76,24 @@ All of these are proposed. The owner agrees to them, or changes them, before tas
      needs no extractor.
   3. Memory: an extractor runs `capture` on each session, in date order, and the reader
      gets the block of `recall`.
-- The models (proposed). The reader is GPT-4o and the judge is `gpt-4o-2024-08-06` at
+- The models (agreed). The reader is GPT-4o and the judge is `gpt-4o-2024-08-06` at
   temperature 0, with the judge prompts of the reference code for each question type. Then
-  the numbers compare with the published GPT-4o numbers. The extractor is Claude Haiku 4.5.
+  the numbers compare with the published GPT-4o numbers. The benchmark sets the judge: its
+  scoring script takes GPT-4o, GPT-4o mini, or a Llama model, and its README runs it with
+  GPT-4o. The benchmark leaves the reader to the caller, and its generation script runs
+  readers from GPT-4o to small open models. So GPT-4o as the reader is our choice, made so
+  that the numbers compare with the published ones. The extractor is Claude Haiku 4.5.
   The runner reads `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from the environment.
-- The time rules (proposed). The runner sorts the sessions of a question by date before it
+- The time rules (agreed). The runner sorts the sessions of a question by date before it
   loads them, because 211 haystacks are out of order. The session date becomes
   `observed_at` in UTC. `recall` takes `as_of` at 23:59:59 on the date of the question,
   because 76 questions have evidence later on the same day. These counts come from the
   research notes and are not observed yet. Task 2 counts them again.
-- The cost limit (proposed). The runner prints an estimate before a paid run, and stops if
+- The cost limit (agreed). The runner prints an estimate before a paid run, and stops if
   the estimate is over 50 dollars. The sample with the three arms is about 25 to 35
-  dollars by the research estimates. That estimate is not observed.
+  dollars by the research estimates. That estimate is not observed. By the same estimate,
+  the full-context arm is about half of it, because each of its 54 reads holds about
+  100,000 tokens.
 
 ## Tasks
 
