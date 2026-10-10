@@ -152,6 +152,15 @@ change any of them in review.
   so the benchmark sets nothing here. The reader and the judge stay `gpt-4o-2024-08-06`.
   The chat calls read their key from `OPENAI_MODEL_KEY`, and the embedder keeps
   `OPENAI_API_KEY`. The `bench` group needs no Anthropic package.
+- The result files of the runs are committed in `bench/results/`. A retrieval file is about
+  2.2 MB, because it keeps the 50 ranked sessions of each question.
+- Task 4 (observed, local stack): the shared-table run did not show the loss that the plan
+  expected. With 19,864 episodes in one table, the fused ranking scored `recall_any@5`
+  0.9761, against 0.9690 with one question at a time. The vector ranking gave the same
+  sessions in the same order in both runs. On this data the vector ranking scores higher
+  than the fused ranking, for example `recall_all@5` 0.9475 against 0.9045.
+- Task 5 (observed): on the first 20 scored questions, `MemoryStore` and `HotdataStore`
+  ranked the same sessions in the same order, with distances within 1.0e-6.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
