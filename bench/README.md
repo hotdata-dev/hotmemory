@@ -40,3 +40,27 @@ The options are these:
 Each run writes one JSON file into `bench/results/`. The file holds the configuration, the
 mean metrics over every question and over each question type, the timings, and the ranked
 sessions of each question.
+
+## The end-to-end score
+
+This command runs three arms on the sample of 54 questions in `bench/sample.json`, 9 of
+each question type:
+
+```sh
+uv run --group bench --env-file .env python -m bench.e2e
+```
+
+Without `--run`, it prints the cost estimate of each arm and calls no model. With `--run`,
+it stops if the estimate is over 50 dollars, and else it calls the models. Set
+`OPENAI_MODEL_KEY` in `.env` first.
+
+| Arm | What the reader gets |
+|---|---|
+| `full` | Every session of the question. |
+| `retrieval` | The 10 sessions that the fused search ranks first. |
+| `memory` | The block of `recall`, after `capture` ran on each session in date order. |
+
+The reader and the judge are `gpt-4o-2024-08-06` at temperature 0, with the prompts of
+the reference code. The extractor of the memory arm is `gpt-4o-mini-2024-07-18`. Each
+reply is kept in `bench/cache/`, so a second run with the same prompts calls no model.
+`--arms` runs some of the arms, and `--limit` runs the first N questions of the sample.

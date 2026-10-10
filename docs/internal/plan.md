@@ -167,6 +167,13 @@ change any of them in review.
   run took 17.7 s, and the report names it the first request, because the file does not
   prove that the engine was cold. The rankings equal those of the local run. No write
   needed a retry.
+- The end-to-end runner takes these defaults. The sample comes from all 500 questions with
+  the seed 20261010, so 2 of the 54 are abstention questions. The retrieval arm gives the
+  reader the top 10 sessions of the fused search, with both roles. The memory arm recalls
+  with k of 30 and a budget of 8,000 characters. The full arm gives every session, where the
+  reference code keeps the last 50. The reader prompt is the reference prompt with chain of
+  thought and the JSON history. The memory arm uses the reference prompt for extracted
+  facts. The extractor prompt is new, in `bench/prompts.py`. Each reply is cached on disk.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
