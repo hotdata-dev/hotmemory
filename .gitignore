@@ -9,3 +9,7 @@ build/
 *.egg-info/
 .env
 .DS_Store
+
+# The benchmark data, the embedding cache, and the downloaded tokenizer files.
+bench/data/
+bench/cache/

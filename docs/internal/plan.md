@@ -115,6 +115,35 @@ Worked in order on one branch, in one pull request.
 8. `docs/benchmarks.md` with every number and its configuration, a link from the README,
    and the docs audit.
 
+## Decisions taken during the work
+
+The plan left these details open. The work took the defaults below, and the owner can
+change any of them in review.
+
+- The data file is pinned to revision `98d7416c` of the dataset on Hugging Face, with the
+  SHA-256 `d6f21ea9...a3c442`. The runner downloads it with the standard library, so the
+  `bench` group needs no Hugging Face package. Each load checks the hash.
+- Task 2 counted the data again with the loader (observed): 500 questions, 419 scored,
+  211 haystacks out of date order, and 76 questions with a session later on the day of
+  the question, by up to 23.7 hours. In 43 of the 76, that late session is evidence by
+  the rule below. The research notes said 75 of 76, and that count is wrong.
+- A session is evidence by the rule of the reference code: its id holds `answer`, and a
+  user turn has the answer. In 32 scored questions, `answer_session_ids` also names a
+  session with no such user turn. The reference code renames those sessions to `noans`
+  and does not count them, and the runner does the same.
+- 13 haystacks repeat a session id, always with the same content, and never as evidence.
+  The runner stores one episode with the first date. 71 sessions have no user text, and
+  none is evidence. The runner stores no episode for them, because a record needs
+  content.
+- Four distinct session texts are longer than 8,191 tokens, the input limit of the
+  embedder, and none is evidence. The embedder cuts each text to 8,191 tokens of
+  `cl100k_base` before it embeds it. BM25 still reads the whole text. The cache key is the
+  model and the cut text, and the cache keeps 32-bit vectors in a SQLite file.
+- An episode has the source `session:<id>`, and the namespace of a question is
+  `("bench", "lme_s", <run>, <question id>)`.
+- The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
+  same commands. The offline tests of `bench/` are in `bench/tests/`.
+
 ## Acceptance criteria
 
 - AC1. `make verify` passes offline in under five seconds, with the offline tests of
