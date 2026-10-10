@@ -20,15 +20,17 @@ from bench import prompts
 from bench.data import DATA_DIR, DATA_FILE, load
 from bench.e2e import ACTOR, RECALL_K, extractor, local_store
 from bench.embed import CACHE_DIR
-from bench.models import EXTRACTOR, CachedModels, Remote
+from bench.models import JUDGE, CachedModels, Remote
 from bench.retrieval import RESULTS_DIR, _commit
 from hotmemory import Filter, Memory
 from hotmemory.contract import RECALLED_KINDS, is_valid_at
 
 SPEND_LIMIT = 1.0
 MARK = """A question about a user, its correct answer, and a numbered list of facts that a \
-memory holds about the user follow. Return the numbers of the facts that state the answer \
-or a part of the answer that the question needs. Return an empty list if no fact does.
+memory holds about the user follow. Return the numbers of the facts that state the correct \
+answer itself, or a value that the answer is computed from. A fact on the same topic that \
+does not state the answer or such a value does not count. Return an empty list if no fact \
+counts.
 
 Question: {question}
 
@@ -67,6 +69,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     models = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
     rows: list[dict[str, Any]] = []
     run_id = "diagnose-" + result["config"]["run_id"]
+    marked_spend = 0.0
     with local_store(args.url, run_id) as (store, empty):
         memory = Memory(store)
         extract = extractor(models)
@@ -81,16 +84,18 @@ def main(argv: Sequence[str] | None = None) -> Path:
                     actor=ACTOR,
                     observed_at=session.date,
                 )
-                if models.spent > SPEND_LIMIT:
+                if models.spent - marked_spend > SPEND_LIMIT:
                     raise RuntimeError(f"the replay spent ${models.spent:.2f}: the cache missed")
             facts = store.list(namespace, Filter(kind=RECALLED_KINDS), limit=10_000)
             numbered = "\n".join(f"{n}. {fact.content}" for n, fact in enumerate(facts, 1))
+            replayed = models.spent
             reply = models(
-                EXTRACTOR,
+                JUDGE,
                 MARK.format(question=question.question, answer=question.answer, facts=numbered),
                 1000,
                 MARK_SCHEMA,
             )
+            marked_spend += models.spent - replayed
             marked = sorted({n for n in json.loads(reply.text)["facts"] if 1 <= n <= len(facts)})
             holding = {facts[n - 1].id for n in marked}
             ranks: dict[str, int | None] = {}
@@ -118,7 +123,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
         "config": {
             "source": str(args.result.relative_to(Path.cwd())),
             "recall_k": RECALL_K,
-            "marker": EXTRACTOR,
+            "marker": JUDGE,
             "hotmemory_commit": commit,
             "spent_usd": round(models.spent, 4),
             "model_calls": models.calls,
