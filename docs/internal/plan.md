@@ -161,6 +161,12 @@ change any of them in review.
   than the fused ranking, for example `recall_all@5` 0.9475 against 0.9045.
 - Task 5 (observed): on the first 20 scored questions, `MemoryStore` and `HotdataStore`
   ranked the same sessions in the same order, with distances within 1.0e-6.
+- Task 6 (observed, cloud, 20 questions, run by the owner): search p50 998 ms fused and
+  361 ms vector. With 19 searches after the first, p95 and p99 are both the slowest search,
+  so the report gives the highest value and does not name it p99. The first request of the
+  run took 17.7 s, and the report names it the first request, because the file does not
+  prove that the engine was cold. The rankings equal those of the local run. No write
+  needed a retry.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
