@@ -174,6 +174,12 @@ change any of them in review.
   reference code keeps the last 50. The reader prompt is the reference prompt with chain of
   thought and the JSON history. The memory arm uses the reference prompt for extracted
   facts. The extractor prompt is new, in `bench/prompts.py`. Each reply is cached on disk.
+- Task 7 (observed, local stack, the sample of 54): full context 39/54 (0.722), retrieval
+  45/54 (0.833), memory 19/54 (0.352). The run spent $20.95 against an estimate of $24.33,
+  in 2,802 model calls. In 24 of the 35 questions that the memory arm missed, the reader
+  said that the facts did not hold the answer. Each recalled block was 4,000 to 5,000
+  characters, so k of 30 bounded it and not the budget. The cause, a fact that the
+  extractor missed or a fact that recall did not rank in its top 30, is not observed yet.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
