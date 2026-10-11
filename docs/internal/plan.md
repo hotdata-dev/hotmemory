@@ -176,10 +176,16 @@ change any of them in review.
   facts. The extractor prompt is new, in `bench/prompts.py`. Each reply is cached on disk.
 - Task 7 (observed, local stack, the sample of 54): full context 39/54 (0.722), retrieval
   45/54 (0.833), memory 19/54 (0.352). The run spent $20.95 against an estimate of $24.33,
-  in 2,802 model calls. In 24 of the 35 questions that the memory arm missed, the reader
-  said that the facts did not hold the answer. Each recalled block was 4,000 to 5,000
-  characters, so k of 30 bounded it and not the budget. The cause, a fact that the
-  extractor missed or a fact that recall did not rank in its top 30, is not observed yet.
+  in 2,802 model calls. Each recalled block was 4,000 to 5,000 characters, so k of 30
+  bounded it and not the budget.
+- The diagnosis of the 35 memory misses (`bench/diagnose.py`, observed) replays `capture`
+  from the cached replies, and GPT-4o marks the stored facts that state the answer or a
+  value that it needs. 19 misses had no such fact: the extractor did not write it. 2 had
+  it ranked below the top 30, and the vector ranking ranked it higher in both. 14 had at
+  least one marked fact in the top 30. That last count is an upper bound, because a
+  multi-session question needs several facts and the marker accepts one, and a few marks
+  are loose. A first pass with gpt-4o-mini as the marker counted facts on the same topic,
+  and its result was discarded.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
