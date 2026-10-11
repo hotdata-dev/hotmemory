@@ -64,3 +64,20 @@ The reader and the judge are `gpt-4o-2024-08-06` at temperature 0, with the prom
 the reference code. The extractor of the memory arm is `gpt-4o-mini-2024-07-18`. Each
 reply is kept in `bench/cache/`, so a second run with the same prompts calls no model.
 `--arms` runs some of the arms, and `--limit` runs the first N questions of the sample.
+
+## The checks of the results
+
+This command compares the vector rankings of two retrieval result files, as the driver
+check does:
+
+```sh
+uv run --group bench python -m bench.compare bench/results/<first>.json bench/results/<second>.json
+```
+
+This command finds the cause of each miss of the memory arm in `e2e-sample.json`. It runs
+`capture` again from the cached replies, so the extractor is not called again. GPT-4o marks
+the stored facts that hold each answer:
+
+```sh
+uv run --group bench --env-file .env python -m bench.diagnose
+```

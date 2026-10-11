@@ -135,6 +135,8 @@ how to run it against a local engine.
   state, and its proof.
 - [docs/local.md](docs/local.md): how to run the library against a local RuntimeDB
   container.
+- [docs/benchmarks.md](docs/benchmarks.md): the numbers of hotmemory on LongMemEval-S,
+  each with its configuration. [bench/README.md](bench/README.md) tells you how to run it.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the one command that checks a change, and the rules
   of the test suite.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.

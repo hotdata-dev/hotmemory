@@ -186,6 +186,10 @@ change any of them in review.
   multi-session question needs several facts and the marker accepts one, and a few marks
   are loose. A first pass with gpt-4o-mini as the marker counted facts on the same topic,
   and its result was discarded.
+- Task 8: `docs/contracts.md` said that a cloud request costs about 400 ms at every size,
+  from simple queries in phase 0. It now adds the benchmark numbers: a fused search took
+  998 ms at p50 in the cloud, and a vector search 361 ms. No behavior and no frozen surface
+  changed in this phase, so `docs/guarantees.md` and `CHANGELOG.md` do not change.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
