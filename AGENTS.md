@@ -23,6 +23,7 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 - [docs/internal/roadmap.md](docs/internal/roadmap.md): every phase and its status.
 - [docs/contracts.md](docs/contracts.md): the record and the operations.
 - [docs/guarantees.md](docs/guarantees.md): what a consumer can rely on, and the proof.
+- [docs/architecture.md](docs/architecture.md): how each operation runs on the platform.
 - [docs/internal/brief.md](docs/internal/brief.md): the design and its reasons.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the checks inside `make verify` and the test rules.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
