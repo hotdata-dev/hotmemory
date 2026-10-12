@@ -9,3 +9,8 @@ build/
 *.egg-info/
 .env
 .DS_Store
+
+# The benchmark data, the caches, and the result file of each run.
+bench/data/
+bench/cache/
+bench/results/

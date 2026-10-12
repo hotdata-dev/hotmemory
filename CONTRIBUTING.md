@@ -22,11 +22,11 @@ passes in CI. It has no tiers, because the full check takes less than five secon
 
 1. `ruff check` over the Python files.
 2. `ruff format --check` over the Python files and the Python code blocks in Markdown.
-3. Strict `mypy` over `src/`, `tests/`, and `skills/hotmemory/scripts/`.
+3. Strict `mypy` over `src/`, `tests/`, `skills/hotmemory/scripts/`, and `bench/`.
 4. The offline test suite, with `pytest --disable-socket`. A test that opens a network
    socket fails. The suite includes the command check in `tests/test_skill.py`. It runs
    every command in the skill file, in order, against a memory file in a temporary
-   folder.
+   folder. It also runs the offline tests of the benchmark runner, in `bench/tests/`.
 5. The link check. It reads each relative link in the Markdown files at the root and
    under `docs/`. A link to a file that does not exist makes it fail.
 

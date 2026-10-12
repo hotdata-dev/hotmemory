@@ -1,208 +1,255 @@
-# Plan: phase 4, the first consumer
+# Plan: phase 5, a public benchmark
 
-Status: agreed, 2026-10-09. This file holds the current phase only. The next phase replaces
-it. The phases themselves are in `roadmap.md`. Section numbers below refer to `brief.md`.
-Phase 3 closed with PR #9. `Memory`, the skill file, and the filter-first vector rankings
-are on `main`.
+Status: agreed, 2026-10-10. This file
+holds the current phase only. The next phase replaces it. The phases themselves are in
+`roadmap.md`. Phase 4 closed with PR #11 and the consumer's pull request. `Memory.load`,
+the tuple `Filter.kind`, and the episode rule are on `main`.
 
 ## Goal
 
-When this phase closes, the first consumer, an incident investigator built on Hotdata,
-uses hotmemory in its own repository. It loads past post-mortems into a memory database.
-At the start of an investigation, it recalls from that memory. A replay case runs an
-incident of a class that two earlier post-mortems describe. With memory, the first round
-names a prior incident of that class. Without memory, it does not. The survey (section 2.8) names this as the first proof of the
-library.
+When this phase closes, hotmemory has its first public numbers on LongMemEval-S, a
+benchmark of 500 questions over long chat histories. The numbers come in two parts, in
+this order.
 
-The phase spans two repositories, with one pull request in each. This file plans both
-halves and gives the detail of the hotmemory half. The consumer's issue gives the detail of
-its own half, and this file never names that repository.
+1. Retrieval recall at k. This score needs no model except the embedder. It compares the
+   sessions that hotmemory ranks for a question with the sessions that hold the answer.
+   It measures the store and the retrieval query alone.
+2. End-to-end accuracy on a sample of the questions. An extractor writes facts, `recall`
+   gives a block to a reader model, and a judge model grades the answer. The same sample
+   also runs without memory, so the number has a baseline next to it.
 
-1. The hotmemory pull request adds a document loader to `Memory`, and keeps episodes out
-   of `recall` and `profile`. It merges first.
-2. The consumer's pull request pins hotmemory to the merge commit of the first pull
-   request. It adds the post-mortem loader, the recall at investigation start, and the
-   replay case.
-
-Testing needs no release and no deploy. The replay runs the consumer's graph in a local
-process against frozen data. The memory lives in the local stack or in a throwaway
-database. hotmemory stays unpublished.
+`docs/benchmarks.md` holds the numbers. Each number has the configuration that produced
+it. The survey (section 2.8) names this run as the proof that hotmemory is a general
+memory and not only the feature of one consumer.
 
 ## Decisions
 
-The owner agreed to all of these on 2026-10-09, after the consumer's agent answered the
-questions of the first draft.
+The owner agreed to all of these on 2026-10-10, and asked to keep the phase simple and
+stay with this plan.
 
-- The replay case (agreed). The case is an incident of a class that two earlier
-  post-mortems describe: a node group that cannot grow, so a RuntimeDB pod stays Pending.
-  The specific causes differ, and no person linked the case to the earlier incidents. So
-  the case proves that a prior incident of the same class reaches the first round, and
-  not that one cause repeated. The consumer's issue names the incidents. Its data is
-  frozen with no expiry.
-- The pass rule (agreed). The case is noisy, so each arm runs 3 times. With memory, at
-  least 2 of 3 first-round reports name one of the two prior incidents by date or title.
-  Without memory, none does. No evidence table holds those texts, so only memory can
-  supply them.
-- The cutoff (agreed). The replay uses no fact from after the incident start, in two ways.
-  The consumer's loader loads only the post-mortems dated before the incident, and the
-  recall passes `as_of` set to the incident start.
-- The chunking (agreed). `Memory.load` cuts a document on Markdown headings first. It
-  never cuts inside a fenced code block, because such a block can hold blank lines and
-  lines that start with `#`. Then it packs the sections into chunks of at most
-  `chunk_chars` characters (2,000 by default), and cuts a longer section on blank lines
-  outside fences, then at that size. Each stored chunk starts with the first heading of
-  the document and the heading path of the chunk, so that a chunk cut from a late section
-  still says which document and section it belongs to.
-- The loader (agreed). `Memory` gains `load(document, text, scope, extractor, actor,
-  observed_at)`. It writes each chunk as a record of kind `episode` with the key
-  `<document>-<n>`, where `n` counts from 1 with four digits. Then it calls the extractor
-  on each chunk, as `capture` does. Each fact that comes back gets the id of its chunk in
-  `sources`. It returns the ids of the episodes and of the facts. A second load of the
-  same text writes nothing new, because the episode keys and the fact keys repeat.
-- Episodes stay out of recall (agreed). `recall` and `profile`
-  read facts, profiles, and procedures only. A fact names its episodes in `sources`, so a
-  consumer reaches the evidence with `get`, or in one SQL join. For this, `Filter.kind`
-  takes one kind or a tuple of kinds. In `HotdataStore`, a filter without `episode` reads
-  only `memory_v1`. The filter key stays `kind`, and the wider type gets a changelog
-  entry.
-- The dependency (agreed). The consumer pins hotmemory to the GitHub archive URL of the
-  merge commit, because its image builder has no `git`. Publishing to PyPI waits for a
-  working version 1, as before.
-- The setting (agreed). The recall at investigation start sits
-  behind a setting of the consumer that defaults to off. A merge to the consumer's main
-  branch builds an image but does not deploy it, so the pull request can merge without a
-  change in behavior.
-- One writer (agreed). In this phase, only the loader writes to
-  the memory database, and it runs as a command, never inside an investigation. An
-  investigation only reads. A capture after an investigation is later work, and needs the
-  one-writer rule settled first.
-- The consumer's shape (agreed). One namespace for incidents, with the affected
-  component as the subject. The recall searches by the alert title and the first summary
-  of the investigation, and runs beside the evidence load, so a cold engine start stays
-  off the critical path. The block has a budget of 4,000 characters. The extractor writes
-  facts that name the class of a failure as well as its specific cause, because the
-  replay case depends on the class.
-
-## Decisions taken during the work
-
-The plan left these choices open. The owner can change any of them in review.
-
-- `Filter.kind` keeps a single kind as a string, and turns a list into a tuple. An empty
-  tuple raises an error, because it would match nothing.
-- The counts in the block of `profile` leave episodes out too, because the block names
-  what `recall` can reach. A namespace that holds only episodes shows a count of 0.
-- `candidates` still searches every kind. The plan names only `recall` and `profile`.
-- `chunk_chars` bounds the body of a chunk and does not count the prefix. The first
-  heading of a post-mortem is a long sentence, so the prefix can reach about 250
-  characters.
-- The consumer's post-mortems have blocks over 2,000 characters that are tables and
-  lists, not fences. So a block that does not fit is cut at line ends, and only a single
-  line longer than `chunk_chars` is cut at that size. A cut pipe table repeats its header
-  row and delimiter row in each later piece, at the consumer's request, so that the
-  extractor keeps the column names.
-- When a long section is cut into blocks, its heading stays with the block after it if
-  both fit, so that no chunk holds a heading alone.
-- The prefix is the first heading, then the heading path, with a heading equal to the one
-  before it left out, so a path under the title does not repeat the title. A document
-  with no heading gives chunks with no prefix.
-- The extractor sees the chunk with its prefix, because the prefix tells it the document
-  and the section.
-- A fence starts with three or more backticks or tildes and ends with the same character
-  at least as many times. A heading underlined with `===` or `---` is not a heading. The
-  consumer's files have neither form.
-- A document of blank lines writes nothing and returns two empty lists. A chunk for which
-  the extractor returns no fact still gets its episode.
-- A chunk whose episode is current with the same content is skipped, and the extractor is
-  not called for it. Then a second load writes nothing new even when the extractor calls
-  a model, and it costs no model call. The second load returns the episode ids and no
-  fact ids.
-- The facts of a chunk are written before its episode. If a load stops inside a chunk, the
-  episode is missing, so the next load runs that chunk again.
-- The facts are remembered chunk by chunk, as `capture` does, so the extractor of a later
-  chunk sees the facts of the earlier chunks in its current records.
-- `load` does not set `valid_from` on a fact. A fact with no `valid_from` takes its
-  `observed_at` in `put`, and `load` fills `observed_at`, so `recall` with `as_of` before
-  the date of a document leaves out its facts. The consumer asked about this, and a test
-  proves it.
-- An episode gets the chunk as content, the actor, and `observed_at`. It has no subject
-  and no sources. A fact gets its own sources, then the id of its episode.
-- `load` refuses a key that holds a fact before it calls the extractor for that chunk. The
-  chunks before it stay written.
-- A key number above 9999 gets more than four digits.
-- An edited document writes the next revision of each changed episode. If it gets fewer
-  chunks, its old last episodes stay current. The consumer loads each document once in
-  this phase, so this waits for a later phase.
+- The benchmark (agreed). LongMemEval-S, from the cleaned data file of 2025-09, which is
+  under MIT. LoCoMo, MemoryBench, and DolphinBench wait, for the reasons in the research
+  notes of 2026-10-08. The roadmap lists them under Deferred.
+- The runner (agreed). The runner lives in `bench/` at the root of the repository,
+  outside the package. Its dependencies are in a `bench` dependency group, so the library
+  gains no runtime dependency. The data downloads to a folder that git ignores. Ruff and
+  mypy check `bench/`. Its offline tests use a small fixture in the shape of the data, and
+  `make verify` runs them, so it stays under five seconds. No benchmark run is in CI.
+- The retrieval score (agreed). One episode for each session, with the user turns of
+  that session as its content, as in the session-level retrieval of the reference code.
+  The episode key is the session id, with `-` for each character outside
+  `[A-Za-z0-9_-]`. The episode keeps the session id in `sources`. A search with
+  `Filter(kind="episode")` and k of 50 gives a ranked list of sessions. The runner scores
+  `recall_any@k`, `recall_all@k`, and `ndcg_any@k`, with the formulas of the reference
+  code. k is 1, 3, 5, 10, 30, and 50. It scores the questions that the reference code
+  scores: not the abstention questions, and not the questions with no evidence in a user
+  turn. The research notes count 419 such questions from the data. Task 3 counts them
+  again with the reference rules.
+- One question at a time (agreed). Each question gets its own namespace. The runner
+  loads its sessions, searches, and then deletes its rows before the next question. Thus
+  the tables hold one question at a time, as the reference code builds one index for each
+  question. This matters for the fused ranking. BM25 takes its top rows from the whole
+  table, and the scope filter applies after that. With 500 questions in one table, BM25
+  finds almost no row in the scope of one question. A second run keeps every question in
+  one table, and the report shows the difference as a known limit of the fused ranking.
+- The rankings and the drivers (agreed). The main numbers come from `HotdataStore` on
+  the local stack, for both `ranking="fused"` and `ranking="vector"`. `MemoryStore` runs
+  the first 20 questions with the same embedder. Its vector ranking must give the same
+  sessions in the same order as the vector ranking of `HotdataStore`. The oracle test
+  already asks this.
+- The embedder (agreed). `OpenAIEmbedder` with `text-embedding-3-small`, through a cache
+  on disk that git ignores. The cache key is the model name and the text, so a second run
+  calls no model, and the runs can be repeated.
+- Where it runs (agreed). The ingest and the scores run on the local stack. A separate
+  run of 20 questions on a cloud database measures the latency of `search` at p50, p95,
+  and p99. It reports the first call to a cold engine as its own number. The report names
+  the setup of every number, local or cloud.
+- The end-to-end sample (agreed). 9 questions of each of the 6 question types, 54 in all,
+  chosen with a fixed seed. The list of question ids is committed, so every arm and every
+  later run uses the same questions. A full run of 500 questions waits for the owner's yes,
+  because its cost is about ten times higher.
+- The end-to-end arms (agreed). Three arms run on the sample, with the same reader and
+  judge.
+  1. Full context: the reader gets every session of the question. This is the baseline
+     that the paper reports, about 60 percent with GPT-4o.
+  2. Retrieval: the reader gets the top sessions that the retrieval score ranks. This arm
+     needs no extractor.
+  3. Memory: an extractor runs `capture` on each session, in date order, and the reader
+     gets the block of `recall`.
+- The models (agreed). The reader is GPT-4o and the judge is `gpt-4o-2024-08-06` at
+  temperature 0, with the judge prompts of the reference code for each question type. Then
+  the numbers compare with the published GPT-4o numbers. The benchmark sets the judge: its
+  scoring script takes GPT-4o, GPT-4o mini, or a Llama model, and its README runs it with
+  GPT-4o. The benchmark leaves the reader to the caller, and its generation script runs
+  readers from GPT-4o to small open models. So GPT-4o as the reader is our choice, made so
+  that the numbers compare with the published ones. The extractor is Claude Haiku 4.5.
+  The runner reads `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from the environment. (Changed
+  during the work: see the extractor under "Decisions taken during the work".)
+- The time rules (agreed). The runner sorts the sessions of a question by date before it
+  loads them, because 211 haystacks are out of order. The session date becomes
+  `observed_at` in UTC. `recall` takes `as_of` at 23:59:59 on the date of the question,
+  because 76 questions have evidence later on the same day. These counts come from the
+  research notes and are not observed yet. Task 2 counts them again.
+- The cost limit (agreed). The runner prints an estimate before a paid run, and stops if
+  the estimate is over 50 dollars. The sample with the three arms is about 25 to 35
+  dollars by the research estimates. That estimate is not observed. By the same estimate,
+  the full-context arm is about half of it, because each of its 54 reads holds about
+  100,000 tokens.
 
 ## Tasks
 
-Worked in order. Tasks 1 to 6 are the hotmemory pull request. Tasks 7 to 11 are the
-consumer's pull request, and its own issue gives their detail.
+Worked in order on one branch, in one pull request.
 
-1. Close phase 3 in `roadmap.md` and replace `plan.md` with the phase 4 plan.
-2. `Filter.kind` takes a tuple of kinds, in both drivers, with conformance tests and a
-   changelog entry.
-3. `recall` and `profile` leave episodes out, with tests over both drivers.
-4. `Memory.load`, the chunking by headings and fences with the heading path, and the
-   episode sources, with tests over both drivers.
-5. A `load` script and example in the skill file, run by the command check.
-6. The ledger rows for the loader and for the episodes in recall, and the docs audit.
-7. Write the replay case and its pass rule into the consumer's eval suite. Its data is
-   already frozen.
-8. The post-mortem source and the extractor of the consumer.
-9. The loader command of the consumer, run against a local or throwaway memory database.
-10. The recall at investigation start, behind the setting, with its block in the first
-    round of the investigation.
-11. The replay case, run with memory and without memory.
+1. Close phase 4 in `roadmap.md` and replace `plan.md` with the phase 5 plan.
+2. `bench/`: the dependency group, the data download and its checks, the sort by date, the
+   time rules, the session ids in keys and sources, and the embedder cache. Offline tests
+   on a small fixture.
+3. The retrieval metrics, ported from the reference code, with offline tests that compare
+   them with values worked by hand.
+4. The retrieval runner on the local stack: one question at a time, both rankings, all
+   scored questions. Then the run with every question in one table.
+5. The driver check: the first 20 questions on `MemoryStore` and on `HotdataStore`, with
+   the vector ranking.
+6. The cloud latency run of 20 questions.
+7. The end-to-end runner: the extractor, the reader, the judge, the three arms, and the
+   cost limit. Then the run on the sample of 54.
+8. `docs/benchmarks.md` with every number and its configuration, a link from the README,
+   and the docs audit.
+
+## Decisions taken during the work
+
+The plan left these details open. The work took the defaults below, and the owner can
+change any of them in review.
+
+- The data file is pinned to revision `98d7416c` of the dataset on Hugging Face, with the
+  SHA-256 `d6f21ea9...a3c442`. The runner downloads it with the standard library, so the
+  `bench` group needs no Hugging Face package. Each load checks the hash.
+- Task 2 counted the data again with the loader (observed): 500 questions, 419 scored,
+  211 haystacks out of date order, and 76 questions with a session later on the day of
+  the question, by up to 23.7 hours. In 43 of the 76, that late session is evidence by
+  the rule below. The research notes said 75 of 76, and that count is wrong.
+- A session is evidence by the rule of the reference code: its id holds `answer`, and a
+  user turn has the answer. In 32 scored questions, `answer_session_ids` also names a
+  session with no such user turn. The reference code renames those sessions to `noans`
+  and does not count them, and the runner does the same.
+- 13 haystacks repeat a session id, always with the same content, and never as evidence.
+  The runner stores one episode with the first date. 71 sessions have no user text, and
+  none is evidence. The runner stores no episode for them, because a record needs
+  content.
+- Four distinct session texts are longer than 8,191 tokens, the input limit of the
+  embedder, and none is evidence. The embedder cuts each text to 8,191 tokens of
+  `cl100k_base` before it embeds it. BM25 still reads the whole text. The cache key is the
+  model and the cut text, and the cache keeps 32-bit vectors in a SQLite file.
+- An episode has the source `session:<id>`, and the namespace of a question is
+  `("bench", "lme_s", <run>, <question id>)`.
+- The metrics take a ranked list of session ids and the set of evidence ids. The ideal
+  ranking of `ndcg_any@k` puts every evidence id first, as the reference code does when
+  it sorts the relevance of the whole haystack. A check outside the repository ran the
+  reference `evaluate_retrieval` and the port on 2,000 random rankings, and the largest
+  difference was 2.2e-16 (observed).
+- The extractor is `gpt-4o-mini-2024-07-18` and not Claude Haiku 4.5. The owner chose
+  this on 2026-10-10, because no Anthropic key is available. LongMemEval has no extractor,
+  so the benchmark sets nothing here. The reader and the judge stay `gpt-4o-2024-08-06`.
+  The chat calls read their key from `OPENAI_MODEL_KEY`, and the embedder keeps
+  `OPENAI_API_KEY`. The `bench` group needs no Anthropic package.
+- Git ignores `bench/results/`, and `docs/benchmarks.md` records the reported numbers. A
+  retrieval file is about 2.2 MB, because it keeps the 50 ranked sessions of each
+  question. The owner chose this on 2026-10-12.
+- Task 4 (observed, local stack): the shared-table run did not show the loss that the plan
+  expected. With 19,864 episodes in one table, the fused ranking scored `recall_any@5`
+  0.9761, against 0.9690 with one question at a time. The vector ranking gave the same
+  sessions in the same order in both runs. On this data the vector ranking scores higher
+  than the fused ranking, for example `recall_all@5` 0.9475 against 0.9045.
+- Task 5 (observed): on the first 20 scored questions, `MemoryStore` and `HotdataStore`
+  ranked the same sessions in the same order, with distances within 1.0e-6.
+- Task 6 (observed, cloud, 20 questions, run by the owner): search p50 998 ms fused and
+  361 ms vector. With 19 searches after the first, p95 and p99 are both the slowest search,
+  so the report gives the highest value and does not name it p99. The first request of the
+  run took 17.7 s, and the report names it the first request, because the file does not
+  prove that the engine was cold. The rankings equal those of the local run. No write
+  needed a retry.
+- The end-to-end runner takes these defaults. The sample comes from all 500 questions with
+  the seed 20261010, so 2 of the 54 are abstention questions. The retrieval arm gives the
+  reader the top 10 sessions of the fused search, with both roles. The memory arm recalls
+  with k of 30 and a budget of 8,000 characters. The full arm gives every session, where the
+  reference code keeps the last 50. The reader prompt is the reference prompt with chain of
+  thought and the JSON history. The memory arm uses the reference prompt for extracted
+  facts. The extractor prompt is new, in `bench/prompts.py`. Each reply is cached on disk.
+- Task 7 (observed, local stack, the sample of 54): full context 39/54 (0.722), retrieval
+  45/54 (0.833), memory 19/54 (0.352). The run spent $20.95 against an estimate of $24.33,
+  in 2,802 model calls. Each recalled block was 4,039 to 5,272 characters, so k of 30
+  bounded it and not the budget.
+- The diagnosis of the 35 memory misses (`bench/diagnose.py`, observed) replays `capture`
+  from the cached replies, and GPT-4o marks the stored facts that state the answer or a
+  value that it needs. 19 misses had no such fact: the extractor did not write it. 2 had
+  it ranked below the top 30, and the vector ranking ranked it higher in both. 14 had at
+  least one marked fact in the top 30. That last count is an upper bound, because a
+  multi-session question needs several facts and the marker accepts one, and a few marks
+  are loose. A first pass with gpt-4o-mini as the marker counted facts on the same topic,
+  and its result was discarded.
+- Task 8: `docs/contracts.md` said that a cloud request costs about 400 ms at every size,
+  from simple queries in phase 0. It now adds the benchmark numbers: a fused search took
+  998 ms at p50 in the cloud, and a vector search 361 ms. No behavior and no frozen surface
+  changed in this phase, so `docs/guarantees.md` and `CHANGELOG.md` do not change.
+- The branch was rebased onto `main` after PR #12 merged. Each rebased commit has the same
+  file tree as the commit that ran, so `hotmemory_commit` in each result file names the
+  rebased commit.
+- After review, `bench/diagnose.py` ranks the way `recall` does: a search with k of 30,
+  then the `as_of` filter, then the budget. The fused query fetches a depth that depends
+  on k, so the block comes from its own search, and the best rank from a search over every
+  fact. A fact counts as recalled only if it
+  stays in the block. The published split does not change, read from the code and the data
+  and not rerun. The extractor sets no `valid_until`, no session of the sample is after
+  its `as_of`, and the largest block was 5,272 characters against a budget of 8,000.
+- The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
+  same commands. The offline tests of `bench/` are in `bench/tests/`.
 
 ## Acceptance criteria
 
-- AC1. `make verify` passes offline in under five seconds.
-- AC2. `make integration` passes against the local stack, and the CI integration job
-  passes on the hotmemory pull request.
-- AC3. `Memory.load` and the episode rule have tests that run against both drivers.
-- AC4. A second load of the same text writes nothing new.
-- AC5. The replay case passes by the pass rule above: at least 2 of 3 runs with memory
-  name a prior incident of the class, and none of 3 runs without memory does.
-- AC6. With the setting off, the consumer behaves as before.
-- AC7. No public text names a private repository, a customer, or a deployment detail. A
+- AC1. `make verify` passes offline in under five seconds, with the offline tests of
+  `bench/`.
+- AC2. One command runs the retrieval score on the local stack, and `docs/benchmarks.md`
+  reports `recall_any@k`, `recall_all@k`, and `ndcg_any@k` for every scored question, for
+  both rankings.
+- AC3. On the first 20 questions, the vector ranking of `MemoryStore` and of
+  `HotdataStore` give the same sessions in the same order.
+- AC4. `docs/benchmarks.md` reports the accuracy of the three arms on the same 54
+  questions, for each question type and in total, with the reader, the judge, and the
+  extractor named.
+- AC5. Every number in `docs/benchmarks.md` was observed in this phase, and its line names
+  the configuration: the data file hash, the models, the embedder, k, the budget, the
+  driver, and local or cloud.
+- AC6. No public text names a private repository, a customer, or a deployment detail. A
   grep for the known names proves it over the files, the commit messages, the pull
-  request, and the issue. The pull request describes the grep without the names.
-
-## Answers from the consumer
-
-The consumer's agent answered the questions of the first draft on 2026-10-09. The
-decisions above take its answers. In short:
-
-- The post-mortems are Markdown files with fixed sections and an appendix of shell
-  commands. Most are 8,000 to 42,000 characters long. At 2,000 characters a chunk, a full
-  load is about 110 extractor calls.
-- The extractor fits the callable of `capture`. It calls a model that the consumer
-  configures.
-- The consumer needs no field that the record does not have. The episode key keeps the
-  document name, and `observed_at` carries the incident date.
+  request, and the issue.
 
 ## Verification
 
-- Per commit in hotmemory: `make verify`.
+- Per commit: `make verify`.
 - Per commit that touches a driver: `make local-up`, then `make integration`.
-- In the consumer: its own checks, and the replay case with memory and without memory.
-- Before each pull request: the docs audit of the `pr-workflow` skill, and the grep for
-  AC7.
+- Each run writes its configuration and its results to one JSON file. The numbers in
+  `docs/benchmarks.md` come from those files.
+- Before the pull request: the docs audit of the `pr-workflow` skill, and the grep for
+  AC6.
 
 ## Questions left open
 
+- A search over history, so that `recall(as_of=T)` can return a fact superseded after T.
+  Some temporal questions ask for a value before it changed. The report shows the score of
+  each question type, so the cost of this gap becomes visible.
 - After the engine fixes the filtered vector index search: let the vector rankings use
   the index again, and measure the gain.
-- After the engine ships a conditional write: replace the one-process rule with a
-  compare-and-set on the revision.
-- A search over history, so that `recall(as_of=T)` can return a fact superseded after T.
+- BM25 in a narrow scope. If the shared-table run shows a large loss, a later phase can
+  rank BM25 inside the scope.
 - An exact count for each namespace in the block of `profile`.
-- A capture after each investigation, which needs a second writer.
+- The ideas from the study of another memory layer on 2026-10-09 wait until this roadmap
+  reaches its basic memory layer.
 
 ## Stop and ask if
 
-- The consumer needs a field that the record does not have.
-- A memory operation or the loader needs a new `Store` method.
-- The replay case cannot tell a run with memory from a run without it.
-- The frozen data of the replay case is lost to retention.
-- The consumer needs to write to memory from inside an investigation.
+- A benchmark needs a field that the record does not have, or a new `Store` method.
+- The ingest of the local run takes more than two hours.
+- The cost estimate of a paid run is over 50 dollars.
+- The retrieval score of the two drivers differs on the first 20 questions.
+- The reference code and the research notes disagree on the scored questions or on a
+  formula.

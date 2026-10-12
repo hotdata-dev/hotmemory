@@ -1,0 +1,187 @@
+[
+ {
+  "question_id": "q_one",
+  "question_type": "multi-session",
+  "question": "How many bikes do I own?",
+  "answer": 3,
+  "question_date": "2023/05/30 (Tue) 09:00",
+  "answer_session_ids": [
+   "answer_a_1",
+   "answer_a_2",
+   "answer_a_3"
+  ],
+  "haystack_session_ids": [
+   "answer_a_2",
+   "filler_1",
+   "answer_a_1",
+   "empty_1",
+   "filler_1",
+   "answer_a_3",
+   "answer_a_late"
+  ],
+  "haystack_dates": [
+   "2023/05/20 (Sat) 10:00",
+   "2023/05/10 (Wed) 08:00",
+   "2023/05/01 (Mon) 12:00",
+   "2023/05/12 (Fri) 12:00",
+   "2023/05/25 (Thu) 08:00",
+   "2023/05/15 (Mon) 12:00",
+   "2023/05/30 (Tue) 18:30"
+  ],
+  "haystack_sessions": [
+   [
+    {
+     "role": "user",
+     "content": "I bought a second road bike today.",
+     "has_answer": true
+    },
+    {
+     "role": "assistant",
+     "content": "Congratulations on the new bike!"
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Give me a pasta recipe."
+    },
+    {
+     "role": "assistant",
+     "content": "Boil water, add pasta."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "My first bike is a mountain bike.",
+     "has_answer": true
+    },
+    {
+     "role": "assistant",
+     "content": "Nice."
+    }
+   ],
+   [
+    {
+     "role": "assistant",
+     "content": "Hello, how can I help?"
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Give me a pasta recipe."
+    },
+    {
+     "role": "assistant",
+     "content": "Boil water, add pasta."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Tell me about tires."
+    },
+    {
+     "role": "assistant",
+     "content": "Tires vary by width.",
+     "has_answer": true
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "I picked up a folding bike this evening.",
+     "has_answer": true
+    },
+    {
+     "role": "assistant",
+     "content": "Great."
+    }
+   ]
+  ]
+ },
+ {
+  "question_id": "q_two_abs",
+  "question_type": "single-session-user",
+  "question": "What is my cat called?",
+  "answer": "You did not mention a cat.",
+  "question_date": "2023/06/01 (Thu) 10:00",
+  "answer_session_ids": [
+   "answer_b_1"
+  ],
+  "haystack_session_ids": [
+   "filler_2",
+   "answer_b_1"
+  ],
+  "haystack_dates": [
+   "2023/05/01 (Mon) 10:00",
+   "2023/05/02 (Tue) 10:00"
+  ],
+  "haystack_sessions": [
+   [
+    {
+     "role": "user",
+     "content": "What is the weather like?"
+    },
+    {
+     "role": "assistant",
+     "content": "Sunny."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "My dog is called Rex.",
+     "has_answer": true
+    },
+    {
+     "role": "assistant",
+     "content": "A fine name."
+    }
+   ]
+  ]
+ },
+ {
+  "question_id": "q_three",
+  "question_type": "single-session-assistant",
+  "question": "Which tire width did you suggest?",
+  "answer": "28 mm",
+  "question_date": "2023/06/02 (Fri) 10:00",
+  "answer_session_ids": [
+   "answer_c_1"
+  ],
+  "haystack_session_ids": [
+   "answer_c_1",
+   "filler_3"
+  ],
+  "haystack_dates": [
+   "2023/05/03 (Wed) 10:00",
+   "2023/05/04 (Thu) 10:00"
+  ],
+  "haystack_sessions": [
+   [
+    {
+     "role": "user",
+     "content": "Which tire width should I use?",
+     "has_answer": false
+    },
+    {
+     "role": "assistant",
+     "content": "Use 28 mm tires.",
+     "has_answer": true
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Recommend a book."
+    },
+    {
+     "role": "assistant",
+     "content": "Read Dune."
+    }
+   ]
+  ]
+ }
+]

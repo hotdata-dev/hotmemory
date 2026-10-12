@@ -127,6 +127,31 @@ One process writes to a database. [docs/contracts.md](docs/contracts.md) gives t
 the retrieval query, and the rules of the driver. [docs/local.md](docs/local.md) tells you
 how to run it against a local engine.
 
+## Benchmark
+
+hotmemory ran LongMemEval-S, a public benchmark of 500 questions over long chat histories,
+on 2026-10-10. [docs/benchmarks.md](docs/benchmarks.md) gives every number with its
+configuration.
+
+Retrieval needs no model except the embedder. The runner stored each session of a question
+as an episode in `HotdataStore` and searched with the question. The 419 scored questions
+had these results with the vector ranking. For 98.3% of them, an evidence session was in
+the top 5. For 99.3% of them, every evidence session was in the top 10.
+
+The end-to-end score ran on a sample of 54 questions. The reader and the judge were
+`gpt-4o-2024-08-06`.
+
+| What the reader got | Correct |
+|---|---|
+| Every session of the question, about 114,000 tokens | 39 of 54 (72.2%) |
+| The 10 sessions that the search ranked first | 45 of 54 (83.3%) |
+| The block of `recall`, after `capture` with a `gpt-4o-mini` extractor | 19 of 54 (35.2%) |
+
+The memory contract, with this extractor, scores below the full history. In 19 of its 35
+misses, the extractor did not store the answer. With 54 questions, each score can be about
+10 points off. In the cloud, a search took 361 ms at p50 with the vector ranking, and
+998 ms with the fused ranking.
+
 ## Documents
 
 - [docs/contracts.md](docs/contracts.md): the record, the storage operations, the memory
@@ -135,6 +160,8 @@ how to run it against a local engine.
   state, and its proof.
 - [docs/local.md](docs/local.md): how to run the library against a local RuntimeDB
   container.
+- [docs/benchmarks.md](docs/benchmarks.md): the numbers of hotmemory on LongMemEval-S,
+  each with its configuration. [bench/README.md](bench/README.md) tells you how to run it.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the one command that checks a change, and the rules
   of the test suite.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.

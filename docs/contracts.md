@@ -283,7 +283,9 @@ Reads are fast because the table is small. A memory table holds thousands of row
 filtered scan of that is fast without an index. Measurement M5 found that the vector
 index saves engine time from about ten thousand rows. In the cloud, one request costs about
 400 ms at every size. That cost hides the saving up to at least one hundred thousand rows.
-[measured 2026-10-05] Whether the sorted index on `created_at` serves `list` and `sweep`
+[measured 2026-10-05] The fused query costs more than that. On LongMemEval-S in the cloud,
+a fused search took 998 ms at p50 and a vector search took 361 ms, with about 50 rows in
+scope. [measured 2026-10-10, [docs/benchmarks.md](benchmarks.md)] Whether the sorted index on `created_at` serves `list` and `sweep`
 was not observed.
 
 ## The memory contract
