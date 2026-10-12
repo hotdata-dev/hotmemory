@@ -317,7 +317,10 @@ Each run of whitespace in the content becomes one space, so a record is always o
 Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unknown`, a
 null `valid_until` as `now`, and a record with no sources as `none`. The block holds whole
 lines only, joined by newlines. It stops before the first line that would make it longer
-than the budget. The list holds the records of the block.
+than the budget. The list holds the records of the block. The budget counts the characters of
+the block in this line format, and its default is 2,000. A consumer that renders the
+records in its own format passes its own `budget` and `k`, so that the default does not
+cut the list first.
 
 The block of `profile` has a group for each kind that has records, in the order fact,
 profile, procedure. A line `<kind>:` starts each group, and its records follow

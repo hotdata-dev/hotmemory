@@ -17,7 +17,7 @@ that proves it.
 | 1. The storage contract, offline | The record, the `Store` protocol, the in-memory driver, the conformance suite, the frozen surfaces, the ledger test, and CI. | closed 2026-10-06, PR #5 |
 | 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | closed 2026-10-08, PR #7 |
 | 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | closed 2026-10-08, PR #9 |
-| 4. The first consumer | A document loader in hotmemory. A post-mortem loader and a recall at investigation start in the consumer's own repository, proven by a replay case. Two pull requests, one in each repository. | open |
+| 4. The first consumer | A document loader in hotmemory. A post-mortem loader and a recall at investigation start in the consumer's own repository, proven by a replay case. Two pull requests, one in each repository. | closed 2026-10-10, PR #11 and the consumer's pull request |
 | 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | planned |
 | 6. Adapters | A LangGraph `BaseStore` adapter in `hotdata-langchain`, then an MCP server. | planned, out of scope for version 1 |
 
@@ -57,3 +57,12 @@ A closed phase keeps its row above with the date it closed and the pull request.
   writes a merged revision. `recall` reads current revisions only, so a search over
   history is still open. A count in the block of `profile` is a lower bound when a
   sub-namespace fills the window of `list`.
+- Phase 4 closed on 2026-10-10 with PR #11 and the consumer's pull request, which closed
+  issue #10. The consumer loaded 12 post-mortems, and counted 129 episodes and 256 facts
+  with SQL. A second load wrote nothing. It changed the plan for later phases in four ways. The pass
+  rule of the replay case judges the investigation loop from its trace, because the report
+  step drops the date of a rejected hypothesis. A consumer that renders its own block
+  passes `budget` and `k` to `recall`, because the default budget of 2,000 characters cut
+  the list first. A single-part upload in the Hotdata SDK does not retry on a closed
+  connection, so a long load can fail and must be run again. It is reported to the SDK
+  repository. A document that gets fewer chunks keeps its old last episodes current.
