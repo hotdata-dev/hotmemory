@@ -123,7 +123,8 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 found = [n for n, r in enumerate(ranked, start=1) if r.id in holding]
                 ranks[name] = found[0] if found else None
                 if name == "fused":
-                    block = block_ids(ranked, question.as_of)
+                    top = _search(store, name, question.question, namespace, RECALL_K)
+                    block = block_ids(top, question.as_of)
             cause = verdict(holding, ranks["fused"], block)
             rows.append(
                 {
