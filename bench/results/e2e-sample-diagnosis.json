@@ -3,7 +3,7 @@
   "source": "bench/results/e2e-sample.json",
   "recall_k": 30,
   "marker": "gpt-4o-2024-08-06",
-  "hotmemory_commit": "b517a5d6741f56e683c1809f44a16c7d20d18a83",
+  "hotmemory_commit": "2b889b10f65f3ad8c9fdbaaf736bf57d7c875e86",
   "spent_usd": 0.387,
   "model_calls": 28
  },

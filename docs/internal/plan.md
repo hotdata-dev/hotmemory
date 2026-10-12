@@ -190,6 +190,9 @@ change any of them in review.
   from simple queries in phase 0. It now adds the benchmark numbers: a fused search took
   998 ms at p50 in the cloud, and a vector search 361 ms. No behavior and no frozen surface
   changed in this phase, so `docs/guarantees.md` and `CHANGELOG.md` do not change.
+- The branch was rebased onto `main` after PR #12 merged. Each rebased commit has the same
+  file tree as the commit that ran, so `hotmemory_commit` in each result file names the
+  rebased commit.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 

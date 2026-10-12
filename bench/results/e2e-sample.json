@@ -41,7 +41,7 @@
   "estimate_usd": 24.33,
   "spent_usd": 20.95,
   "model_calls": 2802,
-  "hotmemory_commit": "7eff9725e4817b3e983af2b40cc7b816abcf5a58",
+  "hotmemory_commit": "a98dbc319d4596bb7b4251b439c504b084187927",
   "run_id": "20261010091428-9d08f2",
   "started_at": "2026-10-10T09:14:28.964308+00:00",
   "duration_s": 12934.2

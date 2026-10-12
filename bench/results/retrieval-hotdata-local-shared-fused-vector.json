@@ -34,7 +34,7 @@
   ],
   "questions": 419,
   "limit": null,
-  "hotmemory_commit": "2ed163af661dad76f7807865fed4e83bf0fa75ce",
+  "hotmemory_commit": "aff898b072c1e51e2a47240bc6fa0c402ce99e24",
   "run_id": "20261010084627-356855",
   "started_at": "2026-10-10T08:46:27.396206+00:00",
   "duration_s": 859.8,
