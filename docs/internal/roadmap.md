@@ -18,7 +18,7 @@ that proves it.
 | 2. The Hotdata driver | `HotdataStore` with four tables, the serialized writer, the three-stage retrieval query, the sweeper, the integration leg against the local stack in CI, and the oracle test. | closed 2026-10-08, PR #7 |
 | 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | closed 2026-10-08, PR #9 |
 | 4. The first consumer | A document loader in hotmemory. A post-mortem loader and a recall at investigation start in the consumer's own repository, proven by a replay case. Two pull requests, one in each repository. | closed 2026-10-10, PR #11 and the consumer's pull request |
-| 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | planned |
+| 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | closed 2026-10-12, PR #14 |
 | 6. Adapters | A LangGraph `BaseStore` adapter in `hotdata-langchain`, then an MCP server. | planned, out of scope for version 1 |
 
 ## Deferred
@@ -66,3 +66,12 @@ A closed phase keeps its row above with the date it closed and the pull request.
   the list first. A single-part upload in the Hotdata SDK does not retry on a closed
   connection, so a long load can fail and must be run again. It is reported to the SDK
   repository. A document that gets fewer chunks keeps its old last episodes current.
+- Phase 5 closed on 2026-10-12 with PR #14, which closed issue #13. On LongMemEval-S, an
+  evidence session was in the top 5 for 98.3 percent of the 419 scored questions, with
+  the vector ranking. On a sample of 54 questions, the reader scored 39 with every
+  session, 45 with the top 10 sessions, and 19 with the block of `recall`. It changed the
+  plan for later phases in four ways. The extractor is the main loss of the memory
+  contract: in 19 of its 35 misses, no stored fact held the answer. On this data the
+  vector ranking scored higher than the fused ranking, and the reason was not measured.
+  BM25 lost nothing with every question in one table, so a BM25 ranking inside the scope
+  can wait. In the cloud, a fused search took 998 ms at p50 and a vector search 361 ms.
