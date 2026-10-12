@@ -35,7 +35,11 @@ The options are these:
 | `--mode` | `isolated` (one question at a time in the tables) or `shared` (every question in the tables) | `isolated` |
 | `--ranking` | `fused`, `vector`, or `both` | `both` |
 | `--location` | `local` or `cloud` | `local` |
+| `--url` | the address of the local engine | `http://localhost:3000` |
 | `--limit` | the first N scored questions | every scored question |
+
+With `--location cloud`, the runner reads the connection from `HOTDATA_API_KEY`,
+`HOTDATA_WORKSPACE`, and `HOTDATA_API_URL`, so set them in `.env` first. It ignores `--url`.
 
 Each run writes one JSON file into `bench/results/`. The file holds the configuration, the
 mean metrics over every question and over each question type, the timings, and the ranked
@@ -77,7 +81,8 @@ uv run --group bench python -m bench.compare bench/results/<first>.json bench/re
 
 This command finds the cause of each miss of the memory arm in `e2e-sample.json`. It runs
 `capture` again from the cached replies, so the extractor is not called again. GPT-4o marks
-the stored facts that hold each answer:
+the stored facts that hold each answer. If the replay of `capture` spends more than 1
+dollar, the cache missed, and the command stops. `--result` names another result file:
 
 ```sh
 uv run --group bench --env-file .env python -m bench.diagnose
