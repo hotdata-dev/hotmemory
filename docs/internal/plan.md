@@ -152,8 +152,9 @@ change any of them in review.
   so the benchmark sets nothing here. The reader and the judge stay `gpt-4o-2024-08-06`.
   The chat calls read their key from `OPENAI_MODEL_KEY`, and the embedder keeps
   `OPENAI_API_KEY`. The `bench` group needs no Anthropic package.
-- The result files of the runs are committed in `bench/results/`. A retrieval file is about
-  2.2 MB, because it keeps the 50 ranked sessions of each question.
+- Git ignores `bench/results/`, and `docs/benchmarks.md` records the reported numbers. A
+  retrieval file is about 2.2 MB, because it keeps the 50 ranked sessions of each
+  question. The owner chose this on 2026-10-12.
 - Task 4 (observed, local stack): the shared-table run did not show the loss that the plan
   expected. With 19,864 episodes in one table, the fused ranking scored `recall_any@5`
   0.9761, against 0.9690 with one question at a time. The vector ranking gave the same

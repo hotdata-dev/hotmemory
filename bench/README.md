@@ -39,7 +39,8 @@ The options are these:
 
 Each run writes one JSON file into `bench/results/`. The file holds the configuration, the
 mean metrics over every question and over each question type, the timings, and the ranked
-sessions of each question.
+sessions of each question. Git ignores `bench/results/`, and
+[docs/benchmarks.md](../docs/benchmarks.md) records the reported numbers.
 
 ## The end-to-end score
 

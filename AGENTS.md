@@ -29,7 +29,7 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 - `src/hotmemory/`: the library. `tests/test_conformance.py` is the conformance suite.
 - [docs/benchmarks.md](docs/benchmarks.md): the benchmark numbers and their configuration.
 - `bench/`: the LongMemEval-S runner, outside the package. [bench/README.md](bench/README.md)
-  gives its commands. `bench/results/` holds the result file of each reported run.
+  gives its commands. Each run writes its result file into `bench/results/`, which git ignores.
 - `skills/hotmemory/`: the skill file for agents, one script for each memory operation, and
   an example document for the `load` script.
   `tests/test_skill.py` runs every command in the skill file.

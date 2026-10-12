@@ -10,6 +10,7 @@ build/
 .env
 .DS_Store
 
-# The benchmark data, the embedding cache, and the downloaded tokenizer files.
+# The benchmark data, the caches, and the result file of each run.
 bench/data/
 bench/cache/
+bench/results/

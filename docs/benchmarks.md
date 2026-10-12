@@ -2,9 +2,10 @@
 
 This page reports the numbers of hotmemory on LongMemEval-S, a public benchmark of 500
 questions over long chat histories. Each number on this page was observed on 2026-10-10.
-Each section names the result file in [bench/results/](../bench/results/) that holds its
-numbers, its configuration, and the commit of hotmemory that ran it.
-[bench/README.md](../bench/README.md) gives the commands that repeat each run.
+Each section names the result file that a run wrote into `bench/results/`, with its
+numbers, its configuration, and the commit of hotmemory that ran it. Git ignores that
+folder, so this page is the record of the numbers. [bench/README.md](../bench/README.md)
+gives the commands that repeat each run and write the files again.
 
 ## The data and the common configuration
 
