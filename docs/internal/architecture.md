@@ -4,14 +4,14 @@ This page tells you how hotmemory stores memory on Hotdata. It follows each oper
 the call of the consumer down to the engine, the catalog, and object storage. It also
 draws the line between the work that hotmemory does and the work that the platform does.
 
-The rules of each operation are in [contracts.md](contracts.md), and their proofs are in
-[guarantees.md](guarantees.md). This page does not repeat the rules. It shows the calls,
+The rules of each operation are in [contracts.md](../contracts.md), and their proofs are in
+[guarantees.md](../guarantees.md). This page does not repeat the rules. It shows the calls,
 the SQL, and the loads that carry them out.
 
 Each claim has one of these sources:
 
 - The code of hotmemory at the commit that adds this page. Such a claim has no mark.
-- A measurement in [contracts.md](contracts.md) or [guarantees.md](guarantees.md), marked
+- A measurement in [contracts.md](../contracts.md) or [guarantees.md](../guarantees.md), marked
   [measured] with its date.
 - A look at the local stack on 2026-10-12, marked [observed, local].
 - The source of `hotdata-framework` 0.14.1 and `hotdata` 0.11.0, the client libraries that
@@ -54,7 +54,7 @@ flowchart LR
 In the cloud, the API is at `api.hotdata.dev`. The source of `hotdata-framework` names a
 CDN and a gateway between the client and the engine. [read from source, not observed]
 Locally, the engine serves the API itself on port 3000 and accepts every request with no
-token. [local.md](local.md) describes the local stack.
+token. [local.md](../local.md) describes the local stack.
 
 ### Who does what
 
@@ -217,8 +217,8 @@ the file to storage, and finish the session. [read from source, not observed] Th
 a presigned URL was measured on the local stack on 2026-10-05.
 
 The check of an existing database reads the column names of each table. It lists the
-indexes of the three tables that have them, and it reads the meta row with SQL. The model name and the
-vector size must equal the arguments.
+indexes of the three tables that have them, and it reads the meta row with SQL. The model
+name and the vector size must equal the arguments.
 
 Two processes that provision the same new name at the same moment can both create a
 database. The platform has no conditional create, and the driver does not prevent this.
@@ -460,7 +460,7 @@ over one database, one for each ranking.
 | Local stack | 130 ms | 42 ms | about 50 |
 | Cloud | 998 ms | 361 ms | about 50 |
 
-These are the LongMemEval-S numbers of [benchmarks.md](benchmarks.md), measured on
+These are the LongMemEval-S numbers of [benchmarks.md](../benchmarks.md), measured on
 2026-10-10. In the cloud, one request costs about 400 ms at every table size up to 100,000
 rows. [measured 2026-10-05]
 
@@ -547,7 +547,7 @@ measurement, and the vector rankings do not read it.
 ## Load
 
 `load` turns one Markdown document into episodes and facts. It cuts the document into
-chunks first, with no call to the platform. [contracts.md](contracts.md) gives the four
+chunks first, with no call to the platform. [contracts.md](../contracts.md) gives the four
 steps of the cut.
 
 ```mermaid
@@ -593,8 +593,9 @@ bring a new source.
 
 A new or changed chunk sends six SQL queries: one for `get`, one for the search, and two
 for each of the two writes. It sends up to three loads, on `memory_v1`, `cue_v1`, and
-`episode_v1`. Only facts with cues need the load on `cue_v1`. In the cloud, a load costs about 2.1 seconds. [measured] A load of many chunks is thus slow in the
-cloud, and the cost comes from the number of chunks, not from their size. The cost of a
+`episode_v1`. Only facts with cues need the load on `cue_v1`. In the cloud, a load costs about
+2.1 seconds. [measured] A load of many chunks is thus slow in the cloud, and the cost
+comes from the number of chunks, not from their size. The cost of a
 whole document load was not measured in hotmemory.
 
 A consumer reads the episode of a fact with `get`, from an id in `sources`. In SQL, a
@@ -602,8 +603,8 @@ consumer can join `memory_v1` to `episode_v1` on those ids.
 
 ## The as-of rule
 
-Two conditions make a record valid at time T. `valid_from` is null or at most
-T. `valid_until` is null or after T. A null `valid_from` means the start of time.
+Two conditions make a record valid at time T. `valid_from` is null or at most T.
+`valid_until` is null or after T. A null `valid_from` means the start of time.
 
 ```mermaid
 flowchart LR
@@ -620,8 +621,9 @@ missing, because a later revision replaced it after T. A search over history doe
 yet.
 
 If the caller sets no `valid_from`, a `put` gives it the value of `observed_at`. If a fact
-has no `observed_at`, `capture` and `load` give it the `observed_at` of the call. So a fact from a document loaded with an old `observed_at` is valid from
-that time, and `recall` with an earlier `as_of` leaves it out.
+has no `observed_at`, `capture` and `load` give it the `observed_at` of the call. So a fact from
+a document loaded with an old `observed_at` is valid from that time, and `recall` with an
+earlier `as_of` leaves it out.
 
 ## Not observed
 

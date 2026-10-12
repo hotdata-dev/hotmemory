@@ -156,8 +156,6 @@ misses, the extractor did not store the answer. With 54 questions, each score ca
 
 - [docs/contracts.md](docs/contracts.md): the record, the storage operations, the memory
   operations, and the platform facts behind them.
-- [docs/architecture.md](docs/architecture.md): how each operation runs on the Hotdata
-  platform, from the call to the engine, the catalog, and object storage.
 - [docs/guarantees.md](docs/guarantees.md): each behavior that a consumer can rely on, its
   state, and its proof.
 - [docs/local.md](docs/local.md): how to run the library against a local RuntimeDB
@@ -167,5 +165,6 @@ misses, the extractor did not store the answer. With 54 questions, each score ca
 - [CONTRIBUTING.md](CONTRIBUTING.md): the one command that checks a change, and the rules
   of the test suite.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
-- [docs/internal/](docs/internal/brief.md): the design brief, the survey, the roadmap, and
-  the plan for the current phase.
+- [docs/internal/](docs/internal/brief.md): the design brief, the survey, the roadmap, the
+  plan for the current phase, and the architecture: how each operation runs on the Hotdata
+  platform.
