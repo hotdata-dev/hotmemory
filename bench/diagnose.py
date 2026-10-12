@@ -13,17 +13,18 @@ import argparse
 import json
 from collections import Counter
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from bench import prompts
 from bench.data import DATA_DIR, DATA_FILE, load
-from bench.e2e import ACTOR, RECALL_K, extractor, local_store
+from bench.e2e import ACTOR, RECALL_BUDGET, RECALL_K, extractor, local_store
 from bench.embed import CACHE_DIR
 from bench.models import JUDGE, CachedModels, Remote
 from bench.retrieval import RESULTS_DIR, _commit
-from hotmemory import Filter, Memory
-from hotmemory.contract import RECALLED_KINDS, is_valid_at
+from hotmemory import Filter, Memory, Record
+from hotmemory.contract import RECALLED_KINDS, fit_lines, is_valid_at, render_line
 
 SPEND_LIMIT = 1.0
 MARK = """A question about a user, its correct answer, and a numbered list of facts that a \
@@ -46,14 +47,31 @@ MARK_SCHEMA = {
 }
 
 
-def verdict(holding: Sequence[int], ranks: dict[str, int | None]) -> str:
-    """Return the cause of a miss from the facts that hold the answer and their best rank."""
+def block_ids(
+    ranked: Sequence[Record], as_of: datetime, k: int = RECALL_K, budget: int = RECALL_BUDGET
+) -> set[str]:
+    """Return the ids of the records that `Memory.recall` puts in its block.
+
+    The order is that of `recall`: the first `k` records of the ranking, then the ones
+    valid at `as_of`, then the lines that fit in `budget` characters.
+    """
+    valid = [record for record in ranked[:k] if is_valid_at(record, as_of)]
+    lines = [render_line(record) for record in valid]
+    return {record.id for record in valid[: fit_lines(lines, budget)]}
+
+
+def verdict(holding: set[str], best_rank: int | None, block: set[str]) -> str:
+    """Return the cause of a miss from the facts that hold the answer and the block.
+
+    `best_rank` is the best rank of those facts in the full ranking, before any filter.
+    """
     if not holding:
         return "not extracted"
-    best = ranks["fused"]
-    if best is None:
-        return "filtered by as_of"
-    return "recalled, reader missed" if best <= RECALL_K else "extracted, ranked below k"
+    if holding & block:
+        return "recalled, reader missed"
+    if best_rank is not None and best_rank <= RECALL_K:
+        return "in the top k, cut by as_of or the budget"
+    return "extracted, ranked below k"
 
 
 def main(argv: Sequence[str] | None = None) -> Path:
@@ -99,12 +117,14 @@ def main(argv: Sequence[str] | None = None) -> Path:
             marked = sorted({n for n in json.loads(reply.text)["facts"] if 1 <= n <= len(facts)})
             holding = {facts[n - 1].id for n in marked}
             ranks: dict[str, int | None] = {}
-            for name, ranking in (("fused", "fused"), ("vector", "vector")):
-                ranked = _search(store, ranking, question.question, namespace, len(facts))
-                kept = [r for r in ranked if is_valid_at(r, question.as_of)]
-                found = [n for n, r in enumerate(kept, start=1) if r.id in holding]
+            block: set[str] = set()
+            for name in ("fused", "vector"):
+                ranked = _search(store, name, question.question, namespace, len(facts))
+                found = [n for n, r in enumerate(ranked, start=1) if r.id in holding]
                 ranks[name] = found[0] if found else None
-            cause = verdict(marked, ranks)
+                if name == "fused":
+                    block = block_ids(ranked, question.as_of)
+            cause = verdict(holding, ranks["fused"], block)
             rows.append(
                 {
                     "id": question.id,
@@ -123,6 +143,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
         "config": {
             "source": str(args.result.relative_to(Path.cwd())),
             "recall_k": RECALL_K,
+            "recall_budget": RECALL_BUDGET,
             "marker": JUDGE,
             "hotmemory_commit": commit,
             "spent_usd": round(models.spent, 4),

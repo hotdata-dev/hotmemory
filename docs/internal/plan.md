@@ -194,6 +194,11 @@ change any of them in review.
 - The branch was rebased onto `main` after PR #12 merged. Each rebased commit has the same
   file tree as the commit that ran, so `hotmemory_commit` in each result file names the
   rebased commit.
+- After review, `bench/diagnose.py` ranks the way `recall` does: the top 30 of the full
+  ranking, then the `as_of` filter, then the budget. A fact counts as recalled only if it
+  stays in the block. The published split does not change, read from the code and the data
+  and not rerun. The extractor sets no `valid_until`, no session of the sample is after
+  its `as_of`, and the largest block was 4,974 characters against a budget of 8,000.
 - The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
   same commands. The offline tests of `bench/` are in `bench/tests/`.
 
