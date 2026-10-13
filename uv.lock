@@ -341,7 +341,7 @@ dev = [
 requires-dist = [
     { name = "hotdata-framework", marker = "extra == 'hotdata'", specifier = ">=0.14.1" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0" },
-    { name = "pyarrow", marker = "extra == 'hotdata'", specifier = ">=14.0" },
+    { name = "pyarrow", marker = "extra == 'hotdata'", specifier = ">=16.0" },
 ]
 provides-extras = ["hotdata", "openai"]
 

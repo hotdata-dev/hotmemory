@@ -8,10 +8,11 @@ Hotdata table, so an agent can join its memory to its own data in one SQL query.
 the memory systems that we surveyed stores memory as typed columns in the same engine as
 the data of the consumer.
 
-Status: version 0.0.0, not published. The storage contract exists in Python with two
-drivers. `MemoryStore` runs in process memory. `HotdataStore` keeps records in one Hotdata
-managed database. The memory contract, `Memory`, runs over either driver.
-[docs/internal/roadmap.md](docs/internal/roadmap.md) lists the phases.
+Status: alpha. A minor version before 1.0 can change a public surface, and [CHANGELOG.md]
+lists each change. The storage contract exists in Python with two drivers. `MemoryStore`
+runs in process memory. `HotdataStore` keeps records in one Hotdata managed database. The
+memory contract, `Memory`, runs over either driver. [docs/internal/roadmap.md] lists the
+phases.
 
 The library has two layers:
 
@@ -30,6 +31,21 @@ The library runs in the process of the consumer and calls the Hotdata API with t
 of the consumer. There is no hotmemory server. The first consumer is an incident
 investigator built on Hotdata. The library is not specific to it. A plain Python agent, a
 LangGraph agent, or any process with a Hotdata API key can use it.
+
+## Install
+
+hotmemory needs Python 3.11 or later. The core package has no dependencies:
+
+```sh
+pip install hotmemory
+```
+
+Each driver and embedder that calls a service is in an extra. The `hotdata` extra adds
+`HotdataStore`. The `openai` extra adds `OpenAIEmbedder`.
+
+```sh
+pip install "hotmemory[hotdata,openai]"
+```
 
 ## Try the storage contract
 
@@ -103,7 +119,7 @@ episode = memory.store.get(("team", "alerts"), "disk-incident-0001")
 print(episode.content.splitlines()[0])  # # Disk incident
 ```
 
-`skills/hotmemory/SKILL.md` gives an agent the same operations as commands.
+[skills/hotmemory/SKILL.md] gives an agent the same operations as commands.
 
 ## Store memory in Hotdata
 
@@ -125,14 +141,14 @@ store.put(("team", "alerts"), "disk", kind="fact", content="The disk fills at ni
 print([hit.record.id for hit in store.search("disk", [("team",)])])
 ```
 
-One process writes to a database. [docs/contracts.md](docs/contracts.md) gives the tables,
-the retrieval query, and the rules of the driver. [docs/local.md](docs/local.md) tells you
+One process writes to a database. [docs/contracts.md] gives the tables,
+the retrieval query, and the rules of the driver. [docs/local.md] tells you
 how to run it against a local engine.
 
 ## Benchmark
 
 hotmemory ran LongMemEval-S, a public benchmark of 500 questions over long chat histories,
-on 2026-10-10. [docs/benchmarks.md](docs/benchmarks.md) gives every number with its
+on 2026-10-10. [docs/benchmarks.md] gives every number with its
 configuration.
 
 On all 500 questions, on 2026-10-22, the memory arm scored 439 of 500 (87.8%). It ran
@@ -172,17 +188,28 @@ p50 with the vector ranking, and 998 ms with the fused ranking.
 
 ## Documents
 
-- [docs/contracts.md](docs/contracts.md): the record, the storage operations, the memory
+- [docs/contracts.md]: the record, the storage operations, the memory
   operations, and the platform facts behind them.
-- [docs/guarantees.md](docs/guarantees.md): each behavior that a consumer can rely on, its
+- [docs/guarantees.md]: each behavior that a consumer can rely on, its
   state, and its proof.
-- [docs/local.md](docs/local.md): how to run the library against a local RuntimeDB
+- [docs/local.md]: how to run the library against a local RuntimeDB
   container.
-- [docs/benchmarks.md](docs/benchmarks.md): the numbers of hotmemory on LongMemEval-S,
-  each with its configuration. [bench/README.md](bench/README.md) tells you how to run it.
-- [CONTRIBUTING.md](CONTRIBUTING.md): the one command that checks a change, and the rules
+- [docs/benchmarks.md]: the numbers of hotmemory on LongMemEval-S,
+  each with its configuration. [bench/README.md] tells you how to run it.
+- [CONTRIBUTING.md]: the one command that checks a change, and the rules
   of the test suite.
-- [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
-- [docs/internal/](docs/internal/brief.md): the design brief, the survey, the roadmap, the
+- [CHANGELOG.md]: each change to a public surface.
+- [docs/internal/][docs/internal/brief.md]: the design brief, the survey, the roadmap, the
   plan for the open workstream, the research that chose the benchmarks, and the
   architecture: how each operation runs on the Hotdata platform.
+
+[CHANGELOG.md]: https://github.com/hotdata-dev/hotmemory/blob/main/CHANGELOG.md
+[docs/internal/roadmap.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/internal/roadmap.md
+[docs/contracts.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/contracts.md
+[docs/local.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/local.md
+[docs/benchmarks.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/benchmarks.md
+[docs/guarantees.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/guarantees.md
+[bench/README.md]: https://github.com/hotdata-dev/hotmemory/blob/main/bench/README.md
+[CONTRIBUTING.md]: https://github.com/hotdata-dev/hotmemory/blob/main/CONTRIBUTING.md
+[docs/internal/brief.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/internal/brief.md
+[skills/hotmemory/SKILL.md]: https://github.com/hotdata-dev/hotmemory/blob/main/skills/hotmemory/SKILL.md

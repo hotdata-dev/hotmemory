@@ -8,6 +8,7 @@ rules, and points to the files that hold everything else.
 ```sh
 make verify       # the full check; run it before each commit
 make integration  # the hotdata tests and the conformance suite; needs make local-up
+make floor        # the offline tests at the lowest allowed dependency versions
 make local-up     # start the local RuntimeDB stack (Postgres, RustFS, engine)
 make local-down   # stop it and delete its data
 cp .env.template .env            # then fill in .env; it is ignored by git
@@ -28,6 +29,8 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 - [docs/internal/brief.md](docs/internal/brief.md): the design and its reasons.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the checks inside `make verify` and the test rules.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
+- [RELEASING.md](RELEASING.md): how to publish a version to PyPI. Only the repository owner
+  publishes.
 - `src/hotmemory/`: the library. `tests/test_conformance.py` is the conformance suite.
 - [docs/benchmarks.md](docs/benchmarks.md): the benchmark numbers and their configuration.
 - `bench/`: the LongMemEval-S runner, outside the package. [bench/README.md](bench/README.md)

@@ -1,9 +1,11 @@
-"""Fail when a relative Markdown link points at a file that does not exist.
+"""Fail when a Markdown link points at a repository file that does not exist.
 
-Checks every Markdown file at the repository root and under docs/. A link
-with a scheme (https:, mailto:) or a bare anchor is skipped. Links inside fenced
-code blocks and inline code spans are ignored. Prints one line per broken link
-and exits 1 when any is found.
+Checks every Markdown file at the repository root and under docs/, in inline
+links and in reference definitions. A relative link is resolved from the file
+that holds it. A link under REPO_URL is resolved from the repository root. Any
+other link with a scheme (https:, mailto:) or a bare anchor is skipped. Links
+inside fenced code blocks and inline code spans are ignored. Prints one line per
+broken link and exits 1 when any is found.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FENCE = re.compile(r"^\s*(```|~~~)")
 CODE_SPAN = re.compile(r"`[^`]*`")
 LINK = re.compile(r"!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+REFERENCE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?")
+REPO_URL = "https://github.com/hotdata-dev/hotmemory/blob/main/"
 SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 
@@ -37,16 +41,23 @@ def links(path: Path) -> list[tuple[int, str]]:
             continue
         for match in LINK.finditer(CODE_SPAN.sub("", line)):
             found.append((number, match.group(1)))
+        reference = REFERENCE.match(line)
+        if reference:
+            found.append((number, reference.group(1)))
     return found
 
 
 def broken(path: Path) -> list[str]:
     problems: list[str] = []
     for number, target in links(path):
-        if SCHEME.match(target) or target.startswith("#"):
+        if target.startswith(REPO_URL):
+            base, target = ROOT, target.removeprefix(REPO_URL)
+        elif SCHEME.match(target) or target.startswith("#"):
             continue
+        else:
+            base = path.parent
         file_part = target.split("#", 1)[0]
-        if not (path.parent / file_part).exists():
+        if not (base / file_part).exists():
             problems.append(f"{path.relative_to(ROOT)}:{number}: broken link {target}")
     return problems
 

@@ -5,7 +5,11 @@ names in `hotmemory.__all__`, the method set of `Store`, the fields and field ty
 `Record` for each schema version, and the filter keys of `list` and `search`. A test guards
 each one, and its failure message points to this file.
 
-## Unreleased
+New entries go under `## [Unreleased]`. A release moves them into a section named
+`## [X.Y.Z] - YYYY-MM-DD`, and that section becomes the notes of the GitHub Release.
+[RELEASING.md](RELEASING.md) gives the procedure.
+
+## [Unreleased]
 
 ### Added
 
@@ -37,6 +41,8 @@ each one, and its failure message points to this file.
 
 ### Changed
 
+- The `hotdata` extra needs `pyarrow` 16.0 or later. With `pyarrow` 14 and `numpy` 2,
+  `import pyarrow` fails.
 - `Store` gains `sweep`, which deletes every revision of each key whose current
   revision is past `forget_after`, and returns the deleted ids. `MemoryStore` and
   `HotdataStore` implement it.

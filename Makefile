@@ -3,7 +3,7 @@ export LOCAL_PORT ?= 3000
 
 STORAGE_URL := http://127.0.0.1:9000
 
-.PHONY: verify integration local-up local-down local-pull
+.PHONY: verify floor integration local-up local-down local-pull
 
 verify:
 	uv run --group dev ruff check .
@@ -11,6 +11,14 @@ verify:
 	uv run --group dev mypy
 	uv run --group dev pytest --disable-socket -q
 	uv run --no-project python scripts/check_links.py
+
+floor:
+	@requirements="$$(mktemp)"; \
+	uv pip compile pyproject.toml --all-extras --resolution lowest-direct \
+		--python-version 3.11 --quiet --output-file "$$requirements" && \
+	uv run --isolated --no-project --python 3.11 --with-requirements "$$requirements" \
+		--with-editable . --with pytest --with pytest-socket --with tiktoken \
+		pytest --disable-socket -q -p no:cacheprovider
 
 integration:
 	HOTMEMORY_TEST_URL=$${HOTMEMORY_TEST_URL:-http://localhost:$(LOCAL_PORT)} \
