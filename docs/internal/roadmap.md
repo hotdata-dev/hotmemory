@@ -1,6 +1,7 @@
 # Roadmap
 
-Every phase of the work, one paragraph each, with its status. This file changes when a
+Every phase of the work, one row each, with its status. Phases 0 to 5 were the first
+roadmap, which reached the basic memory layer on 2026-10-12. This file changes when a
 phase opens or closes, and not in between. The detail of the open phase lives in
 `plan.md`. The design and its reasons live in `brief.md`.
 
@@ -9,7 +10,7 @@ is listed under Deferred below with a reason. The next phase opens only then. Ea
 one pull request in each repository that it touches, and ends with the verification layer
 that proves it.
 
-## Phases
+## The first roadmap: the basic memory layer
 
 | Phase | Delivers | Status |
 |---|---|---|
@@ -19,12 +20,45 @@ that proves it.
 | 3. The memory contract | `Memory` with remember, recall, candidates, supersede, forget, profile, and capture, the rendered blocks pinned by tests, and the skill file with its command check. | closed 2026-10-08, PR #9 |
 | 4. The first consumer | A document loader in hotmemory. A post-mortem loader and a recall at investigation start in the consumer's own repository, proven by a replay case. Two pull requests, one in each repository. | closed 2026-10-10, PR #11 and the consumer's pull request |
 | 5. A public benchmark | A LongMemEval-S runner measuring retrieval recall at k first and end-to-end accuracy second, with the numbers in `docs/benchmarks.md`. | closed 2026-10-12, PR #14 |
-| 6. Adapters | A LangGraph `BaseStore` adapter in `hotdata-langchain`, then an MCP server. | planned, out of scope for version 1 |
+
+## The second workstream: memory accuracy
+
+Proposed on 2026-10-13. `plan.md` holds the tasks, the acceptance criteria, and the stop
+conditions of each phase. The library stays deterministic: no code in `src/hotmemory`
+calls a model. Latency is not a goal, and its work waits under Deferred.
+
+| Phase | Delivers | Status |
+|---|---|---|
+| 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | proposed |
+| 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | proposed |
+| 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | proposed |
+| 9. The ranking | An ablation of the fused ranking, and a default ranking chosen by the benchmark. | proposed |
+| 10. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
+| 11. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
+| 12. The full benchmark | The final configuration on all 500 LongMemEval-S questions, and a LoCoMo smoke test. | proposed |
+| 13. Release on PyPI | The release flow of the sibling repository `hotdata-langchain`, and the first release. | proposed |
 
 ## Deferred
 
-Nothing yet. An entry here names the issue, the phase it came from, and the reason it is
-not being taken up now.
+An entry here names the issue or the phase it came from, and the reason it is not being
+taken up now.
+
+- Adapters, planned as phase 6 of the first roadmap: a LangGraph `BaseStore` adapter in
+  `hotdata-langchain`, then an MCP server. They wait until the memory contract scores well
+  and is on PyPI.
+- Latency, from phase 5: native DML for writes, the filtered vector index search, a
+  conditional write for more than one writer, text loaded only for ranked rows, and the
+  time of each cloud request. The second workstream measures accuracy first.
+- Model calls, from the discussion of 2026-10-13: a model-backed extractor in an extra,
+  and decision calls with a probability, for example to decide a supersede or to route a
+  recall. The library stays deterministic in the second workstream.
+- The ideas of the hindsight study of 2026-10-09 that the second workstream does not
+  take, for later planning:
+  - A chunk-hash delta on re-capture.
+  - "No time" kept distinct from "omitted".
+  - Word and number checks on entity names.
+  - A forget that cascades to derived records.
+  - A parquet export.
 
 ## Closed phases
 
