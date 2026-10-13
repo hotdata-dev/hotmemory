@@ -67,10 +67,9 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
 - A frozen surface is compared against a literal set, never against the thing that it
   protects. A test that iterates over the protected thing turns a deletion into one test
   fewer and not into a failure.
-- Each row in the guarantees ledger names the conformance tests that prove it, or the phase
-  that will prove it. `tests/test_ledger.py` reads the ledger. A named test that the
-  conformance suite does not define makes it fail. A row with no test and no phase also
-  makes it fail.
+- Each row in the guarantees ledger names the tests that prove it, or the phase that will
+  prove it. `tests/test_ledger.py` reads the ledger. A named test that no file in `tests/`
+  defines makes it fail. A row with no test and no phase also makes it fail.
 - Tests marked `hotdata` run the Hotdata driver against a running engine, and the
   conformance suite runs against it as the `hotdata` driver. They need
   `HOTMEMORY_TEST_URL` to name the engine. Without it, they skip, so `make verify` stays

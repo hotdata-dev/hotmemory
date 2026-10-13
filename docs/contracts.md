@@ -51,7 +51,7 @@ API owns and loads from files. The facts below shape the contracts. A fact marke
 - The engine refuses a BM25 index or a plain vector index on an empty table. It allows
   one vector index per table. [measured, local, 2026-10-08]
 - A filtered search through a plain vector index returns only the rows that were in the
-  table when the index was built. The same search with no filter returns the later rows
+  table at the build of the index. The same search with no filter returns the later rows
   too. [measured, local, 2026-10-08]
 - `bm25_search` reads its query text as query syntax. Text such as `disk: full` or
   `(really` makes it refuse the query. [measured, local, 2026-10-08]
@@ -89,7 +89,7 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `key` | string | The stable identifier of the caller inside the namespace. A key is not empty and contains no `/` and no `@`. |
 | `revision` | integer | 1 for the first put under a key. Each later put adds 1. |
 | `kind` | string | One of `fact`, `profile`, `procedure`, `episode`. |
-| `subject` | string | What the record is about, for example an alert key, a person, or a service. Empty if unknown. |
+| `subject` | string | What the record is about, for example an alert key, a person, or a service. It is empty for an unknown subject. |
 | `content` | string | The text that a model reads. It is not empty after normalization. |
 | `cues` | tuple of strings | Questions or phrases that this record answers. Optional. The driver embeds them apart from `content`. |
 | `payload` | JSON object | Structured data that the consumer defines. The store never reads it. |
@@ -103,12 +103,12 @@ A record is the unit that the store holds. Schema version 1 fixes these fields.
 | `expired_at` | timestamp or null | When the store learned that the fact stopped being true. System clock. Null on a current record. |
 | `superseded_by` | string or null | The id of the revision that replaced this one. Null on the current revision. |
 | `forget_after` | timestamp or null | When a sweeper can delete the record. Null means keep. |
-| `forget_reason` | string | The reason for `forget_after`. Empty if `forget_after` is null. |
+| `forget_reason` | string | The reason for `forget_after`. If `forget_after` is null, it is empty. |
 | `id` | string | `namespace/key@revision`. Derived. The load key. |
 
 In Python, the record is a frozen dataclass. The list fields are tuples, so a record
-cannot change after the store writes it. The store copies `payload` when it writes a
-record and when it returns one, so a change to a dict that a caller holds never reaches the
+cannot change after the store writes it. The store copies `payload` at each write and at each
+return of a record. Thus a change to a dict that a caller holds never reaches the
 store. Every timestamp carries a time zone. The record
 refuses a value that the table above does not allow.
 
@@ -126,19 +126,19 @@ records the moment that the store found out. To ask what memory held on a given 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. If such a put brings a source that the current revision lacks, it writes a new revision whose `sources` are the current sources followed by the new ones, in order, without repeats. This rule compares content only. It does not apply when the current revision is past its `forget_after`, so a `put` of the same content brings the fact back as a new revision. A key holds episodes only, or holds no episode at all. A `put` that moves a key between `episode` and another kind raises an error. With `close_previous` and a current revision, the previous row also gets `valid_until` set to the new `valid_from`, and `expired_at` set to the clock's time, in the same write. The put raises an error and writes nothing if the new `valid_from` is missing or is earlier than the previous `valid_from`. |
-| `get` | namespace, key, optional revision | Returns the current revision, or the named revision. Returns None if the record does not exist. |
+| `put` | namespace, key, record fields | Writes a new revision. If the key exists, the new row gets the next revision, and the previous current row gets `superseded_by`. Returns the id. If the normalized content is equal to the content of the current revision, it writes nothing and returns the current id. Such a put can bring a source that the current revision lacks. Then it writes a new revision, whose `sources` are the current sources and then the new ones, in order, without repeats. This rule compares content only. It does not apply to a current revision past its `forget_after`. A `put` of the same content then brings the fact back as a new revision. A key holds episodes only, or holds no episode at all. A `put` that moves a key between `episode` and another kind raises an error. With `close_previous` and a current revision, the same write also closes the previous row. Its `valid_until` becomes the new `valid_from`, and its `expired_at` becomes the clock's time. If the new `valid_from` is missing or is earlier than the previous `valid_from`, the put raises an error and writes nothing. |
+| `get` | namespace, key, optional revision | Returns the current revision, or the named revision. If the record does not exist, it returns None. |
 | `history` | namespace, key | Returns every revision, oldest first. |
 | `list` | namespace prefix, optional filter, optional since, limit | Returns current revisions under the prefix, newest first, with ties in `created_at` ordered by id. `since` keeps the revisions whose `created_at` is at or after it. It uses no model and no embedding. |
 | `search` | query text or none, namespace prefixes, optional filter, k | Returns up to k current revisions in order of relevance, each with the cosine distance between the query and `content`. It takes the same filter as `list`. With no query text, it is `list`, and each distance is None. In `MemoryStore`, relevance is that distance, so the hits come closest first. The section on retrieval gives the order of `HotdataStore`. |
 | `delete` | namespace, key | Removes every revision of the key. This is a hard delete. |
 | `list_namespaces` | optional prefix | Returns the distinct namespaces under the prefix that hold a record, sorted. |
-| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes when the block exits, when it reaches the row count, and on the first `put` after the interval passes. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. If one put in a flush raises an error, the flush writes nothing. |
+| `writer` | optional row count, optional interval | A context manager. It buffers every `put` inside it. The buffer flushes at three times: at the exit of the block, at the row count, and on the first `put` after the interval. The writer records the ids that it flushed. If the block raises an error, the writer drops the buffer. If one put in a flush raises an error, the flush writes nothing. |
 | `sweep` | none | Deletes every revision of each key whose current revision is past its `forget_after` at the time of the clock. Returns the deleted ids, sorted. A key whose current revision is not past its `forget_after` keeps all of its revisions. |
 
 The filter accepts equality on `kind`, `subject`, `tags`, and `actor`. It accepts a range on
 `valid_from`, `valid_until`, `created_at`, and `expired_at`. Any other filter raises an
-error. In Python, the filter is a frozen dataclass with one optional field for each key, so
+error. In Python, the filter is a frozen dataclass with one optional field for each key. Thus
 an unknown key cannot be written, and a value of the wrong type raises an error.
 
 - A `kind` filter names one kind or a tuple of kinds. It matches a record of any kind
@@ -183,7 +183,7 @@ The `memory` table holds facts, profiles, and procedures. Its rows are small, re
 and searched often, and `profile` renders them. The `episode` table holds raw material: a
 thread, a document, or a post-mortem, cut into chunks. `load` cuts a Markdown document at
 its headings into chunks of at most a set size. It writes a new revision of an episode
-only when the text of its chunk changed. If a fact is not enough, a consumer searches the
+only for a chunk whose text changed. If a fact is not enough, a consumer searches the
 episodes with a `kind` filter. The `sources` of a fact name the ids of the episodes that
 it came from. Thus a consumer can go from a fact to its evidence in one join. Tabular data is
 never copied into either table. It stays in the tables of the consumer, and a fact points
@@ -196,8 +196,8 @@ layer exists to prevent. Small facts revise, supersede, and render into a profil
 this problem. Markdown is a good format for the `content` of an episode chunk.
 
 A cue is the question that a record answers. The extractor or the caller writes it at
-capture time. A query that resembles the question matches the cue, even when the
-query and the content share no words. Cues are optional, and retrieval on content alone
+capture time. A query that resembles the question matches the cue. This works also for a
+query that shares no words with the content. Cues are optional, and retrieval on content alone
 always works.
 
 ### HotdataStore
@@ -267,10 +267,10 @@ A filter without `episode` reads only `memory_v1`. With
 2. Each ranking keeps its top rows, to a depth of 100 rows, or 10 rows for each requested
    hit if that is more. The exact filters are the namespace labels, `superseded_by`,
    `forget_after`, and the `Filter`. The two vector rankings apply the filters first and
-   then rank every row that is left by a scan, so a narrow scope keeps its recall. They do
+   then rank every row that is left by a scan. Thus a narrow scope keeps its recall. They do
    not use the vector index, because a filtered search through the index misses rows
    loaded after its build. BM25 fetches its top rows from the whole table and then
-   applies the filters, so a narrow filter can leave BM25 with fewer rows than k.
+   applies the filters. Thus a narrow filter can leave BM25 with fewer rows than k.
 3. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking, and the query returns
    the k rows with the highest sum. Ties go to the smaller content distance, then to the
    newer row.
@@ -284,7 +284,7 @@ filtered scan of that is fast without an index. Measurement M5 found that the ve
 index saves engine time from about ten thousand rows. In the cloud, one request costs about
 400 ms at every size. That cost hides the saving up to at least one hundred thousand rows.
 [measured 2026-10-05] The fused query costs more than that. On LongMemEval-S in the cloud,
-a fused search took 998 ms at p50 and a vector search took 361 ms, with about 50 rows in
+a fused search took 998 ms at p50, and a vector search took 361 ms. About 50 rows were in
 scope. [measured 2026-10-10, [docs/benchmarks.md](benchmarks.md)] Whether the sorted index on `created_at` serves `list` and `sweep`
 was not observed.
 
@@ -295,14 +295,14 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 
 | Operation | Arguments | Behavior |
 |---|---|---|
-| `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer, so if one fact is refused, none is written. |
+| `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer. Thus one refused fact means that no fact is written. |
 | `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions of kind `fact`, `profile`, and `procedure` in the allowed scopes for the top k records. It never returns an episode. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
 | `candidates` | fact, scopes, k | Returns the top k hits of `search` for the content of the fact, sorted by distance, closest first. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
 | `supersede` | scope, key of the record to close, new fact, optional valid_from, actor | Closes the named record and writes the new fact as the next revision under its key, in one `put` with `close_previous`. The new `valid_from` is the argument, else that of the fact, else now. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the key has no current revision, or the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
 | `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
-| `profile` | subject, scopes, budget in characters | Returns the current records of kind `fact`, `profile`, and `procedure` for the subject, grouped by `kind`, as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
+| `profile` | subject, scopes, budget in characters | Returns the current records of kind `fact`, `profile`, and `procedure` for the subject, grouped by `kind`. It returns them as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
 | `capture` | text, scope, extractor, actor, observed_at | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. The extractor is a plain callable. The library ships no model and names no model. |
-| `load` | document, text, scope, extractor, actor, observed_at, chunk_chars | Cuts a Markdown document into chunks, and stores chunk n as a record of kind `episode` under the key `<document>-<n>`, with n from 1 in four digits. For each chunk, it calls the extractor as `capture` does, on the chunk with its heading prefix. Each fact gets the id of the episode of its chunk added to its `sources`. The facts of a chunk are written before its episode. A chunk whose episode is current with the same content is skipped, and the extractor is not called for it, so a second load of the same text writes nothing new. It returns the ids of the episodes and the ids of the facts that the extractor returned. The document must be a valid key. |
+| `load` | document, text, scope, extractor, actor, observed_at, chunk_chars | Cuts a Markdown document into chunks. It stores chunk n as a record of kind `episode` under the key `<document>-<n>`, with n from 1 in four digits. For each chunk, it calls the extractor as `capture` does, on the chunk with its heading prefix. Each fact gets the id of the episode of its chunk added to its `sources`. The facts of a chunk are written before its episode. A chunk whose episode is current with the same content is skipped, with no call to the extractor. Thus a second load of the same text writes nothing new. It returns the ids of the episodes and the ids of the facts that the extractor returned. The document must be a valid key. |
 
 The key of a fact has two parts joined by `-`. The first part is the subject, with each
 character outside `[A-Za-z0-9_-]` changed to `-`, cut to its first 64 characters. An empty
@@ -318,10 +318,10 @@ The block of `recall` has one line for each record, in the order of the search:
 Each run of whitespace in the content becomes one space, so a record is always one line.
 Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unknown`, a
 null `valid_until` as `now`, and a record with no sources as `none`. The block holds whole
-lines only, joined by newlines. It stops before the first line that would make it longer
-than the budget. The list holds the records of the block. The budget counts the characters of
+lines only, joined by newlines. It stops before the first line that does not fit
+in the budget. The list holds the records of the block. The budget counts the characters of
 the block in this line format, and its default is 2,000. A consumer that renders the
-records in its own format passes its own `budget` and `k`, so that the default does not
+records in its own format passes its own `budget` and `k`. Then the default does not
 cut the list first.
 
 The block of `profile` has a group for each kind that has records, in the order fact,
@@ -329,23 +329,23 @@ profile, procedure. A line `<kind>:` starts each group, and its records follow
 in the line format of `recall`, newest first. Then a line `namespaces:` starts the counts,
 with one line `- <namespace>: <count>` for each namespace under the scopes. The count is
 the number of current records of kind `fact`, `profile`, and `procedure` in that namespace
-exactly, read with `list` up to 1000
+exactly. It is read with `list`, up to 1000
 records. If `list` reached that limit, the count ends with `+`. `list` matches the
 namespace as a prefix, so the records of its sub-namespaces share the window of 1000. A
-count with `+` is a lower bound, and it can be far below the true count when a
-sub-namespace is large. The counts take the budget
+count with `+` is a lower bound. For a large sub-namespace, it can be far below the true
+count. The counts take the budget
 first, and the record lines fill what is left, by whole lines. A group line with no record
 after it is dropped.
 
 `load` cuts a document in four steps.
 
 1. It cuts the document into sections at each Markdown heading, a line that starts with
-   one to six `#` and a space. A line inside a fenced code block, which starts and ends
-   with three or more backticks or tildes, is never a heading, so a shell comment in a
+   one to six `#` and a space. A fenced code block starts and ends with three or more
+   backticks or tildes. A line inside it is never a heading, so a shell comment in a
    fence does not start a section.
 2. It keeps each section that fits in `chunk_chars` characters whole. It cuts a longer
-   section into blocks at blank lines outside fences, and keeps the heading with the
-   block after it when both fit. It cuts a block that does not fit at line ends. A pipe
+   section into blocks at blank lines outside fences. If a heading and the block after it
+   both fit, it keeps them together. It cuts a block that does not fit at line ends. A pipe
    table that is cut repeats its header row and delimiter row at the top of each later
    piece. A line longer than `chunk_chars` is cut at that size.
 3. It packs the pieces in order into chunks of at most `chunk_chars` characters, joined by
@@ -357,7 +357,7 @@ after it is dropped.
    not count the prefix.
 
 A fact with no `observed_at` gets the one passed to `load`. A fact with no `valid_from`
-then takes its `observed_at`, as every `put` does, so `recall` with an `as_of` before that
+then takes its `observed_at`, as every `put` does. Thus `recall` with an `as_of` before that
 time leaves the fact out.
 
 A document of blank lines gives no chunk, and `load` writes nothing. A chunk for which the
@@ -369,8 +369,8 @@ An episode is the evidence that a fact names in `sources`, so `recall` and `prof
 it out. A consumer reads an episode with `get`, or joins the two record tables in SQL. A
 namespace that holds only episodes shows a count of 0 in the block of `profile`.
 
-A record is valid at time T when `valid_from` is null or at most T, and `valid_until` is
-null or after T. A null `valid_from` means the start of time.
+Two conditions make a record valid at time T. `valid_from` is null or at most T, and
+`valid_until` is null or after T. A null `valid_from` means the start of time.
 
 The skill file `skills/hotmemory/SKILL.md` gives an agent each memory operation as a
 command. Each command is a script in `skills/hotmemory/scripts/`. With `--database`, a
