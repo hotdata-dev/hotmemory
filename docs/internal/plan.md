@@ -1,7 +1,7 @@
 # Plan: the second workstream, memory accuracy
 
-Status: proposed, 2026-10-13. The owner agrees to each decision before the first issue
-opens. This file holds the open workstream, phases 6 to 13. Each phase becomes one GitHub
+Status: agreed, 2026-10-13. The owner agreed to each decision and to the target on
+2026-10-13. Phase 6 is open, as issue #16. This file holds the open workstream, phases 6 to 13. Each phase becomes one GitHub
 issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
 git history, at commit `4a6fb36`.
@@ -12,7 +12,7 @@ When this workstream closes, the memory arm meets the target below, and hotmemor
 PyPI. The memory arm scored 19 of 54 on sample A (35.2 percent). The retrieval arm scored
 45 of 54.
 
-The target (proposed) is a distance from the lowest published score of a memory layer with
+The target (agreed) is a distance from the lowest published score of a memory layer with
 a GPT-4o reader: Zep at 71.2 percent (read, not reproduced). The published range goes up
 to 84.2 percent.
 
@@ -62,24 +62,24 @@ shape the phases below:
 
 ## Decisions
 
-Each item is proposed. The owner agrees or changes it before phase 6 opens.
+The owner agreed to each item on 2026-10-13.
 
-- Deterministic library (proposed). No model call enters `src/hotmemory`. A model-backed
+- Deterministic library (agreed). No model call enters `src/hotmemory`. A model-backed
   extractor in an extra, and decision calls such as a classifier for supersede, wait in
   Deferred until this workstream closes.
-- Two samples (proposed). Sample A is the committed sample of 54, seed `20261010`, in
+- Two samples (agreed). Sample A is the committed sample of 54, seed `20261010`, in
   `bench/sample.json`. Each phase iterates on sample A. Sample B is a second sample of 54,
   9 of each type, with a new fixed seed, and with no question of sample A. A phase runs
   sample B once, at its end, to check that a gain on A is not a fit to A.
-- What counts as a gain (proposed). One question moves an arm by 1.9 points on 54
+- What counts as a gain (agreed). One question moves an arm by 1.9 points on 54
   questions. Two conditions make a change count. Sample A and sample B move the same way.
   The diagnosis shows the targeted group of misses getting smaller. A phase reports every
   variant it tried, not only the best one.
-- Fixed models (proposed). The reader and the judge stay `gpt-4o-2024-08-06` at
+- Fixed models (agreed). The reader and the judge stay `gpt-4o-2024-08-06` at
   temperature 0, with the reference prompts. The baseline extractor stays
   `gpt-4o-mini-2024-07-18`. Phase 7 tries at most one other extractor model, chosen by the
   owner.
-- The full-context arm (proposed). It runs once on sample B, in phase 6, as the baseline
+- The full-context arm (agreed). It runs once on sample B, in phase 6, as the baseline
   of B. No later phase runs it again on 54 questions. It costs the most, at about 114,000
   tokens per question.
 - The cost limit (agreed in phase 5, kept). The runner prints an estimate and stops over
@@ -395,7 +395,6 @@ These wait, and `roadmap.md` lists them under Deferred:
 
 ## Questions for the owner
 
-- Agree or change each decision above.
 - Phase 7: name a second extractor model to try, or none.
 - Phase 8: agree the budgets to try, or change them from 8,000, 32,000, and 64,000
   characters.
