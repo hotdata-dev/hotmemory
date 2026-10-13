@@ -73,5 +73,6 @@ A closed phase keeps its row above with the date it closed and the pull request.
   plan for later phases in four ways. The extractor is the main loss of the memory
   contract: in 19 of its 35 misses, no stored fact held the answer. On this data the
   vector ranking scored higher than the fused ranking, and the reason was not measured.
-  BM25 lost nothing with every question in one table, so a BM25 ranking inside the scope
-  can wait. In the cloud, a fused search took 998 ms at p50 and a vector search 361 ms.
+  With every question in one table, the fused ranking scored higher at the top 5 and
+  slightly lower at the top 10. A BM25 ranking inside the scope can wait. In the cloud, a
+  fused search took 998 ms at p50 and a vector search 361 ms.

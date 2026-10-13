@@ -74,8 +74,9 @@ number on S compares with this table.
 A second run kept the episodes of all 419 questions in the same tables, 19,864 rows, and
 searched each question inside its own namespace. BM25 in the fused ranking takes its top
 rows from the whole table before the namespace filter applies, so this run tests that
-limit. On the local stack, the fused ranking did not lose. The vector ranking gave the
-same sessions in the same order in both runs. File:
+limit. On the local stack, the fused ranking scored higher at the top 5 and slightly lower
+at the top 10. At the top 10, 1 more question had no evidence session. The vector ranking
+gave the same sessions in the same order in both runs. File:
 `retrieval-hotdata-local-shared-fused-vector.json`.
 
 | Ranking | Tables hold | `recall_any@5` | `recall_all@5` | `recall_any@10` | `recall_all@10` | `ndcg_any@10` |
