@@ -16,7 +16,7 @@ import json
 import random
 import time
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -49,9 +49,8 @@ from bench.models import (
 from bench.retrieval import RESULTS_DIR, _commit
 from hotmemory import Fact, Filter, Memory, Record, Store
 
-SAMPLE_FILE = Path(__file__).resolve().parent / "sample.json"
+HERE = Path(__file__).resolve().parent
 PER_TYPE = 9
-SEED = 20261010
 ARMS = ("full", "retrieval", "memory")
 RETRIEVED = 10
 RECALL_K = 30
@@ -62,16 +61,53 @@ ACTOR = "longmemeval-extractor"
 Models = Callable[..., Reply]
 
 
+@dataclass(frozen=True)
+class Sample:
+    """A fixed sample of questions: its file, its seed, and the samples it leaves out."""
+
+    file: str
+    seed: int
+    excludes: tuple[str, ...] = ()
+
+
+SAMPLES = {
+    "a": Sample("bench/sample.json", 20261010),
+    "b": Sample("bench/sample-b.json", 20261013, excludes=("a",)),
+}
+
+
 def choose_sample(
-    questions: Sequence[Question], per_type: int = PER_TYPE, seed: int = SEED
+    questions: Sequence[Question],
+    per_type: int = PER_TYPE,
+    seed: int = SAMPLES["a"].seed,
+    exclude: Collection[str] = (),
 ) -> list[str]:
-    """Return `per_type` question ids of each type, drawn with `seed`, sorted by type and id."""
+    """Return `per_type` question ids of each type, drawn with `seed`, sorted by type and id.
+
+    The draw leaves out the ids in `exclude`.
+    """
     rng = random.Random(seed)
+    left_out = set(exclude)
     chosen = []
     for kind in QUESTION_TYPES:
-        ids = sorted(question.id for question in questions if question.type == kind)
+        ids = sorted(q.id for q in questions if q.type == kind and q.id not in left_out)
         chosen.extend(sorted(rng.sample(ids, per_type)))
     return chosen
+
+
+def sample_ids(name: str, questions: Sequence[Question], root: Path = HERE.parent) -> list[str]:
+    """Return the ids of the sample `name`, and write its file first if it does not exist.
+
+    The draw of a sample leaves out every id of the samples that it excludes.
+    """
+    sample = SAMPLES[name]
+    path = root / sample.file
+    if not path.exists():
+        exclude = {i for other in sample.excludes for i in sample_ids(other, questions, root)}
+        chosen = choose_sample(questions, seed=sample.seed, exclude=exclude)
+        path.write_text(json.dumps(chosen, indent=1) + "\n")
+    ids: list[str] = json.loads(path.read_text())
+    return ids
 
 
 def extractor(models: Models) -> Callable[[str, datetime | None, list[Record]], list[Fact]]:
@@ -252,6 +288,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     parser.add_argument(
         "--limit", type=int, default=None, help="the first N questions of the sample"
     )
+    parser.add_argument("--sample", choices=tuple(SAMPLES), default="a", help="the sample to run")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
     arms = tuple(arm for arm in args.arms.split(",") if arm)
@@ -259,11 +296,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error(f"arms must be among {', '.join(ARMS)}")
 
     all_questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
-    if not SAMPLE_FILE.exists():
-        SAMPLE_FILE.write_text(
-            json.dumps(choose_sample(list(all_questions.values())), indent=1) + "\n"
-        )
-    sample = json.loads(SAMPLE_FILE.read_text())
+    sample = sample_ids(args.sample, list(all_questions.values()))
     questions = [all_questions[question_id] for question_id in sample][: args.limit]
 
     tokens = embed.TiktokenTokens(encoding="o200k_base")
@@ -326,7 +359,13 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "data_file": DATA_FILE,
             "data_revision": DATA_REVISION,
             "data_sha256": DATA_SHA256,
-            "sample": {"file": "bench/sample.json", "per_type": PER_TYPE, "seed": SEED},
+            "sample": {
+                "name": args.sample,
+                "file": SAMPLES[args.sample].file,
+                "per_type": PER_TYPE,
+                "seed": SAMPLES[args.sample].seed,
+                "excludes": list(SAMPLES[args.sample].excludes),
+            },
             "reader": {
                 "model": READER,
                 "temperature": 0,
@@ -366,7 +405,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "questions": rows,
     }
     RESULTS_DIR.mkdir(exist_ok=True)
-    name = "e2e-sample" + (f"-first{args.limit}" if args.limit is not None else "")
+    name = f"e2e-sample-{args.sample}" + (f"-first{args.limit}" if args.limit is not None else "")
     path = RESULTS_DIR / f"{name}.json"
     path.write_text(json.dumps(result_file, indent=1) + "\n")
     for arm in arms:

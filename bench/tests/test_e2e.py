@@ -8,7 +8,7 @@ import pytest
 
 from bench import prompts
 from bench.data import QUESTION_TYPES, Question, load
-from bench.e2e import choose_sample, estimate, run_question, summarize
+from bench.e2e import SAMPLES, choose_sample, estimate, run_question, sample_ids, summarize
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Reply
 from hotmemory import MemoryStore
 from tests.conftest import FakeClock, fake_embedder
@@ -72,6 +72,23 @@ def test_choose_sample_is_fixed(questions: dict[str, Question]) -> None:
     assert first == choose_sample(pool, per_type=2, seed=1)
     assert len(first) == 12
     assert first != choose_sample(pool, per_type=2, seed=2)
+    other = choose_sample(pool, per_type=2, seed=1, exclude=first)
+    assert len(other) == 12
+    assert not set(other) & set(first)
+
+
+def test_sample_b_leaves_out_sample_a(questions: dict[str, Question], tmp_path: Path) -> None:
+    base = questions["q_one"]
+    pool = [
+        replace(base, id=f"{kind}-{n}", type=kind) for kind in QUESTION_TYPES for n in range(20)
+    ]
+    (tmp_path / "bench").mkdir()
+    a = sample_ids("a", pool, root=tmp_path)
+    b = sample_ids("b", pool, root=tmp_path)
+    assert len(a) == len(b) == 54
+    assert not set(a) & set(b)
+    assert json.loads((tmp_path / SAMPLES["b"].file).read_text()) == b
+    assert sample_ids("b", pool[:60], root=tmp_path) == b
 
 
 def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
