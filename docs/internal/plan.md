@@ -126,6 +126,26 @@ Stop and ask if:
 - The cached rerun of sample A does not reproduce the published numbers.
 - The estimate for sample B is over 50 dollars.
 
+Decisions taken during the work. The plan left these details open. The work took the
+defaults below, and the owner can change any of them in review.
+
+- Sample B uses the seed `20261013` and the draw rule of sample A, over the questions that
+  are not in sample A. It holds 4 abstention questions, and sample A holds 2 (observed).
+- One `Config` in `bench/e2e.py` holds the options of tasks 3 and 4, so the two tasks are
+  one commit. The memory arm uses one ranking for the search inside `capture` and for
+  `recall`. The options are `--retrieval-ranking`, `--memory-ranking`, `--recall-k`,
+  `--recall-budget`, `--extractor`, and `--tag`.
+- A result file is named `e2e-sample-<a or b>[-<tag>].json`. The phase 5 file
+  `e2e-sample.json` stays as the record of phase 5.
+- `--replay` runs the arms with a model stand-in that raises at the first reply that the
+  cache does not hold. The diagnosis replays `capture` the same way, in place of the stop
+  at 1 dollar of spend.
+- The diagnosis keeps the marker prompt of phase 5 unchanged, so the cache reproduces the
+  three groups. A second GPT-4o call splits the group "recalled, reader missed". It gets
+  the marked facts that are in the block. It tells whether they hold every value that the
+  answer needs ("all present") or not ("some present").
+- The diagnosis file is named after the result file, as `<result>-diagnosis.json`.
+
 ## Phase 7. The extractor
 
 Goal: the extractor stores the facts that the questions ask about. The target is the

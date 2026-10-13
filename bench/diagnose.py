@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 from collections import Counter
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -150,7 +151,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     replay = CachedModels(Offline(), CACHE_DIR / "replies.sqlite")
     marker = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
     rows: list[dict[str, Any]] = []
-    run_id = "diagnose-" + result["config"]["run_id"]
+    run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     with local_store(args.url, run_id) as (stores, empty):
         memory = Memory(stores[config.memory_ranking])
         extract = extractor(replay, config.variant)
