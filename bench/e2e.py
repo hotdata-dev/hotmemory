@@ -1,10 +1,12 @@
 """The end-to-end score: three arms on the sample, with one reader and one judge.
 
 Run it from the root of the repository. Without `--run`, it prints the cost estimate and
-stops:
+stops. With `--replay`, it calls no model, and it stops at the first reply that the cache
+does not hold:
 
     uv run --group bench --env-file .env python -m bench.e2e
     uv run --group bench --env-file .env python -m bench.e2e --run
+    uv run --group bench --env-file .env python -m bench.e2e --replay --arms memory
 
 It writes one JSON file into `bench/results/` with the configuration and the results.
 """
@@ -357,6 +359,9 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "--recall-budget", type=int, default=RECALL_BUDGET, help="characters of the memory block"
     )
     parser.add_argument("--extractor", choices=tuple(prompts.VARIANTS), default="baseline")
+    parser.add_argument(
+        "--replay", action="store_true", help="call no model: use cached replies, stop at a miss"
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
@@ -390,15 +395,15 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     if total > COST_LIMIT:
         print("the estimate is over the limit: stop")
         return None
-    if not args.run:
-        print("no model was called; pass --run to run")
+    if not args.run and not args.replay:
+        print("no model was called; pass --run to run, or --replay to run from the cache")
         return None
 
-    from bench.models import Remote
+    from bench.models import Offline, Remote
 
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
-    models = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
+    models = CachedModels(Offline() if args.replay else Remote(), CACHE_DIR / "replies.sqlite")
     embedder = embed.openai_embedder()
     rows: list[dict[str, Any]] = []
     clock_start = time.perf_counter()
@@ -488,6 +493,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             },
             "questions": len(questions),
             "estimate_usd": round(total, 2),
+            "replay": args.replay,
             "spent_usd": round(models.spent, 2),
             "model_calls": models.calls,
             "embedder_misses": embedder.misses,
