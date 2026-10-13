@@ -1,255 +1,402 @@
-# Plan: phase 5, a public benchmark
+# Plan: the second workstream, memory accuracy
 
-Status: agreed, 2026-10-10. This file
-holds the current phase only. The next phase replaces it. The phases themselves are in
-`roadmap.md`. Phase 4 closed with PR #11 and the consumer's pull request. `Memory.load`,
-the tuple `Filter.kind`, and the episode rule are on `main`.
+Status: proposed, 2026-10-13. The owner agrees to each decision before the first issue
+opens. This file holds the open workstream, phases 6 to 13. Each phase becomes one GitHub
+issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
+its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
+git history, at commit `4a6fb36`.
 
 ## Goal
 
-When this phase closes, hotmemory has its first public numbers on LongMemEval-S, a
-benchmark of 500 questions over long chat histories. The numbers come in two parts, in
-this order.
+When this workstream closes, the memory arm meets the target below, and hotmemory is on
+PyPI. The memory arm scored 19 of 54 on sample A (35.2 percent). The retrieval arm scored
+45 of 54.
 
-1. Retrieval recall at k. This score needs no model except the embedder. It compares the
-   sessions that hotmemory ranks for a question with the sessions that hold the answer.
-   It measures the store and the retrieval query alone.
-2. End-to-end accuracy on a sample of the questions. An extractor writes facts, `recall`
-   gives a block to a reader model, and a judge model grades the answer. The same sample
-   also runs without memory, so the number has a baseline next to it.
+The target (proposed) is a distance from the lowest published score of a memory layer with
+a GPT-4o reader: Zep at 71.2 percent (read, not reproduced). The published range goes up
+to 84.2 percent.
 
-`docs/benchmarks.md` holds the numbers. Each number has the configuration that produced
-it. The survey (section 2.8) names this run as the proof that hotmemory is a general
-memory and not only the feature of one consumer.
+| Level | Distance from 71.2 percent | Sample A and sample B | All 500 questions |
+|---|---|---|---|
+| Pass | At most 20 points | At least 28 of 54 on each | At least 51.2 percent |
+| Goal | At most 10 points | At least 33 of 54 on each | At least 61.2 percent |
+
+The workstream closes on the pass level, measured in phase 12 on all 500 questions. The
+sample counts guide the phases before it. A sample of 54 is uncertain by about 10 points,
+so the number on all 500 questions decides.
+
+The library stays deterministic. No code in `src/hotmemory` calls a model. The extractor
+and the embedder stay callables that the caller passes. The benchmark owns its extractor
+in `bench/`.
+
+Latency is not a goal of this workstream. Each phase records the time of its searches and
+writes, and does not try to reduce it. The roadmap lists the latency work under Deferred.
+
+## Where we start
+
+All numbers are from `docs/benchmarks.md`, observed on 2026-10-10.
+
+| Item | Value |
+|---|---|
+| Retrieval, vector ranking, 419 questions | `recall_any@5` 0.9833, `recall_all@10` 0.9928 |
+| Retrieval, fused ranking, 419 questions | `recall_any@5` 0.9690, `recall_all@10` 0.9570 |
+| Sample of 54, full context | 39 correct, 113,689 reader tokens at the median |
+| Sample of 54, retrieval arm, top 10 sessions | 45 correct, 29,878 reader tokens |
+| Sample of 54, memory arm | 19 correct, 1,462 reader tokens |
+| Memory misses, no stored fact held the answer | 19 of 35 |
+| Memory misses, stored but ranked below 30 | 2 of 35, both ranked higher by the vector ranking |
+| Memory misses, a needed fact was in the block | 14 of 35, an upper bound |
+
+Four facts about the memory arm, read from `bench/e2e.py` and `src/hotmemory/contract.py`,
+shape the phases below:
+
+1. The extractor is `bench/e2e.py:77`. It sends each session to `gpt-4o-mini-2024-07-18`
+   with the prompt in `bench/prompts.py`, and returns `Fact(kind="fact")` with a subject
+   and content only. The facts carry no `sources`.
+2. `capture` stores facts only. It does not store the session, so the memory arm keeps no
+   session text in the store.
+3. `remember` derives each key from the subject and a hash of the content. A changed value
+   gets a new key, so the old fact stays current beside the new one.
+4. `recall` searches the kinds `fact`, `profile`, and `procedure`, keeps k records, and
+   then applies `as_of` in the process. It never returns an episode.
 
 ## Decisions
 
-The owner agreed to all of these on 2026-10-10, and asked to keep the phase simple and
-stay with this plan.
+Each item is proposed. The owner agrees or changes it before phase 6 opens.
 
-- The benchmark (agreed). LongMemEval-S, from the cleaned data file of 2025-09, which is
-  under MIT. LoCoMo, MemoryBench, and DolphinBench wait, for the reasons in the research
-  notes of 2026-10-08. The roadmap lists them under Deferred.
-- The runner (agreed). The runner lives in `bench/` at the root of the repository,
-  outside the package. Its dependencies are in a `bench` dependency group, so the library
-  gains no runtime dependency. The data downloads to a folder that git ignores. Ruff and
-  mypy check `bench/`. Its offline tests use a small fixture in the shape of the data, and
-  `make verify` runs them, so it stays under five seconds. No benchmark run is in CI.
-- The retrieval score (agreed). One episode for each session, with the user turns of
-  that session as its content, as in the session-level retrieval of the reference code.
-  The episode key is the session id, with `-` for each character outside
-  `[A-Za-z0-9_-]`. The episode keeps the session id in `sources`. A search with
-  `Filter(kind="episode")` and k of 50 gives a ranked list of sessions. The runner scores
-  `recall_any@k`, `recall_all@k`, and `ndcg_any@k`, with the formulas of the reference
-  code. k is 1, 3, 5, 10, 30, and 50. It scores the questions that the reference code
-  scores: not the abstention questions, and not the questions with no evidence in a user
-  turn. The research notes count 419 such questions from the data. Task 3 counts them
-  again with the reference rules.
-- One question at a time (agreed). Each question gets its own namespace. The runner
-  loads its sessions, searches, and then deletes its rows before the next question. Thus
-  the tables hold one question at a time, as the reference code builds one index for each
-  question. This matters for the fused ranking. BM25 takes its top rows from the whole
-  table, and the scope filter applies after that. With 500 questions in one table, BM25
-  finds almost no row in the scope of one question. A second run keeps every question in
-  one table, and the report shows the difference as a known limit of the fused ranking.
-- The rankings and the drivers (agreed). The main numbers come from `HotdataStore` on
-  the local stack, for both `ranking="fused"` and `ranking="vector"`. `MemoryStore` runs
-  the first 20 questions with the same embedder. Its vector ranking must give the same
-  sessions in the same order as the vector ranking of `HotdataStore`. The oracle test
-  already asks this.
-- The embedder (agreed). `OpenAIEmbedder` with `text-embedding-3-small`, through a cache
-  on disk that git ignores. The cache key is the model name and the text, so a second run
-  calls no model, and the runs can be repeated.
-- Where it runs (agreed). The ingest and the scores run on the local stack. A separate
-  run of 20 questions on a cloud database measures the latency of `search` at p50, p95,
-  and p99. It reports the first call to a cold engine as its own number. The report names
-  the setup of every number, local or cloud.
-- The end-to-end sample (agreed). 9 questions of each of the 6 question types, 54 in all,
-  chosen with a fixed seed. The list of question ids is committed, so every arm and every
-  later run uses the same questions. A full run of 500 questions waits for the owner's yes,
-  because its cost is about ten times higher.
-- The end-to-end arms (agreed). Three arms run on the sample, with the same reader and
-  judge.
-  1. Full context: the reader gets every session of the question. This is the baseline
-     that the paper reports, about 60 percent with GPT-4o.
-  2. Retrieval: the reader gets the top sessions that the retrieval score ranks. This arm
-     needs no extractor.
-  3. Memory: an extractor runs `capture` on each session, in date order, and the reader
-     gets the block of `recall`.
-- The models (agreed). The reader is GPT-4o and the judge is `gpt-4o-2024-08-06` at
-  temperature 0, with the judge prompts of the reference code for each question type. Then
-  the numbers compare with the published GPT-4o numbers. The benchmark sets the judge: its
-  scoring script takes GPT-4o, GPT-4o mini, or a Llama model, and its README runs it with
-  GPT-4o. The benchmark leaves the reader to the caller, and its generation script runs
-  readers from GPT-4o to small open models. So GPT-4o as the reader is our choice, made so
-  that the numbers compare with the published ones. The extractor is Claude Haiku 4.5.
-  The runner reads `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from the environment. (Changed
-  during the work: see the extractor under "Decisions taken during the work".)
-- The time rules (agreed). The runner sorts the sessions of a question by date before it
-  loads them, because 211 haystacks are out of order. The session date becomes
-  `observed_at` in UTC. `recall` takes `as_of` at 23:59:59 on the date of the question,
-  because 76 questions have evidence later on the same day. These counts come from the
-  research notes and are not observed yet. Task 2 counts them again.
-- The cost limit (agreed). The runner prints an estimate before a paid run, and stops if
-  the estimate is over 50 dollars. The sample with the three arms is about 25 to 35
-  dollars by the research estimates. That estimate is not observed. By the same estimate,
-  the full-context arm is about half of it, because each of its 54 reads holds about
-  100,000 tokens.
+- Deterministic library (proposed). No model call enters `src/hotmemory`. A model-backed
+  extractor in an extra, and decision calls such as a classifier for supersede, wait in
+  Deferred until this workstream closes.
+- Two samples (proposed). Sample A is the committed sample of 54, seed `20261010`, in
+  `bench/sample.json`. Each phase iterates on sample A. Sample B is a second sample of 54,
+  9 of each type, with a new fixed seed, and with no question of sample A. A phase runs
+  sample B once, at its end, to check that a gain on A is not a fit to A.
+- What counts as a gain (proposed). One question moves an arm by 1.9 points on 54
+  questions. Two conditions make a change count. Sample A and sample B move the same way.
+  The diagnosis shows the targeted group of misses getting smaller. A phase reports every
+  variant it tried, not only the best one.
+- Fixed models (proposed). The reader and the judge stay `gpt-4o-2024-08-06` at
+  temperature 0, with the reference prompts. The baseline extractor stays
+  `gpt-4o-mini-2024-07-18`. Phase 7 tries at most one other extractor model, chosen by the
+  owner.
+- The full-context arm (proposed). It runs once on sample B, in phase 6, as the baseline
+  of B. No later phase runs it again on 54 questions. It costs the most, at about 114,000
+  tokens per question.
+- The cost limit (agreed in phase 5, kept). The runner prints an estimate and stops over
+  50 dollars. Each phase records what it spent.
+- The stack (kept). End-to-end runs use `HotdataStore` on the local stack. A phase that
+  changes a driver runs `make integration` and keeps the oracle test of `MemoryStore`
+  against `HotdataStore`.
+- Changes to a surface (kept). A change to a frozen surface updates `CHANGELOG.md`,
+  `docs/contracts.md`, and `docs/guarantees.md` in the same commit, and `MemoryStore` gets
+  the same behavior as `HotdataStore`.
 
-## Tasks
+## Phase 6. The accuracy loop
 
-Worked in order on one branch, in one pull request.
+Goal: one command runs a variant of the memory arm on a sample, and one command explains
+its misses. Every later phase uses these two commands.
 
-1. Close phase 4 in `roadmap.md` and replace `plan.md` with the phase 5 plan.
-2. `bench/`: the dependency group, the data download and its checks, the sort by date, the
-   time rules, the session ids in keys and sources, and the embedder cache. Offline tests
-   on a small fixture.
-3. The retrieval metrics, ported from the reference code, with offline tests that compare
-   them with values worked by hand.
-4. The retrieval runner on the local stack: one question at a time, both rankings, all
-   scored questions. Then the run with every question in one table.
-5. The driver check: the first 20 questions on `MemoryStore` and on `HotdataStore`, with
-   the vector ranking.
-6. The cloud latency run of 20 questions.
-7. The end-to-end runner: the extractor, the reader, the judge, the three arms, and the
-   cost limit. Then the run on the sample of 54.
-8. `docs/benchmarks.md` with every number and its configuration, a link from the README,
-   and the docs audit.
+Tasks:
 
-## Decisions taken during the work
+1. Mark phase 6 open in `roadmap.md`.
+2. `bench/e2e.py` takes `--sample a|b`. Sample B is drawn with a new fixed seed, has no
+   question of sample A, and its ids are committed as `bench/sample-b.json`.
+3. The memory arm takes its configuration from the command line and writes it into the
+   result file: the ranking of the store, `k`, `budget`, and a name for the extractor
+   variant. The extractor variant names a prompt and a model in `bench/prompts.py`.
+4. The retrieval arm takes the ranking from the command line too. Today it is fixed to
+   fused.
+5. `bench/diagnose.py` runs on any result file of the memory arm. It prints the three
+   groups of misses for each question type. It splits the group "a needed fact was in the
+   block" in two. The marker tells whether the block holds every needed fact ("all
+   present") or only some of them ("some present").
+6. Rerun the memory arm on sample A from the caches. It must give 19 of 54 at no model
+   cost. If it does not, stop.
+7. Run all three arms on sample B. This is the baseline of B.
+8. Record both baselines in `docs/benchmarks.md`, with their configuration.
 
-The plan left these details open. The work took the defaults below, and the owner can
-change any of them in review.
+Acceptance criteria:
 
-- The data file is pinned to revision `98d7416c` of the dataset on Hugging Face, with the
-  SHA-256 `d6f21ea9...a3c442`. The runner downloads it with the standard library, so the
-  `bench` group needs no Hugging Face package. Each load checks the hash.
-- Task 2 counted the data again with the loader (observed): 500 questions, 419 scored,
-  211 haystacks out of date order, and 76 questions with a session later on the day of
-  the question, by up to 23.7 hours. In 43 of the 76, that late session is evidence by
-  the rule below. The research notes said 75 of 76, and that count is wrong.
-- A session is evidence by the rule of the reference code: its id holds `answer`, and a
-  user turn has the answer. In 32 scored questions, `answer_session_ids` also names a
-  session with no such user turn. The reference code renames those sessions to `noans`
-  and does not count them, and the runner does the same.
-- 13 haystacks repeat a session id, always with the same content, and never as evidence.
-  The runner stores one episode with the first date. 71 sessions have no user text, and
-  none is evidence. The runner stores no episode for them, because a record needs
-  content.
-- Four distinct session texts are longer than 8,191 tokens, the input limit of the
-  embedder, and none is evidence. The embedder cuts each text to 8,191 tokens of
-  `cl100k_base` before it embeds it. BM25 still reads the whole text. The cache key is the
-  model and the cut text, and the cache keeps 32-bit vectors in a SQLite file.
-- An episode has the source `session:<id>`, and the namespace of a question is
-  `("bench", "lme_s", <run>, <question id>)`.
-- The metrics take a ranked list of session ids and the set of evidence ids. The ideal
-  ranking of `ndcg_any@k` puts every evidence id first, as the reference code does when
-  it sorts the relevance of the whole haystack. A check outside the repository ran the
-  reference `evaluate_retrieval` and the port on 2,000 random rankings, and the largest
-  difference was 2.2e-16 (observed).
-- The extractor is `gpt-4o-mini-2024-07-18` and not Claude Haiku 4.5. The owner chose
-  this on 2026-10-10, because no Anthropic key is available. LongMemEval has no extractor,
-  so the benchmark sets nothing here. The reader and the judge stay `gpt-4o-2024-08-06`.
-  The chat calls read their key from `OPENAI_MODEL_KEY`, and the embedder keeps
-  `OPENAI_API_KEY`. The `bench` group needs no Anthropic package.
-- Git ignores `bench/results/`, and `docs/benchmarks.md` records the reported numbers. A
-  retrieval file is about 2.2 MB, because it keeps the 50 ranked sessions of each
-  question. The owner chose this on 2026-10-12.
-- Task 4 (observed, local stack): the shared-table run did not show the loss that the plan
-  expected. With 19,864 episodes in one table, the fused ranking scored `recall_any@5`
-  0.9761, against 0.9690 with one question at a time. The vector ranking gave the same
-  sessions in the same order in both runs. On this data the vector ranking scores higher
-  than the fused ranking, for example `recall_all@5` 0.9475 against 0.9045.
-- Task 5 (observed): on the first 20 scored questions, `MemoryStore` and `HotdataStore`
-  ranked the same sessions in the same order, with distances within 1.0e-6.
-- Task 6 (observed, cloud, 20 questions, run by the owner): search p50 998 ms fused and
-  361 ms vector. With 19 searches after the first, p95 and p99 are both the slowest search,
-  so the report gives the highest value and does not name it p99. The first request of the
-  run took 17.7 s, and the report names it the first request, because the file does not
-  prove that the engine was cold. The rankings equal those of the local run. No write
-  needed a retry.
-- The end-to-end runner takes these defaults. The sample comes from all 500 questions with
-  the seed 20261010, so 2 of the 54 are abstention questions. The retrieval arm gives the
-  reader the top 10 sessions of the fused search, with both roles. The memory arm recalls
-  with k of 30 and a budget of 8,000 characters. The full arm gives every session, where the
-  reference code keeps the last 50. The reader prompt is the reference prompt with chain of
-  thought and the JSON history. The memory arm uses the reference prompt for extracted
-  facts. The extractor prompt is new, in `bench/prompts.py`. Each reply is cached on disk.
-- Task 7 (observed, local stack, the sample of 54): full context 39/54 (0.722), retrieval
-  45/54 (0.833), memory 19/54 (0.352). The run spent $20.95 against an estimate of $24.33,
-  in 2,802 model calls. Each recalled block was 4,039 to 5,272 characters, so k of 30
-  bounded it and not the budget.
-- The diagnosis of the 35 memory misses (`bench/diagnose.py`, observed) replays `capture`
-  from the cached replies, and GPT-4o marks the stored facts that state the answer or a
-  value that it needs. 19 misses had no such fact: the extractor did not write it. 2 had
-  it ranked below the top 30, and the vector ranking ranked it higher in both. 14 had at
-  least one marked fact in the top 30. That last count is an upper bound, because a
-  multi-session question needs several facts and the marker accepts one, and a few marks
-  are loose. A first pass with gpt-4o-mini as the marker counted facts on the same topic,
-  and its result was discarded.
-- Task 8: `docs/contracts.md` said that a cloud request costs about 400 ms at every size,
-  from simple queries in phase 0. It now adds the benchmark numbers: a fused search took
-  998 ms at p50 in the cloud, and a vector search 361 ms. No behavior and no frozen surface
-  changed in this phase, so `docs/guarantees.md` and `CHANGELOG.md` do not change.
-- The branch was rebased onto `main` after PR #12 merged. Each rebased commit has the same
-  file tree as the commit that ran, so `hotmemory_commit` in each result file names the
-  rebased commit.
-- After review, `bench/diagnose.py` ranks the way `recall` does: a search with k of 30,
-  then the `as_of` filter, then the budget. The fused query fetches a depth that depends
-  on k, so the block comes from its own search, and the best rank from a search over every
-  fact. A fact counts as recalled only if it
-  stays in the block. The published split does not change, read from the code and the data
-  and not rerun. The extractor sets no `valid_until`, no session of the sample is after
-  its `as_of`, and the largest block was 5,272 characters against a budget of 8,000.
-- The `dev` group includes the `bench` group, so `make verify` checks `bench/` with the
-  same commands. The offline tests of `bench/` are in `bench/tests/`.
+- `make verify` passes, with offline tests for the new options and for the sample draw.
+- The rerun of sample A from the caches reproduces 19 of 54 and the 19, 2, and 14 split.
+- `docs/benchmarks.md` reports the baseline of sample B for each arm and each type.
 
-## Acceptance criteria
+Stop and ask if:
 
-- AC1. `make verify` passes offline in under five seconds, with the offline tests of
-  `bench/`.
-- AC2. One command runs the retrieval score on the local stack, and `docs/benchmarks.md`
-  reports `recall_any@k`, `recall_all@k`, and `ndcg_any@k` for every scored question, for
-  both rankings.
-- AC3. On the first 20 questions, the vector ranking of `MemoryStore` and of
-  `HotdataStore` give the same sessions in the same order.
-- AC4. `docs/benchmarks.md` reports the accuracy of the three arms on the same 54
-  questions, for each question type and in total, with the reader, the judge, and the
-  extractor named.
-- AC5. Every number in `docs/benchmarks.md` was observed in this phase, and its line names
-  the configuration: the data file hash, the models, the embedder, k, the budget, the
-  driver, and local or cloud.
-- AC6. No public text names a private repository, a customer, or a deployment detail. A
-  grep for the known names proves it over the files, the commit messages, the pull
-  request, and the issue.
+- The cached rerun of sample A does not reproduce the published numbers.
+- The estimate for sample B is over 50 dollars.
+
+## Phase 7. The extractor
+
+Goal: the extractor stores the facts that the questions ask about. The target is the
+group of 19 misses where no stored fact held the answer.
+
+The library does not change in this phase. All work is in `bench/`.
+
+Tasks:
+
+1. Read the 19 misses of sample A with their sessions, and list what the extractor
+   dropped in each. Phase 5 found that it kept the interest of the user and dropped what
+   the assistant said: a number, a name, or an item of a list. Make sure that the data
+   agrees with this before you change the prompt.
+2. Look for three faults in the extractor replies:
+   - A reply that reached the limit of 4,000 output tokens.
+   - A reply that failed to parse.
+   - A fact that the extractor left out because a near fact was in "Facts already in
+     memory".
+3. Write a new prompt variant with these rules:
+   - If the user can ask later about what the assistant said, keep it.
+   - Keep each item of a list as its own fact.
+   - Write each date as an absolute date.
+   - Keep names and numbers exactly.
+
+   Each variant gets a name, and the old prompt stays as the baseline variant.
+4. Each fact carries the source `session:<id>`, as each episode of the retrieval arm
+   does. This prepares phase 8, and it lets the diagnosis name the session of a fact.
+5. Run each variant on sample A, from the session cache where the prompt did not change.
+   Report accuracy, the diagnosis, the facts written per session, and the cost.
+6. If the owner names one other extractor model, try it with the best prompt.
+7. Run the best variant once on sample B.
+8. Record the variants and the result in `docs/benchmarks.md`.
+
+Acceptance criteria:
+
+- The group "no stored fact held the answer" is smaller on sample A and on sample B than
+  in their baselines.
+- `docs/benchmarks.md` reports every variant tried, with its prompt name, model, and cost.
+
+Stop and ask if:
+
+- No variant reduces the group of 19 by at least a third on sample A.
+- A variant needs a field that `Fact` does not have.
+- A variant writes more than three times the facts of the baseline. The block then fills
+  faster, and the owner decides the trade.
+
+## Phase 8. Episodes behind facts
+
+Goal: `recall` can give the reader the source text of its facts. The retrieval arm shows
+that whole sessions answer 45 of 54. This phase lets the memory contract use them, within
+a budget.
+
+This phase changes the library.
+
+Tasks:
+
+1. Propose the surface in `docs/contracts.md` and stop for the owner's agreement. The
+   proposal below is a starting point:
+   - `capture` takes an optional `episode` key. With it, `capture` stores the text as an
+     episode under that key, and adds the episode id to the `sources` of each fact. This
+     is what `load` does for each chunk, applied to one text.
+   - `recall` takes an optional `episodes` argument with three values: none (today), the
+     episodes that the recalled facts cite, or the episodes that a search over episodes
+     ranks first. The block gives the facts first, then the episodes, each with its date.
+     One `budget` covers both, and the facts never lose their place to an episode.
+2. Build the agreed surface in `Memory`, for both drivers. The conformance suite, the
+   ledger in `docs/guarantees.md`, the skill commands, and `CHANGELOG.md` follow.
+3. The memory arm captures each session with an episode key. Then it recalls with each
+   `episodes` value, at three budgets: 8,000, 32,000, and 64,000 characters.
+4. Report accuracy against reader tokens for each value on sample A, then the best one
+   on sample B.
+
+Acceptance criteria:
+
+- `MemoryStore` and `HotdataStore` return the same block for the same calls, in the
+  conformance suite.
+- A capture with an episode writes the episode and the facts in one flush per table, and
+  a retried capture writes nothing new.
+- `docs/benchmarks.md` reports accuracy and reader tokens for each value and budget.
+
+Stop and ask if:
+
+- The surface needs a new `Store` method or a new record field.
+- The best value needs more reader tokens than the retrieval arm, 29,878 at the median.
+  Then memory costs as much as retrieval, and the owner decides whether the trade holds.
+
+## Phase 9. The ranking
+
+Goal: the default ranking of `HotdataStore` is the one that scores best, and the reason
+for the gap between the two rankings is known.
+
+Tasks:
+
+1. Explain the gap on the 419 retrieval questions, with no reader model. Run the fused
+   query with one arm left out at a time: BM25 and content, content and cue, and BM25
+   alone. Episodes have no cues, so in the retrieval run the cue arm adds nothing. Find
+   which arm costs the most and on which question types.
+2. Run the memory arm on sample A with each ranking, with the best configuration of
+   phases 7 and 8.
+3. Propose the default to the owner: the vector ranking, or a rebuilt fusion. A rebuilt
+   fusion can rank BM25 inside the scope, or fuse two arms with no weights. Stop for the
+   agreement.
+4. Build the agreed change, with `CHANGELOG.md`, `docs/contracts.md`, and
+   `docs/guarantees.md`. If the default changes, the oracle test and the benchmark runner
+   follow.
+5. Run the agreed ranking on sample B, and rerun the retrieval score on all 419 questions.
+
+Acceptance criteria:
+
+- `docs/benchmarks.md` reports the ablation of task 1 and the retrieval score of the
+  agreed ranking.
+- The search inside `capture` uses the same ranking as `recall`, and a test proves it.
+
+Stop and ask if:
+
+- The ablation shows that the gap comes from the data and not from an arm, for example
+  that BM25 favors a long session.
+
+## Phase 10. Supersede in capture
+
+Goal: when a session changes a fact, the old fact closes, so the reader sees one current
+value. Today a changed value gets a new key, and both values stay current.
+
+The library decides nothing by itself. The extractor decides which fact a new fact
+replaces, and the library applies that decision with the rules of `supersede`.
+
+Tasks:
+
+1. Propose the surface in `docs/contracts.md` and stop for the owner's agreement. The
+   proposal below is a starting point:
+   - `Fact` gains `replaces`, the key of a current record in the same scope. `remember`
+     writes such a fact as the next revision under that key, with `close_previous`, at
+     the `valid_from` of the fact. A key that is not current raises `ValueError`, and the
+     batch writes nothing.
+   - The extractor gets the keys of the current records that `capture` passes to it.
+     `capture` can also pass the `candidates` of each extracted fact, but that needs a
+     second extractor call, so it waits for the owner.
+2. Build the agreed surface for both drivers, with conformance tests that use a fixed
+   extractor and no model: a changed value, a value that changes twice in one capture, a
+   `replaces` that names a closed record, and a retried capture.
+3. The benchmark extractor prompt gets the keys, and it can set `replaces`.
+4. Report the knowledge-update type on both samples, and count the facts closed per
+   question. A working supersede still moves the benchmark little. The judge
+   of LongMemEval accepts an answer that gives both the old value and the new one.
+5. Add a small offline test set of update pairs to `bench/`, written by hand from
+   knowledge-update sessions. It checks that the extractor sets `replaces` where a value
+   changed, with the cached extractor replies.
+
+Acceptance criteria:
+
+- A changed value leaves one current record and one closed record with `valid_until` and
+  `expired_at`, in both drivers.
+- `recall` with `as_of` before the change returns the old value only after phase 11.
+  This phase states that limit in `docs/contracts.md`.
+
+Stop and ask if:
+
+- The extractor sets `replaces` on records that did not change in more than one case of
+  ten in the offline test set.
+
+## Phase 11. Search over history
+
+Goal: `recall(as_of=T)` returns what was true at T, including a fact that a later
+revision replaced. Today it reads current revisions only, and it applies `as_of` after
+it keeps k records.
+
+Tasks:
+
+1. Write the rule in `docs/contracts.md` and stop for the owner's agreement. The rule
+   picks, for each key, the revision valid at T. A revision closed without
+   `close_previous` has no `valid_until`. The rule needs a second test for such a
+   revision, for example the `created_at` of the next revision. The proposal names that
+   test.
+2. Move the as-of filter into the SQL of both rankings, so that k counts records valid at
+   T. `MemoryStore` gets the same order.
+3. Add a caller-supplied date window to `recall` that filters records by their validity,
+   with no date parsing in the library.
+4. Conformance tests for each case of the rule, on both drivers, and the oracle test.
+5. Report temporal-reasoning and knowledge-update on both samples. Every session of a
+   LongMemEval question comes before the question, so this phase is expected to move the
+   benchmark little. Its proof is the conformance suite and the replay case of the first
+   consumer.
+
+Acceptance criteria:
+
+- A fact replaced after T is in the block of `recall(as_of=T)`, and a fact replaced
+  before T is not, in both drivers.
+- If at least k records are valid at T, the search with `as_of` returns k records.
+
+Stop and ask if:
+
+- The rule needs a new record field or a new `Store` method.
+- The as-of filter in SQL makes a local search slower than twice its time without the
+  filter.
+
+## Phase 12. The full benchmark and a second benchmark
+
+Goal: the final configuration has numbers on all 500 questions, and on a second
+benchmark.
+
+Tasks:
+
+1. Run the retrieval arm and the memory arm on all 500 questions, with the configuration that
+   phases 7 to 11 agreed. Print the estimate first. The run needs the owner's yes, because
+   it costs about ten times a sample run.
+2. Add a LoCoMo runner to `bench/`, as a smoke test of 10 conversations and 1,540
+   questions. Its labels have known errors, which the research notes list. The report
+   states this.
+3. Update `docs/benchmarks.md` and the README section "Benchmark", with the configuration
+   of each number.
+
+Acceptance criteria:
+
+- `docs/benchmarks.md` reports both benchmarks, each number with its configuration, and
+  the phase 5 numbers stay as the record of their configuration.
+- On all 500 questions, the memory arm scores at least 51.2 percent, the pass level of
+  the goal. The report states whether it reaches the goal level of 61.2 percent.
+
+Stop and ask if:
+
+- An estimate is over 50 dollars. The full run needs the owner's yes either way.
+- The memory arm scores below the pass level on all 500 questions. The owner then decides
+  whether the workstream closes or gets another phase.
+
+## Phase 13. Release on PyPI
+
+Goal: `pip install hotmemory` installs the first release.
+
+Tasks:
+
+1. Copy the release flow of the sibling repository `hotdata-langchain`:
+   - `RELEASING.md`, and `scripts/release.sh` with `prepare` and `publish`.
+   - A workflow that publishes on a `vX.Y.Z` tag through PyPI trusted publishing.
+   - A workflow that writes the GitHub Release from `CHANGELOG.md`.
+   - A check that refuses a version change without a matching changelog section.
+2. Check the wheel and the sdist: no `bench/`, no tests, no `.env`, and no
+   `docs/internal/`. Make the README links absolute, so that they work on PyPI.
+3. The owner configures trusted publishing on PyPI, creates the `pypi` environment on
+   GitHub, picks the version, and runs the publish.
+
+Acceptance criteria:
+
+- A clean environment installs the release with each extra, and the examples of the
+  README run.
+
+## Not in this workstream
+
+These wait, and `roadmap.md` lists them under Deferred:
+
+- Latency: native DML for writes, the filtered vector index, a conditional write, text
+  loaded only for ranked rows, and the per-request time of the cloud.
+- A model-backed extractor in an extra, and decision calls with a probability, such as a
+  classifier that decides supersede or routes a recall.
+- The other ideas from the hindsight study of 2026-10-09: a chunk-hash delta on
+  re-capture, "no time" distinct from "omitted", word and number checks on entity names,
+  forget cascading to derived records, and a parquet export.
+- Adapters: a LangGraph `BaseStore` adapter and an MCP server.
 
 ## Verification
 
 - Per commit: `make verify`.
 - Per commit that touches a driver: `make local-up`, then `make integration`.
-- Each run writes its configuration and its results to one JSON file. The numbers in
-  `docs/benchmarks.md` come from those files.
-- Before the pull request: the docs audit of the `pr-workflow` skill, and the grep for
-  AC6.
+- Each benchmark run writes its configuration and results to one file in `bench/results/`.
+  The numbers in `docs/benchmarks.md` come from those files.
+- Before each pull request: the docs audit of the `pr-workflow` skill, and a search of the
+  diff for the names of private repositories and deployment details.
 
-## Questions left open
+## Questions for the owner
 
-- A search over history, so that `recall(as_of=T)` can return a fact superseded after T.
-  Some temporal questions ask for a value before it changed. The report shows the score of
-  each question type, so the cost of this gap becomes visible.
-- After the engine fixes the filtered vector index search: let the vector rankings use
-  the index again, and measure the gain.
-- BM25 in a narrow scope. If the shared-table run shows a large loss, a later phase can
-  rank BM25 inside the scope.
-- An exact count for each namespace in the block of `profile`.
-- The ideas from the study of another memory layer on 2026-10-09 wait until this roadmap
-  reaches its basic memory layer.
-
-## Stop and ask if
-
-- A benchmark needs a field that the record does not have, or a new `Store` method.
-- The ingest of the local run takes more than two hours.
-- The cost estimate of a paid run is over 50 dollars.
-- The retrieval score of the two drivers differs on the first 20 questions.
-- The reference code and the research notes disagree on the scored questions or on a
-  formula.
+- Agree or change each decision above.
+- Phase 7: name a second extractor model to try, or none.
+- Phase 8: agree the budgets to try, or change them from 8,000, 32,000, and 64,000
+  characters.
+- Phase 13: the first version number, and whether to publish to TestPyPI first.

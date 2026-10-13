@@ -18,8 +18,8 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 
 ## Where things are
 
-- [docs/internal/plan.md](docs/internal/plan.md): the current phase, its tasks, and its stop
-  conditions.
+- [docs/internal/plan.md](docs/internal/plan.md): the open workstream, the tasks of each phase,
+  and its stop conditions.
 - [docs/internal/roadmap.md](docs/internal/roadmap.md): every phase and its status.
 - [docs/contracts.md](docs/contracts.md): the record and the operations.
 - [docs/guarantees.md](docs/guarantees.md): what a consumer can rely on, and the proof.

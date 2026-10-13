@@ -166,5 +166,5 @@ misses, the extractor did not store the answer. With 54 questions, each score ca
   of the test suite.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
 - [docs/internal/](docs/internal/brief.md): the design brief, the survey, the roadmap, the
-  plan for the current phase, and the architecture: how each operation runs on the Hotdata
-  platform.
+  plan for the open workstream, the research that chose the benchmarks, and the
+  architecture: how each operation runs on the Hotdata platform.
