@@ -8,10 +8,22 @@ git history, at commit `4a6fb36`.
 
 ## Goal
 
-When this workstream closes, the memory contract answers LongMemEval-S questions close to
-the retrieval arm, and hotmemory is on PyPI. The memory arm scored 19 of 54 on the sample.
-The retrieval arm scored 45 of 54. The target is the published range of memory layers with
-a GPT-4o reader, 71.2 to 84.2 percent (read, not reproduced), within 10 to 20 points.
+When this workstream closes, the memory arm meets the target below, and hotmemory is on
+PyPI. The memory arm scored 19 of 54 on sample A (35.2 percent). The retrieval arm scored
+45 of 54.
+
+The target (proposed) is a distance from the lowest published score of a memory layer with
+a GPT-4o reader: Zep at 71.2 percent (read, not reproduced). The published range goes up
+to 84.2 percent.
+
+| Level | Distance from 71.2 percent | Sample A and sample B | All 500 questions |
+|---|---|---|---|
+| Pass | At most 20 points | At least 28 of 54 on each | At least 51.2 percent |
+| Goal | At most 10 points | At least 33 of 54 on each | At least 61.2 percent |
+
+The workstream closes on the pass level, measured in phase 12 on all 500 questions. The
+sample counts guide the phases before it. A sample of 54 is uncertain by about 10 points,
+so the number on all 500 questions decides.
 
 The library stays deterministic. No code in `src/hotmemory` calls a model. The extractor
 and the embedder stay callables that the caller passes. The benchmark owns its extractor
@@ -329,10 +341,14 @@ Acceptance criteria:
 
 - `docs/benchmarks.md` reports both benchmarks, each number with its configuration, and
   the phase 5 numbers stay as the record of their configuration.
+- On all 500 questions, the memory arm scores at least 51.2 percent, the pass level of
+  the goal. The report states whether it reaches the goal level of 61.2 percent.
 
 Stop and ask if:
 
 - An estimate is over 50 dollars. The full run needs the owner's yes either way.
+- The memory arm scores below the pass level on all 500 questions. The owner then decides
+  whether the workstream closes or gets another phase.
 
 ## Phase 13. Release on PyPI
 
