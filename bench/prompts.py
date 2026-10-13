@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from bench.data import DATE_FORMAT, Question, Session
+from bench.models import EXTRACTOR
 
 READ_CHATS = (
     "I will give you several history chats between you and a user. Please answer the "
@@ -104,6 +106,18 @@ EXTRACT_SCHEMA = {
 }
 
 
+@dataclass(frozen=True)
+class Variant:
+    """An extractor variant: the prompt template and the model that reads it."""
+
+    prompt: str
+    model: str
+
+
+VARIANTS = {"baseline": Variant(EXTRACT, EXTRACTOR)}
+"""The extractor variants by name. `baseline` is the extractor of phase 5."""
+
+
 def history(sessions: Sequence[Session]) -> str:
     """Return the sessions as the reference reader shows them, sorted by date.
 
@@ -143,7 +157,7 @@ def session_text(session: Session) -> str:
     return "\n\n".join(f"{turn.role}: {turn.content.strip()}" for turn in session.turns)
 
 
-def extract(session: str, date: str, known: Sequence[str]) -> str:
+def extract(session: str, date: str, known: Sequence[str], template: str = EXTRACT) -> str:
     """Return the extractor prompt for one session and the facts already in memory."""
     listed = "\n".join(known) if known else "(none)"
-    return EXTRACT.format(known=listed, date=date, session=session)
+    return template.format(known=listed, date=date, session=session)

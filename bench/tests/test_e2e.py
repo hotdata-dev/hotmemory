@@ -8,7 +8,15 @@ import pytest
 
 from bench import prompts
 from bench.data import QUESTION_TYPES, Question, load
-from bench.e2e import SAMPLES, choose_sample, estimate, run_question, sample_ids, summarize
+from bench.e2e import (
+    SAMPLES,
+    Config,
+    choose_sample,
+    estimate,
+    run_question,
+    sample_ids,
+    summarize,
+)
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Reply
 from hotmemory import MemoryStore
 from tests.conftest import FakeClock, fake_embedder
@@ -102,7 +110,7 @@ def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
         for record in store.list(namespace, limit=1000):
             store.delete(record.namespace, record.key)
 
-    result = run_question(question, models, store, empty, "r1")
+    result = run_question(question, models, {"fused": store, "vector": store}, empty, "r1")
     assert set(result) == {"full", "retrieval", "memory"}
     assert all(arm.correct for arm in result.values())
     assert result["memory"].extracted == 6
@@ -119,6 +127,49 @@ def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
     assert JUDGE == READER
 
 
+def test_config_refuses_unknown_values() -> None:
+    with pytest.raises(ValueError, match="ranking"):
+        Config(memory_ranking="bm25")
+    with pytest.raises(ValueError, match="variant"):
+        Config(extractor="none")
+    with pytest.raises(ValueError, match="at least 1"):
+        Config(k=0)
+
+
+def test_run_question_follows_the_config(
+    questions: dict[str, Question], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    question = questions["q_one"]
+    monkeypatch.setitem(
+        prompts.VARIANTS,
+        "terse",
+        prompts.Variant("TERSE {known} {date}\nSession:\n{session}", EXTRACTOR),
+    )
+    fused = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    vector = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    written: list[str] = []
+
+    def empty(namespace: Sequence[str]) -> None:
+        for store, name in ((fused, "fused"), (vector, "vector")):
+            if store.list(namespace, limit=1000):
+                written.append(f"{namespace[3]}:{name}")
+            for record in store.list(namespace, limit=1000):
+                store.delete(record.namespace, record.key)
+
+    models = FakeModels()
+    config = Config(
+        retrieval_ranking="vector", memory_ranking="fused", k=2, budget=200, extractor="terse"
+    )
+    result = run_question(
+        question, models, {"fused": fused, "vector": vector}, empty, "r1", config=config
+    )
+    assert written == ["retrieval:vector", "memory:fused"]
+    assert all(p.startswith("TERSE ") for m, p in models.prompts if m == EXTRACTOR)
+    assert 0 < result["memory"].context_chars <= 200
+    block = [p for m, p in models.prompts if m == READER and "several facts" in p[:60]][-1]
+    assert block.count("[sources: none]") <= 2
+
+
 def test_estimate_counts_each_arm(questions: dict[str, Question]) -> None:
     class Chars:
         def count(self, text: str) -> int:
@@ -130,6 +181,8 @@ def test_estimate_counts_each_arm(questions: dict[str, Question]) -> None:
     cost = estimate(list(questions.values()), Chars())
     assert set(cost) == {"full", "retrieval", "memory"}
     assert all(value > 0 for value in cost.values())
+    larger = estimate(list(questions.values()), Chars(), ("memory",), Config(budget=80_000))
+    assert larger["memory"] > cost["memory"]
 
 
 def test_cached_models_call_once(tmp_path: Path) -> None:

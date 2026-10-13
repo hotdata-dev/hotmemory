@@ -88,7 +88,8 @@ def main(argv: Sequence[str] | None = None) -> Path:
     rows: list[dict[str, Any]] = []
     run_id = "diagnose-" + result["config"]["run_id"]
     marked_spend = 0.0
-    with local_store(args.url, run_id) as (store, empty):
+    with local_store(args.url, run_id) as (stores, empty):
+        store = stores["fused"]
         memory = Memory(store)
         extract = extractor(models)
         for count, question_id in enumerate(missed, start=1):

@@ -16,7 +16,7 @@ import json
 import random
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,7 +36,6 @@ from bench.data import (
 from bench.embed import CACHE_DIR, Tokens
 from bench.episodes import session_of, write_episodes
 from bench.models import (
-    EXTRACTOR,
     EXTRACTOR_MAX_TOKENS,
     JUDGE,
     JUDGE_MAX_TOKENS,
@@ -46,8 +45,8 @@ from bench.models import (
     CachedModels,
     Reply,
 )
-from bench.retrieval import RESULTS_DIR, _commit
-from hotmemory import Fact, Filter, Memory, Record, Store
+from bench.retrieval import RANKINGS, RESULTS_DIR, _commit
+from hotmemory import Embedder, Fact, Filter, Memory, Record, Store
 
 HERE = Path(__file__).resolve().parent
 PER_TYPE = 9
@@ -59,6 +58,40 @@ COST_LIMIT = 50.0
 EXTRACT_OVERHEAD = 700
 ACTOR = "longmemeval-extractor"
 Models = Callable[..., Reply]
+
+
+@dataclass(frozen=True)
+class Config:
+    """The configuration of the retrieval arm and the memory arm.
+
+    `retrieval_ranking` ranks the sessions of the retrieval arm. The memory arm captures
+    and recalls with `memory_ranking`, recalls `k` records into a block of at most
+    `budget` characters, and extracts with the variant `extractor` of `prompts.VARIANTS`.
+    """
+
+    retrieval_ranking: str = "fused"
+    memory_ranking: str = "fused"
+    k: int = RECALL_K
+    budget: int = RECALL_BUDGET
+    extractor: str = "baseline"
+
+    def __post_init__(self) -> None:
+        for ranking in (self.retrieval_ranking, self.memory_ranking):
+            if ranking not in RANKINGS:
+                raise ValueError(f"ranking must be one of {', '.join(RANKINGS)}, got {ranking!r}")
+        if self.extractor not in prompts.VARIANTS:
+            raise ValueError(f"no extractor variant {self.extractor!r}")
+        if self.k < 1 or self.budget < 1:
+            raise ValueError("k and budget must be at least 1")
+
+    @property
+    def variant(self) -> prompts.Variant:
+        """Return the extractor variant."""
+        return prompts.VARIANTS[self.extractor]
+
+
+BASELINE = Config()
+"""The configuration of the phase 5 run."""
 
 
 @dataclass(frozen=True)
@@ -110,14 +143,16 @@ def sample_ids(name: str, questions: Sequence[Question], root: Path = HERE.paren
     return ids
 
 
-def extractor(models: Models) -> Callable[[str, datetime | None, list[Record]], list[Fact]]:
-    """Return the extractor callable of `capture`: one call to EXTRACTOR for each session."""
+def extractor(
+    models: Models, variant: prompts.Variant = prompts.VARIANTS["baseline"]
+) -> Callable[[str, datetime | None, list[Record]], list[Fact]]:
+    """Return the extractor callable of `capture`: one call to the variant's model per session."""
 
     def extract(text: str, observed_at: datetime | None, current: list[Record]) -> list[Fact]:
         date = observed_at.strftime("%Y/%m/%d (%a) %H:%M") if observed_at else "unknown"
         known = [f"- {record.content}" for record in current]
-        prompt = prompts.extract(text, date, known)
-        reply = models(EXTRACTOR, prompt, EXTRACTOR_MAX_TOKENS, prompts.EXTRACT_SCHEMA)
+        prompt = prompts.extract(text, date, known, variant.prompt)
+        reply = models(variant.model, prompt, EXTRACTOR_MAX_TOKENS, prompts.EXTRACT_SCHEMA)
         facts = json.loads(reply.text)["facts"]
         return [
             Fact(kind="fact", subject=item["subject"].strip(), content=item["content"].strip())
@@ -154,18 +189,23 @@ def answer(
 def run_question(
     question: Question,
     models: Models,
-    store: Store,
+    stores: Mapping[str, Store],
     empty: Callable[[Sequence[str]], None],
     run_id: str,
     arms: Sequence[str] = ARMS,
+    config: Config = BASELINE,
 ) -> dict[str, Arm]:
-    """Run each arm on `question`, and empty its namespaces after."""
+    """Run each arm on `question`, and empty its namespaces after.
+
+    `stores` maps each ranking to a store, and every store holds the same records.
+    """
     result: dict[str, Arm] = {}
     if "full" in arms:
         prompt = prompts.read_chats(question, question.sessions)
         result["full"] = answer(models, question, prompt, len(prompt))
     if "retrieval" in arms:
         namespace = ("bench", "lme_s", run_id, "retrieval", question.id)
+        store = stores[config.retrieval_ranking]
         write_episodes(store, namespace, question)
         hits = store.search(question.question, [namespace], Filter(kind="episode"), k=RETRIEVED)
         empty(namespace)
@@ -175,8 +215,8 @@ def run_question(
         result["retrieval"] = answer(models, question, prompt, len(prompt))
     if "memory" in arms:
         namespace = ("bench", "lme_s", run_id, "memory", question.id)
-        memory = Memory(store)
-        extract = extractor(models)
+        memory = Memory(stores[config.memory_ranking])
+        extract = extractor(models, config.variant)
         written = 0
         for session in question.sessions:
             written += len(
@@ -189,7 +229,7 @@ def run_question(
                 )
             )
         _, block = memory.recall(
-            question.question, [namespace], as_of=question.as_of, budget=RECALL_BUDGET, k=RECALL_K
+            question.question, [namespace], as_of=question.as_of, budget=config.budget, k=config.k
         )
         empty(namespace)
         prompt = prompts.read_facts(question, block)
@@ -198,18 +238,21 @@ def run_question(
 
 
 def estimate(
-    questions: Sequence[Question], tokens: Tokens, arms: Sequence[str] = ARMS
+    questions: Sequence[Question],
+    tokens: Tokens,
+    arms: Sequence[str] = ARMS,
+    config: Config = BASELINE,
 ) -> dict[str, float]:
     """Return an upper estimate of the price of each arm in US dollars, from token counts.
 
     The full arm counts its prompts. The retrieval arm counts the RETRIEVED longest
     sessions of each question. The memory arm counts each session with EXTRACT_OVERHEAD
-    tokens of prompt and 500 tokens of output, and a reader prompt of RECALL_BUDGET
+    tokens of prompt and 500 tokens of output, and a reader prompt of `config.budget`
     characters. Every reader reply counts READER_MAX_TOKENS, and every judge prompt 400
-    tokens.
+    tokens. The estimate does not subtract the replies that the cache holds.
     """
     reader_in, reader_out = PRICES[READER]
-    extract_in, extract_out = PRICES[EXTRACTOR]
+    extract_in, extract_out = PRICES[config.variant.model]
     read_out = READER_MAX_TOKENS * reader_out / 1e6
     judge = (400 * reader_in + JUDGE_MAX_TOKENS * reader_out) / 1e6
     cost = dict.fromkeys(arms, 0.0)
@@ -225,7 +268,7 @@ def estimate(
             for session in question.sessions:
                 size = tokens.count(prompts.session_text(session)) + EXTRACT_OVERHEAD
                 cost["memory"] += (size * extract_in + 500 * extract_out) / 1e6
-            cost["memory"] += (RECALL_BUDGET // 3 + 300) * reader_in / 1e6 + read_out + judge
+            cost["memory"] += (config.budget // 3 + 300) * reader_in / 1e6 + read_out + judge
     return cost
 
 
@@ -247,17 +290,24 @@ def summarize(rows: Sequence[dict[str, Any]], arm: str) -> dict[str, Any]:
 
 
 @contextmanager
-def local_store(url: str, run_id: str) -> Iterator[tuple[Store, Callable[[Sequence[str]], None]]]:
-    """Yield a fused HotdataStore over a new local database, and a call that empties a namespace."""
+def local_store(
+    url: str, run_id: str, embedder: Embedder | None = None
+) -> Iterator[tuple[dict[str, Store], Callable[[Sequence[str]], None]]]:
+    """Yield a HotdataStore for each ranking, and a call that empties a namespace.
+
+    The stores share one new local database, and the database is deleted after. Without
+    `embedder`, the stores embed with `embed.openai_embedder()`.
+    """
     import pyarrow as pa
     from hotdata_framework import HotdataClient
 
     from hotmemory.hotdata import CUE_TABLE, RECORD_TABLES, HotdataStore
 
     client = HotdataClient("local", "local", host=url)
+    embedder = embedder or embed.openai_embedder()
     store = HotdataStore.provision(
         f"hotmemory-bench-{run_id}",
-        embedder=embed.openai_embedder(),
+        embedder=embedder,
         model=embed.MODEL,
         dimensions=embed.DIMENSIONS,
         client=client,
@@ -272,8 +322,19 @@ def local_store(url: str, run_id: str) -> Iterator[tuple[Store, Callable[[Sequen
                 rows = pa.table({"id": ids})
                 store._load_all([(table, rows, "delete"), (CUE_TABLE, rows, "delete")])
 
+    stores: dict[str, Store] = {
+        name: HotdataStore(
+            client,
+            store.database,
+            embedder=embedder,
+            model=embed.MODEL,
+            dimensions=embed.DIMENSIONS,
+            ranking=name,  # type: ignore[arg-type]
+        )
+        for name in RANKINGS
+    }
     try:
-        yield store, empty
+        yield stores, empty
     finally:
         client.delete_managed_database(store.database)
         client.close()
@@ -289,18 +350,36 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "--limit", type=int, default=None, help="the first N questions of the sample"
     )
     parser.add_argument("--sample", choices=tuple(SAMPLES), default="a", help="the sample to run")
+    parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="fused")
+    parser.add_argument("--memory-ranking", choices=RANKINGS, default="fused")
+    parser.add_argument("--recall-k", type=int, default=RECALL_K, help="k of the memory recall")
+    parser.add_argument(
+        "--recall-budget", type=int, default=RECALL_BUDGET, help="characters of the memory block"
+    )
+    parser.add_argument("--extractor", choices=tuple(prompts.VARIANTS), default="baseline")
+    parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
     arms = tuple(arm for arm in args.arms.split(",") if arm)
     if not set(arms) <= set(ARMS):
         parser.error(f"arms must be among {', '.join(ARMS)}")
+    try:
+        config = Config(
+            retrieval_ranking=args.retrieval_ranking,
+            memory_ranking=args.memory_ranking,
+            k=args.recall_k,
+            budget=args.recall_budget,
+            extractor=args.extractor,
+        )
+    except ValueError as error:
+        parser.error(str(error))
 
     all_questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
     sample = sample_ids(args.sample, list(all_questions.values()))
     questions = [all_questions[question_id] for question_id in sample][: args.limit]
 
     tokens = embed.TiktokenTokens(encoding="o200k_base")
-    cost = estimate(questions, tokens, arms)
+    cost = estimate(questions, tokens, arms, config)
     total = sum(cost.values())
     for arm in arms:
         print(f"estimate {arm}: ${cost[arm]:.2f}")
@@ -320,11 +399,12 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     models = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
+    embedder = embed.openai_embedder()
     rows: list[dict[str, Any]] = []
     clock_start = time.perf_counter()
-    with local_store(args.url, run_id) as (store, empty):
+    with local_store(args.url, run_id, embedder) as (stores, empty):
         for count, question in enumerate(questions, start=1):
-            result = run_question(question, models, store, empty, run_id, arms)
+            result = run_question(question, models, stores, empty, run_id, arms, config)
             rows.append(
                 {
                     "id": question.id,
@@ -378,24 +458,39 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "max_tokens": JUDGE_MAX_TOKENS,
                 "prompt": "reference, by question type",
             },
-            "extractor": {"model": EXTRACTOR, "max_tokens": EXTRACTOR_MAX_TOKENS},
+            "extractor": {
+                "variant": config.extractor,
+                "model": config.variant.model,
+                "max_tokens": EXTRACTOR_MAX_TOKENS,
+            },
             "embedder": {"model": embed.MODEL, "dimensions": embed.DIMENSIONS},
             "driver": "hotdata",
-            "ranking": "fused",
             "location": "local",
+            "retrieval": {"ranking": config.retrieval_ranking, "sessions": RETRIEVED},
+            "memory": {
+                "ranking": config.memory_ranking,
+                "k": config.k,
+                "budget": config.budget,
+                "extractor": config.extractor,
+            },
             "arms": {
                 "full": "every session of the question",
-                "retrieval": f"the top {RETRIEVED} sessions of the fused search over episodes",
+                "retrieval": (
+                    f"the top {RETRIEVED} sessions of the {config.retrieval_ranking} search "
+                    "over episodes"
+                ),
                 "memory": (
-                    "capture on each session in date order, then recall with k "
-                    f"{RECALL_K}, budget {RECALL_BUDGET} characters, as_of the end of "
-                    "the question day"
+                    f"capture on each session in date order with the {config.extractor} "
+                    f"extractor, then recall with the {config.memory_ranking} ranking, k "
+                    f"{config.k}, budget {config.budget} characters, as_of the end of the "
+                    "question day"
                 ),
             },
             "questions": len(questions),
             "estimate_usd": round(total, 2),
             "spent_usd": round(models.spent, 2),
             "model_calls": models.calls,
+            "embedder_misses": embedder.misses,
             "hotmemory_commit": _commit(),
             "run_id": run_id,
             "started_at": started.isoformat(),
@@ -405,7 +500,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "questions": rows,
     }
     RESULTS_DIR.mkdir(exist_ok=True)
-    name = f"e2e-sample-{args.sample}" + (f"-first{args.limit}" if args.limit is not None else "")
+    name = f"e2e-sample-{args.sample}" + (f"-{args.tag}" if args.tag else "")
+    name += f"-first{args.limit}" if args.limit is not None else ""
     path = RESULTS_DIR / f"{name}.json"
     path.write_text(json.dumps(result_file, indent=1) + "\n")
     for arm in arms:
