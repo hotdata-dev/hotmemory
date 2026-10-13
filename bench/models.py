@@ -85,6 +85,23 @@ class CachedModels:
         self._db.close()
 
 
+class Offline:
+    """`Complete` that calls no model: it raises `CacheMiss` for each prompt.
+
+    Wrapped in `CachedModels`, it replays the cached replies and stops at the first prompt
+    that the cache does not hold.
+    """
+
+    def __call__(
+        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None
+    ) -> Reply:
+        raise CacheMiss(f"the cache holds no reply of {model} to this prompt: {prompt[:80]!r}")
+
+
+class CacheMiss(RuntimeError):
+    """A replay needed a reply that the cache does not hold."""
+
+
 class Remote:
     """`Complete` over the OpenAI chat API, at temperature 0.
 
