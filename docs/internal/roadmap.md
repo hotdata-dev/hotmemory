@@ -29,8 +29,8 @@ calls a model. Latency is not a goal, and its work waits under Deferred.
 
 | Phase | Delivers | Status |
 |---|---|---|
-| 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | open, issue #16 |
-| 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | proposed |
+| 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | closed 2026-10-14, PR #18 |
+| 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | open, issue #19 |
 | 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | proposed |
 | 9. The ranking | An ablation of the fused ranking, and a default ranking chosen by the benchmark. | proposed |
 | 10. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
@@ -110,3 +110,15 @@ A closed phase keeps its row above with the date it closed and the pull request.
   With every question in one table, the fused ranking scored higher at the top 5 and
   slightly lower at the top 10. A BM25 ranking inside the scope can wait. In the cloud, a
   fused search took 998 ms at p50 and a vector search 361 ms.
+- Phase 6 closed on 2026-10-14 with PR #18, which closed issue #16. A replay of sample A
+  from the caches reproduced 19 of 54 and each cause of each miss, at no model cost. On
+  sample B, the reader scored 43 with every session, 48 with the top 10 sessions, and 27
+  with the block of `recall`. It changed the plan for later phases in four ways. The
+  memory arm differs by 14.8 points between the two samples with the same configuration,
+  so a change counts only if both samples move the same way. The extractor is the main
+  loss on both samples: no stored fact held the answer in 19 of 35 misses on sample A and
+  16 of 27 on sample B. When the block held a needed fact, it held every needed fact in
+  only 2 of 25 misses. A fact ranked below 30 caused 2 misses on sample A and none on
+  sample B, so the ranking has little to gain on these samples. The runner gained
+  `--replay` and `--workers`, and a replay of the memory arm of sample A took 519 s with
+  4 workers, against 2,264 s with one process.
