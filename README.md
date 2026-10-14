@@ -138,18 +138,19 @@ as an episode in `HotdataStore` and searched with the question. The 419 scored q
 had these results with the vector ranking. For 98.3% of them, an evidence session was in
 the top 5. For 99.3% of them, every evidence session was in the top 10.
 
-The end-to-end score ran on a sample of 54 questions. The reader and the judge were
-`gpt-4o-2024-08-06`.
+The end-to-end score ran on two samples of 54 questions, sample A on 2026-10-10 and
+sample B on 2026-10-14. The reader and the judge were `gpt-4o-2024-08-06`.
 
-| What the reader got | Correct |
-|---|---|
-| Every session of the question, about 114,000 tokens | 39 of 54 (72.2%) |
-| The 10 sessions that the search ranked first | 45 of 54 (83.3%) |
-| The block of `recall`, after `capture` with a `gpt-4o-mini` extractor | 19 of 54 (35.2%) |
+| What the reader got | Sample A | Sample B |
+|---|---|---|
+| Every session of the question, about 114,000 tokens | 39 of 54 (72.2%) | 43 of 54 (79.6%) |
+| The 10 sessions that the search ranked first | 45 of 54 (83.3%) | 48 of 54 (88.9%) |
+| The block of `recall`, after `capture` with a `gpt-4o-mini` extractor | 19 of 54 (35.2%) | 27 of 54 (50.0%) |
 
-The memory contract, with this extractor, scores below the full history. In 19 of its 35
-misses, the extractor did not store the answer. With 54 questions, each score can be about
-10 points off. In the cloud, a search took 361 ms at p50 with the vector ranking, and
+The memory contract, with this extractor, scores below the full history. The extractor
+did not store the answer in 19 of the 35 misses on sample A, and in 16 of the 27 misses on
+sample B. With 54 questions, each score can be about 10 points off, and the memory arm
+differs by 14.8 points between the two samples. In the cloud, a search took 361 ms at p50 with the vector ranking, and
 998 ms with the fused ranking.
 
 ## Documents

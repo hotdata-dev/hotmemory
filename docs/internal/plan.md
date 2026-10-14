@@ -150,6 +150,10 @@ defaults below, and the owner can change any of them in review.
   phase 5 with one process, and each later phase runs the samples again. The runner reads
   the commit at the start of a run, so a commit during the run does not change the commit
   that the result file records.
+- The phase spent $21.80 on models, from the result files: $21.42 for the run of sample
+  B, $0.37 for its diagnosis, and $0.01 for the split of the diagnosis of sample A. The
+  replays of sample A spent nothing. The first diagnosis run of sample A stalled on one
+  call and was stopped, and the cost of that call is not observed.
 
 ## Phase 7. The extractor
 

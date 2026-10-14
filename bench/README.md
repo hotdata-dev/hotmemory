@@ -54,14 +54,16 @@ This command runs three arms on a sample of 54 questions, 9 of each question typ
 uv run --group bench --env-file .env python -m bench.e2e
 ```
 
-Without `--run`, it prints the cost estimate of each arm and calls no model. With `--run`,
-it stops if the estimate is over 50 dollars, and else it calls the models. Set
-`OPENAI_MODEL_KEY` in `.env` first.
+Without `--run` or `--replay`, it prints the cost estimate of each arm and calls no model.
+With `--run`, it stops if the estimate is over 50 dollars, and else it calls the models.
+Set `OPENAI_MODEL_KEY` in `.env` first. With `--replay`, it takes every reply from the
+cache, and it stops at the first reply that the cache does not hold. The estimate does not
+subtract the cached replies, so the stop at 50 dollars applies to a replay too.
 
 | Arm | What the reader gets |
 |---|---|
 | `full` | Every session of the question. |
-| `retrieval` | The 10 sessions that the fused search ranks first. |
+| `retrieval` | The 10 sessions that the search ranks first. |
 | `memory` | The block of `recall`, after `capture` ran on each session in date order. |
 
 The reader and the judge are `gpt-4o-2024-08-06` at temperature 0, with the prompts of
@@ -90,9 +92,9 @@ The options are these:
 | `--limit` | the first N questions of the sample | every question |
 
 Each worker gets the questions in turn, and runs them over a new local database of its
-own. Each table then holds one question at a time, as in a run with one worker. This
-matters because BM25 ranks over the whole table before the scope filter. An extractor
-variant names a prompt and a model. The result file is
+own. Each table then holds one question at a time, as in a run with one worker. BM25 ranks
+over the whole table before the scope filter, so the rows of a second question in a table
+can change the ranking. An extractor variant names a prompt and a model. The result file is
 `bench/results/e2e-sample-<a or b>[-<tag>].json`, and it records each option.
 
 ## The checks of the results
