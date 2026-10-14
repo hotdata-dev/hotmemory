@@ -98,8 +98,11 @@ over the whole table before the scope filter, so the rows of a second question i
 can change the ranking. An extractor variant names a prompt and a model. Each fact carries
 the source `session:<hash>`, where the hash is the first 12 hex digits of the SHA-256 of
 the session id. The block shows the sources to the reader, and the id of an evidence
-session holds `answer`, so the source does not show the id. The result file is
-`bench/results/e2e-sample-<a or b>[-<tag>].json`, and it records each option.
+session holds `answer`, so the source does not show the id. If an extractor reply reaches
+its limit of 4,000 output tokens, the session writes no facts. The cache keeps that reply,
+so a replay skips the same session. The result file counts these sessions in
+`sessions_at_limit`. The result file is `bench/results/e2e-sample-<a or b>[-<tag>].json`,
+and it records each option.
 
 ## The checks of the results
 

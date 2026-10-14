@@ -160,11 +160,15 @@ def fact_source(session_id: str) -> str:
 
 
 def extractor(
-    models: Models, variant: prompts.Variant = prompts.VARIANTS["baseline"], source: str = ""
+    models: Models,
+    variant: prompts.Variant = prompts.VARIANTS["baseline"],
+    source: str = "",
+    at_limit: list[str] | None = None,
 ) -> Callable[[str, datetime | None, list[Record]], list[Fact]]:
     """Return the extractor callable of `capture`: one call to the variant's model per session.
 
-    With `source`, each fact carries it in `sources`.
+    With `source`, each fact carries it in `sources`. A reply that reached the token limit
+    gives no facts, and `source` is appended to `at_limit`.
     """
     sources = (source,) if source else ()
 
@@ -173,6 +177,10 @@ def extractor(
         known = [f"- {record.content}" for record in current]
         prompt = prompts.extract(text, date, known, variant.prompt)
         reply = models(variant.model, prompt, EXTRACTOR_MAX_TOKENS, prompts.EXTRACT_SCHEMA)
+        if reply.stopped:
+            if at_limit is not None:
+                at_limit.append(source)
+            return []
         facts = json.loads(reply.text)["facts"]
         return [
             Fact(
@@ -196,6 +204,7 @@ class Arm:
     answer: Reply
     verdict: Reply
     extracted: int = 0
+    at_limit: int = 0
 
     @property
     def correct(self) -> bool:
@@ -203,12 +212,17 @@ class Arm:
 
 
 def answer(
-    models: Models, question: Question, prompt: str, context_chars: int, extracted: int = 0
+    models: Models,
+    question: Question,
+    prompt: str,
+    context_chars: int,
+    extracted: int = 0,
+    at_limit: int = 0,
 ) -> Arm:
     """Read `prompt` with READER, judge the answer with JUDGE, and return the arm."""
     reply = models(READER, prompt, READER_MAX_TOKENS)
     verdict = models(JUDGE, prompts.judge(question, reply.text), JUDGE_MAX_TOKENS)
-    return Arm(context_chars, reply, verdict, extracted)
+    return Arm(context_chars, reply, verdict, extracted, at_limit)
 
 
 def run_question(
@@ -242,13 +256,14 @@ def run_question(
         namespace = ("bench", "lme_s", run_id, "memory", question.id)
         memory = Memory(stores[config.memory_ranking])
         written = 0
+        at_limit: list[str] = []
         for session in question.sessions:
             source = fact_source(session.id) if config.fact_sources else ""
             written += len(
                 memory.capture(
                     prompts.session_text(session),
                     namespace,
-                    extractor(models, config.variant, source),
+                    extractor(models, config.variant, source, at_limit),
                     actor=ACTOR,
                     observed_at=session.date,
                 )
@@ -258,7 +273,7 @@ def run_question(
         )
         empty(namespace)
         prompt = prompts.read_facts(question, block)
-        result["memory"] = answer(models, question, prompt, len(block), written)
+        result["memory"] = answer(models, question, prompt, len(block), written, len(at_limit))
     return result
 
 
@@ -417,6 +432,7 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
                 "correct": found.correct,
                 "context_chars": found.context_chars,
                 "facts_written": found.extracted,
+                "sessions_at_limit": found.at_limit,
                 "reader_input_tokens": found.answer.input_tokens,
                 "answer": found.answer.text,
                 "verdict": found.verdict.text,
@@ -608,6 +624,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "workers": len(shards),
             "spent_usd": round(spent, 2),
             "model_calls": calls,
+            "sessions_at_limit": sum(
+                row["arms"]["memory"]["sessions_at_limit"]
+                for row in rows
+                if "memory" in row["arms"]
+            ),
             "embedder_misses": misses,
             "hotmemory_commit": commit,
             "run_id": run_id,

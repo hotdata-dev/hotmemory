@@ -174,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 memory.capture(
                     prompts.session_text(session),
                     namespace,
-                    extractor(replay, config.variant, source),
+                    extractor(replay, config.variant, source, []),
                     actor=ACTOR,
                     observed_at=session.date,
                 )
@@ -254,6 +254,8 @@ def _mark(marker: CachedModels, question: str, answer: str, facts: Sequence[Reco
     numbered = "\n".join(f"{n}. {fact.content}" for n, fact in enumerate(facts, 1))
     prompt = MARK.format(question=question, answer=answer, facts=numbered)
     reply = marker(JUDGE, prompt, 1000, MARK_SCHEMA)
+    if reply.stopped:
+        raise RuntimeError(f"{JUDGE} stopped at 1000 tokens")
     return sorted({n for n in json.loads(reply.text)["facts"] if 1 <= n <= len(facts)})
 
 
@@ -262,6 +264,8 @@ def _complete(marker: CachedModels, question: str, answer: str, facts: Sequence[
     listed = "\n".join(f"- {fact}" for fact in facts)
     prompt = COMPLETE.format(question=question, answer=answer, facts=listed)
     reply = marker(JUDGE, prompt, 100, COMPLETE_SCHEMA)
+    if reply.stopped:
+        raise RuntimeError(f"{JUDGE} stopped at 100 tokens")
     return bool(json.loads(reply.text)["complete"])
 
 

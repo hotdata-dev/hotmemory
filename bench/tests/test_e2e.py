@@ -20,7 +20,7 @@ from bench.e2e import (
     shards_of,
     summarize,
 )
-from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Reply
+from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Offline, Reply
 from hotmemory import MemoryStore
 from tests.conftest import FakeClock, fake_embedder
 
@@ -262,3 +262,34 @@ def test_run_question_gives_each_fact_its_session(questions: dict[str, Question]
     assert f"[sources: {fact_source(late.id)}]" in block
     assert "[sources: none]" not in block
     assert "answer_" not in block
+
+
+def test_a_reply_at_the_limit_gives_no_facts(questions: dict[str, Question]) -> None:
+    session = questions["q_one"].sessions[0]
+
+    def stopped(model: str, prompt: str, max_tokens: int, schema: Any = None) -> Reply:
+        return Reply('{"facts": [{"subject": "a", "con', 10, max_tokens, stopped=True)
+
+    at_limit: list[str] = []
+    extract = extractor(stopped, source="session:abc", at_limit=at_limit)
+    assert extract(prompts.session_text(session), session.date, []) == []
+    assert at_limit == ["session:abc"]
+
+
+def test_cached_models_keep_a_stopped_reply(tmp_path: Path) -> None:
+    def complete(model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None) -> Reply:
+        return Reply("{", 1, max_tokens, stopped=True)
+
+    path = tmp_path / "replies.sqlite"
+    models = CachedModels(complete, path)
+    assert models(EXTRACTOR, "p", 10, {}).stopped
+    models.close()
+    replay = CachedModels(Offline(), path)
+    assert replay(EXTRACTOR, "p", 10, {}).stopped
+    with replay._db:
+        replay._db.execute(
+            "INSERT INTO replies VALUES (?, ?)",
+            ("old", json.dumps({"text": "yes", "input_tokens": 1, "output_tokens": 1})),
+        )
+    found = replay._db.execute("SELECT reply FROM replies WHERE key = 'old'").fetchone()[0]
+    assert not Reply(**json.loads(found)).stopped

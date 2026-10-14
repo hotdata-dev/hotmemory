@@ -168,9 +168,13 @@ of the sample A run:
   extractor wrote 126 facts from these sessions, and about 21 percent of them come from
   the first third of the session. A word-overlap match between each fact and each turn
   gave this share, so it is approximate.
-- Task 2 found no fault. No cached extractor reply fails to parse, and the largest has
-  2,602 output tokens, under the limit of 4,000. No list of "Facts already in memory" for
-  the 26 evidence sessions holds a fact near the answer.
+- Task 2 found no fault in the cache. No cached extractor reply fails to parse, and the
+  largest has 2,602 output tokens, under the limit of 4,000. No list of "Facts already in
+  memory" for the 26 evidence sessions holds a fact near the answer.
+- The first runs with sources found fault 1. On question `a3332713`, both the baseline and
+  `detail` reached the limit of 4,000 output tokens on session `sharegpt_7uSzi6w_2`, and
+  both runs stopped. In that session, the user pastes a list of survey answers from other
+  people, and the extractor wrote each line as a fact about the user.
 
 Decisions taken during the work. The owner can change any of them in review.
 
@@ -187,7 +191,12 @@ Decisions taken during the work. The owner can change any of them in review.
   `recall` with its default budget of 2,000 characters, and a longer line lets fewer
   facts fit (observed: 9 in place of 10 for question `66f24dbb`). So the extractor cache
   of phase 6 does not replay with sources. The baseline runs again with sources, at the
-  full price, as the comparison point of this phase. `--no-fact-sources` runs the arm as phases 5 and 6 did, and a
+  full price, as the comparison point of this phase.
+- A reply that reaches the token limit gives no facts for its session (agreed with the
+  owner on 2026-10-14). The cache keeps the reply, marked as stopped, so a replay and the
+  diagnosis skip the same session. A result file counts these sessions in
+  `sessions_at_limit`. The other choice was a second call with a higher limit. It would
+  store a fact about the user for each line of a pasted document. `--no-fact-sources` runs the arm as phases 5 and 6 did, and a
   result file records `fact_sources`.
 
 ## Phase 8. Episodes behind facts
