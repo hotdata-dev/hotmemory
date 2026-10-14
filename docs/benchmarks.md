@@ -1,8 +1,8 @@
 # Benchmarks
 
 This page reports the numbers of hotmemory on LongMemEval-S, a public benchmark of 500
-questions over long chat histories. Each number on this page was observed on 2026-10-10.
-Each section names the result file that a run wrote into `bench/results/`, with its
+questions over long chat histories. Each number on this page was observed on 2026-10-10,
+except where a section gives another date. Each section names the result file that a run wrote into `bench/results/`, with its
 numbers, its configuration, and the commit of hotmemory that ran it. Git ignores that
 folder, so this page is the record of the numbers. [bench/README.md](../bench/README.md)
 gives the commands that repeat each run and write the files again.
@@ -131,16 +131,20 @@ order as the local run.
 
 ## End-to-end accuracy
 
-Three arms answer the same 54 questions, 9 of each question type, with the same reader and
-the same judge. A fixed seed chose the questions, and their ids are in
-[bench/sample.json](../bench/sample.json). 2 of the 54 are abstention questions. File:
-`e2e-sample.json`.
+Three arms answer the same questions, with the same reader and the same judge. Each run
+uses one of two samples of 54 questions, 9 of each question type. A fixed seed chose each
+sample.
+
+| Sample | File of ids | Seed | Abstention questions | Use |
+|---|---|---|---|---|
+| A | [bench/sample.json](../bench/sample.json) | `20261010` | 2 | Each phase iterates on it. |
+| B | [bench/sample-b.json](../bench/sample-b.json) | `20261013` | 4 | Each phase runs it once, at its end. It holds no question of sample A. |
 
 | Item | Value |
 |---|---|
 | Reader | `gpt-4o-2024-08-06`, temperature 0, up to 800 output tokens, the chain-of-thought prompt of the reference code |
 | Judge | `gpt-4o-2024-08-06`, temperature 0, the prompt of the reference code for each question type |
-| Extractor of the memory arm | `gpt-4o-mini-2024-07-18`, with the prompt in `bench/prompts.py` |
+| Extractor of the memory arm | `gpt-4o-mini-2024-07-18`, with the `baseline` prompt in `bench/prompts.py` |
 | Driver | `HotdataStore` with the fused ranking, on the local stack |
 
 The arms:
@@ -151,6 +155,10 @@ The arms:
 3. Memory: `capture` runs on each session, in date order. Then `recall` gives the reader
    its block, with k of 30, a budget of 8,000 characters, and `as_of` at 23:59:59 on the
    date of the question.
+
+### Sample A
+
+File: `e2e-sample.json`.
 
 | Question type | Questions | Full context | Retrieval | Memory |
 |---|---|---|---|---|
@@ -166,34 +174,93 @@ At the median, the reader read 113,689 tokens in the full-context arm, 29,878 in
 retrieval arm, and 1,462 in the memory arm. The run made 2,802 model calls and cost
 $20.95.
 
+On 2026-10-13, the memory arm ran again on sample A with `--replay`, from the cached
+replies, at commit `ce97385` with uncommitted changes to documentation only. It gave the same answer and the same mark on each of the 54
+questions, with no model call and no embedder call. File: `e2e-sample-a.json`. On
+2026-10-14, the same replay with `--workers 4` at commit `4d99fbe` gave the same 54 rows
+again. It took 519 seconds, and the replay with one process took 2,264 seconds. File:
+`e2e-sample-a-workers4.json`.
+
 The LongMemEval paper reports 60.6% for full context with GPT-4o on all 500 questions of
 the earlier data file. A sample of 54 questions and the cleaned data file do not compare
 with that number closely.
 
+### Sample B
+
+Observed on 2026-10-14, at commit `5f2abb9`. File: `e2e-sample-b.json`.
+
+| Question type | Questions | Full context | Retrieval | Memory |
+|---|---|---|---|---|
+| single-session-user | 9 | 8 | 9 | 6 |
+| single-session-assistant | 9 | 9 | 9 | 4 |
+| single-session-preference | 9 | 3 | 6 | 0 |
+| multi-session | 9 | 7 | 7 | 5 |
+| knowledge-update | 9 | 8 | 8 | 5 |
+| temporal-reasoning | 9 | 8 | 9 | 7 |
+| All | 54 | 43 (79.6%) | 48 (88.9%) | 27 (50.0%) |
+
+At the median, the reader read 113,314 tokens in the full-context arm, 30,899 in the
+retrieval arm, and 1,466 in the memory arm. The run made 2,869 model calls, cost $21.42,
+and took 2.9 hours with one process.
+
+The memory arm scored 8 questions more on sample B than on sample A, with the same
+configuration. That is 14.8 points. A gain on one sample of 54 questions is therefore
+weak evidence, and a change counts only if both samples move the same way.
+
 ### Why the memory arm scored low
 
-`bench/diagnose.py` ran `capture` again on each of the 35 questions that the memory arm
-missed, from the cached extractor replies. GPT-4o then marked each stored fact that states
-the answer or a value that the answer needs, and the search ranked every fact. File:
-`e2e-sample-diagnosis.json`.
+`bench/diagnose.py` ran `capture` again on each question that the memory arm missed, from
+the cached extractor replies. GPT-4o then marked each stored fact that states the answer
+or a value that the answer needs, and the search ranked every fact. A second GPT-4o call
+then read the marked facts in the block. It told whether they hold every value that the
+answer needs. Files: `e2e-sample-a-diagnosis.json`, observed on 2026-10-13,
+and `e2e-sample-b-diagnosis.json`, observed on 2026-10-14.
 
-| Cause | Questions |
-|---|---|
-| No stored fact states the answer or a value that it needs | 19 |
-| A stored fact holds it, and the fused search ranked it below 30 | 2 |
-| At least one marked fact was in the top 30 | 14 |
+| Cause | Sample A | Sample B |
+|---|---|---|
+| No stored fact states the answer or a value that it needs | 19 | 16 |
+| A stored fact holds it, and the fused search ranked it below 30 | 2 | 0 |
+| A marked fact was in the top 30, and `recall` left it out | 0 | 0 |
+| The block holds every needed fact, and the reader missed | 1 | 1 |
+| The block holds some of the needed facts | 13 | 10 |
+| Misses | 35 | 27 |
 
-The extractor is the main loss. Most often it stored the interest of the user. It dropped
-what the assistant said, for example a number, a name, or an item of a list. In both
-questions of the second row, the vector ranking ranked the fact higher than the fused
-ranking did. The last row is an upper bound on the misses of the reader. A multi-session
-question needs several facts. The marker counts the question when it finds one of them in
-the top 30.
+The three causes of phase 5 (19, 2, and 14 on sample A) are the same in this run, on
+each question. The split of the last group is new.
+
+The extractor is the main loss on both samples. On sample A, phase 5 read the misses. Most
+often the extractor stored the interest of the user. It dropped what the assistant said, for example a number, a name, or an item of a
+list. In both questions of the second row, the vector ranking ranked the fact higher than
+the fused ranking did. When the block held a marked fact, it held every needed fact in
+only 2 of 25 misses. A question that needs several facts then lacks at least one of them.
+
+The misses of each question type, on sample A:
+
+| Question type | Misses | Not stored | Ranked below 30 | All present | Some present |
+|---|---|---|---|---|---|
+| single-session-user | 6 | 4 | 1 | 1 | 0 |
+| single-session-assistant | 6 | 5 | 0 | 0 | 1 |
+| single-session-preference | 6 | 4 | 1 | 0 | 1 |
+| multi-session | 6 | 3 | 0 | 0 | 3 |
+| knowledge-update | 5 | 2 | 0 | 0 | 3 |
+| temporal-reasoning | 6 | 1 | 0 | 0 | 5 |
+
+The misses of each question type, on sample B:
+
+| Question type | Misses | Not stored | Ranked below 30 | All present | Some present |
+|---|---|---|---|---|---|
+| single-session-user | 3 | 3 | 0 | 0 | 0 |
+| single-session-assistant | 5 | 4 | 0 | 0 | 1 |
+| single-session-preference | 9 | 6 | 0 | 0 | 3 |
+| multi-session | 4 | 1 | 0 | 0 | 3 |
+| knowledge-update | 4 | 1 | 0 | 1 | 2 |
+| temporal-reasoning | 2 | 1 | 0 | 0 | 1 |
 
 ## Known limits
 
-- The end-to-end numbers come from a sample of 54 questions, so one question moves an
-  arm by 1.9 points. A run on all 500 questions waits for the owner's agreement.
+- The end-to-end numbers come from samples of 54 questions, so one question moves an arm
+  by 1.9 points. The memory arm differs by 14.8 points between sample A and sample B. A
+  run on all 500 questions waits for the owner's agreement.
 - The full-context arm gives the reader every session. The reference code keeps the last
   50 sessions, so the two differ for histories longer than 50 sessions.
 - The extractor of the memory arm is the only one tried. A stronger extractor or another
