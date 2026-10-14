@@ -23,13 +23,13 @@ that proves it.
 
 ## The second workstream: memory accuracy
 
-Proposed on 2026-10-13. `plan.md` holds the tasks, the acceptance criteria, and the stop
+Agreed on 2026-10-13. `plan.md` holds the tasks, the acceptance criteria, and the stop
 conditions of each phase. The library stays deterministic: no code in `src/hotmemory`
 calls a model. Latency is not a goal, and its work waits under Deferred.
 
 | Phase | Delivers | Status |
 |---|---|---|
-| 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | proposed |
+| 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | open, issue #16 |
 | 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | proposed |
 | 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | proposed |
 | 9. The ranking | An ablation of the fused ranking, and a default ranking chosen by the benchmark. | proposed |

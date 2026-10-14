@@ -58,7 +58,7 @@ class CachedModels:
         self.calls = 0
         self._complete = complete
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        self._db = sqlite3.connect(path, timeout=60)
         self._db.execute("CREATE TABLE IF NOT EXISTS replies (key TEXT PRIMARY KEY, reply TEXT)")
 
     def __call__(
@@ -85,8 +85,25 @@ class CachedModels:
         self._db.close()
 
 
+class Offline:
+    """`Complete` that calls no model: it raises `CacheMiss` for each prompt.
+
+    Wrapped in `CachedModels`, it replays the cached replies and stops at the first prompt
+    that the cache does not hold.
+    """
+
+    def __call__(
+        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None
+    ) -> Reply:
+        raise CacheMiss(f"the cache holds no reply of {model} to this prompt: {prompt[:80]!r}")
+
+
+class CacheMiss(RuntimeError):
+    """A replay needed a reply that the cache does not hold."""
+
+
 class Remote:
-    """`Complete` over the OpenAI chat API, at temperature 0.
+    """`Complete` over the OpenAI chat API, at temperature 0, with 120 seconds for each try.
 
     The client reads the key from `OPENAI_MODEL_KEY`. `OPENAI_API_KEY` stays the key of the
     embedder. With a schema, the reply is JSON that the schema allows.
@@ -95,7 +112,9 @@ class Remote:
     def __init__(self) -> None:
         import openai
 
-        self._openai = openai.OpenAI(api_key=os.environ["OPENAI_MODEL_KEY"], max_retries=6)
+        self._openai = openai.OpenAI(
+            api_key=os.environ["OPENAI_MODEL_KEY"], max_retries=6, timeout=120.0
+        )
 
     def __call__(
         self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None

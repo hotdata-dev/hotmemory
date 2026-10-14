@@ -8,7 +8,16 @@ import pytest
 
 from bench import prompts
 from bench.data import QUESTION_TYPES, Question, load
-from bench.e2e import choose_sample, estimate, run_question, summarize
+from bench.e2e import (
+    SAMPLES,
+    Config,
+    choose_sample,
+    estimate,
+    run_question,
+    sample_ids,
+    shards_of,
+    summarize,
+)
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Reply
 from hotmemory import MemoryStore
 from tests.conftest import FakeClock, fake_embedder
@@ -72,6 +81,23 @@ def test_choose_sample_is_fixed(questions: dict[str, Question]) -> None:
     assert first == choose_sample(pool, per_type=2, seed=1)
     assert len(first) == 12
     assert first != choose_sample(pool, per_type=2, seed=2)
+    other = choose_sample(pool, per_type=2, seed=1, exclude=first)
+    assert len(other) == 12
+    assert not set(other) & set(first)
+
+
+def test_sample_b_leaves_out_sample_a(questions: dict[str, Question], tmp_path: Path) -> None:
+    base = questions["q_one"]
+    pool = [
+        replace(base, id=f"{kind}-{n}", type=kind) for kind in QUESTION_TYPES for n in range(20)
+    ]
+    (tmp_path / "bench").mkdir()
+    a = sample_ids("a", pool, root=tmp_path)
+    b = sample_ids("b", pool, root=tmp_path)
+    assert len(a) == len(b) == 54
+    assert not set(a) & set(b)
+    assert json.loads((tmp_path / SAMPLES["b"].file).read_text()) == b
+    assert sample_ids("b", pool[:60], root=tmp_path) == b
 
 
 def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
@@ -85,7 +111,7 @@ def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
         for record in store.list(namespace, limit=1000):
             store.delete(record.namespace, record.key)
 
-    result = run_question(question, models, store, empty, "r1")
+    result = run_question(question, models, {"fused": store, "vector": store}, empty, "r1")
     assert set(result) == {"full", "retrieval", "memory"}
     assert all(arm.correct for arm in result.values())
     assert result["memory"].extracted == 6
@@ -102,6 +128,49 @@ def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
     assert JUDGE == READER
 
 
+def test_config_refuses_unknown_values() -> None:
+    with pytest.raises(ValueError, match="ranking"):
+        Config(memory_ranking="bm25")
+    with pytest.raises(ValueError, match="variant"):
+        Config(extractor="none")
+    with pytest.raises(ValueError, match="at least 1"):
+        Config(k=0)
+
+
+def test_run_question_follows_the_config(
+    questions: dict[str, Question], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    question = questions["q_one"]
+    monkeypatch.setitem(
+        prompts.VARIANTS,
+        "terse",
+        prompts.Variant("TERSE {known} {date}\nSession:\n{session}", EXTRACTOR),
+    )
+    fused = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    vector = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    written: list[str] = []
+
+    def empty(namespace: Sequence[str]) -> None:
+        for store, name in ((fused, "fused"), (vector, "vector")):
+            if store.list(namespace, limit=1000):
+                written.append(f"{namespace[3]}:{name}")
+            for record in store.list(namespace, limit=1000):
+                store.delete(record.namespace, record.key)
+
+    models = FakeModels()
+    config = Config(
+        retrieval_ranking="vector", memory_ranking="fused", k=2, budget=200, extractor="terse"
+    )
+    result = run_question(
+        question, models, {"fused": fused, "vector": vector}, empty, "r1", config=config
+    )
+    assert written == ["retrieval:vector", "memory:fused"]
+    assert all(p.startswith("TERSE ") for m, p in models.prompts if m == EXTRACTOR)
+    assert 0 < result["memory"].context_chars <= 200
+    block = [p for m, p in models.prompts if m == READER and "several facts" in p[:60]][-1]
+    assert block.count("[sources: none]") <= 2
+
+
 def test_estimate_counts_each_arm(questions: dict[str, Question]) -> None:
     class Chars:
         def count(self, text: str) -> int:
@@ -113,6 +182,8 @@ def test_estimate_counts_each_arm(questions: dict[str, Question]) -> None:
     cost = estimate(list(questions.values()), Chars())
     assert set(cost) == {"full", "retrieval", "memory"}
     assert all(value > 0 for value in cost.values())
+    larger = estimate(list(questions.values()), Chars(), ("memory",), Config(budget=80_000))
+    assert larger["memory"] > cost["memory"]
 
 
 def test_cached_models_call_once(tmp_path: Path) -> None:
@@ -128,3 +199,15 @@ def test_cached_models_call_once(tmp_path: Path) -> None:
     assert models(READER, "p", 11).text == "yes"
     assert calls == ["p", "p"]
     assert models.spent == pytest.approx(5.0)
+
+
+def test_shards_deal_every_question_once(questions: dict[str, Question]) -> None:
+    base = questions["q_one"]
+    pool = [replace(base, id=f"q{n}") for n in range(10)]
+    shards = shards_of(pool, 4, "r1")
+    assert [shard.run_id for shard in shards] == ["r1-w0", "r1-w1", "r1-w2", "r1-w3"]
+    dealt = [q.id for shard in shards for q in shard.questions]
+    assert sorted(dealt) == sorted(q.id for q in pool)
+    assert [q.id for q in shards[1].questions] == ["q1", "q5", "q9"]
+    assert [shard.run_id for shard in shards_of(pool, 1, "r1")] == ["r1"]
+    assert len(shards_of(pool[:2], 4, "r1")) == 2

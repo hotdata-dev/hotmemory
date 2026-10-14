@@ -1,7 +1,7 @@
 # Plan: the second workstream, memory accuracy
 
-Status: proposed, 2026-10-13. The owner agrees to each decision before the first issue
-opens. This file holds the open workstream, phases 6 to 13. Each phase becomes one GitHub
+Status: agreed, 2026-10-13. The owner agreed to each decision and to the target on
+2026-10-13. Phase 6 is open, as issue #16. This file holds the open workstream, phases 6 to 13. Each phase becomes one GitHub
 issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
 git history, at commit `4a6fb36`.
@@ -12,7 +12,7 @@ When this workstream closes, the memory arm meets the target below, and hotmemor
 PyPI. The memory arm scored 19 of 54 on sample A (35.2 percent). The retrieval arm scored
 45 of 54.
 
-The target (proposed) is a distance from the lowest published score of a memory layer with
+The target (agreed) is a distance from the lowest published score of a memory layer with
 a GPT-4o reader: Zep at 71.2 percent (read, not reproduced). The published range goes up
 to 84.2 percent.
 
@@ -62,24 +62,24 @@ shape the phases below:
 
 ## Decisions
 
-Each item is proposed. The owner agrees or changes it before phase 6 opens.
+The owner agreed to each item on 2026-10-13.
 
-- Deterministic library (proposed). No model call enters `src/hotmemory`. A model-backed
+- Deterministic library (agreed). No model call enters `src/hotmemory`. A model-backed
   extractor in an extra, and decision calls such as a classifier for supersede, wait in
   Deferred until this workstream closes.
-- Two samples (proposed). Sample A is the committed sample of 54, seed `20261010`, in
+- Two samples (agreed). Sample A is the committed sample of 54, seed `20261010`, in
   `bench/sample.json`. Each phase iterates on sample A. Sample B is a second sample of 54,
   9 of each type, with a new fixed seed, and with no question of sample A. A phase runs
   sample B once, at its end, to check that a gain on A is not a fit to A.
-- What counts as a gain (proposed). One question moves an arm by 1.9 points on 54
+- What counts as a gain (agreed). One question moves an arm by 1.9 points on 54
   questions. Two conditions make a change count. Sample A and sample B move the same way.
   The diagnosis shows the targeted group of misses getting smaller. A phase reports every
   variant it tried, not only the best one.
-- Fixed models (proposed). The reader and the judge stay `gpt-4o-2024-08-06` at
+- Fixed models (agreed). The reader and the judge stay `gpt-4o-2024-08-06` at
   temperature 0, with the reference prompts. The baseline extractor stays
   `gpt-4o-mini-2024-07-18`. Phase 7 tries at most one other extractor model, chosen by the
   owner.
-- The full-context arm (proposed). It runs once on sample B, in phase 6, as the baseline
+- The full-context arm (agreed). It runs once on sample B, in phase 6, as the baseline
   of B. No later phase runs it again on 54 questions. It costs the most, at about 114,000
   tokens per question.
 - The cost limit (agreed in phase 5, kept). The runner prints an estimate and stops over
@@ -125,6 +125,35 @@ Stop and ask if:
 
 - The cached rerun of sample A does not reproduce the published numbers.
 - The estimate for sample B is over 50 dollars.
+
+Decisions taken during the work. The plan left these details open. The work took the
+defaults below, and the owner can change any of them in review.
+
+- Sample B uses the seed `20261013` and the draw rule of sample A, over the questions that
+  are not in sample A. It holds 4 abstention questions, and sample A holds 2 (observed).
+- One `Config` in `bench/e2e.py` holds the options of tasks 3 and 4, so the two tasks are
+  one commit. The memory arm uses one ranking for the search inside `capture` and for
+  `recall`. The options are `--retrieval-ranking`, `--memory-ranking`, `--recall-k`,
+  `--recall-budget`, `--extractor`, and `--tag`.
+- A result file is named `e2e-sample-<a or b>[-<tag>].json`. The phase 5 file
+  `e2e-sample.json` stays as the record of phase 5.
+- `--replay` runs the arms with a model stand-in that raises at the first reply that the
+  cache does not hold. The diagnosis replays `capture` the same way, in place of the stop
+  at 1 dollar of spend.
+- The diagnosis keeps the marker prompt of phase 5 unchanged, so the cache reproduces the
+  three groups. A second GPT-4o call splits the group "recalled, reader missed". It gets
+  the marked facts that are in the block. It tells whether they hold every value that the
+  answer needs ("all present") or not ("some present").
+- The diagnosis file is named after the result file, as `<result>-diagnosis.json`.
+- `--workers N` runs the questions in N processes, and each process has its own local
+  database. The plan did not ask for it. A run of the three arms took 3.6 hours in
+  phase 5 with one process, and each later phase runs the samples again. The runner reads
+  the commit at the start of a run, so a commit during the run does not change the commit
+  that the result file records.
+- The phase spent $21.80 on models, from the result files: $21.42 for the run of sample
+  B, $0.37 for its diagnosis, and $0.01 for the split of the diagnosis of sample A. The
+  replays of sample A spent nothing. The first diagnosis run of sample A stalled on one
+  call and was stopped, and the cost of that call is not observed.
 
 ## Phase 7. The extractor
 
@@ -395,7 +424,6 @@ These wait, and `roadmap.md` lists them under Deferred:
 
 ## Questions for the owner
 
-- Agree or change each decision above.
 - Phase 7: name a second extractor model to try, or none.
 - Phase 8: agree the budgets to try, or change them from 8,000, 32,000, and 64,000
   characters.

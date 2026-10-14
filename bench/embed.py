@@ -73,7 +73,7 @@ class CachedEmbedder:
         self._max_input = max_input
         self._max_request = max_request
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        self._db = sqlite3.connect(path, timeout=60)
         self._db.execute("CREATE TABLE IF NOT EXISTS vectors (key TEXT PRIMARY KEY, vector BLOB)")
 
     def __call__(self, texts: Sequence[str]) -> list[list[float]]:

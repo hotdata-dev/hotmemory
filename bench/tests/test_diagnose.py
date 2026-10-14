@@ -1,6 +1,12 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
-from bench.diagnose import block_ids, verdict
+import pytest
+
+from bench.diagnose import block_ids, group, memory_config, table, verdict
+from bench.e2e import BASELINE
+from bench.models import READER, CachedModels, CacheMiss, Offline, Reply
 from hotmemory import Record
 
 AS_OF = datetime(2023, 5, 30, 23, 59, 59, tzinfo=UTC)
@@ -36,3 +42,39 @@ def test_verdict() -> None:
     assert verdict({"f"}, 3, {"f"}) == "recalled, reader missed"
     assert verdict({"f"}, 3, set()) == "in the top k, cut by as_of or the budget"
     assert verdict({"f"}, 31, set()) == "extracted, ranked below k"
+    assert verdict({"f"}, 31, set(), k=40) == "in the top k, cut by as_of or the budget"
+
+
+def test_memory_config_reads_the_result_file() -> None:
+    assert memory_config({"config": {}}) == BASELINE
+    found = memory_config(
+        {
+            "config": {
+                "memory": {"ranking": "vector", "k": 50, "budget": 900, "extractor": "baseline"}
+            }
+        }
+    )
+    assert (found.memory_ranking, found.k, found.budget) == ("vector", 50, 900)
+
+
+def test_table_splits_the_recalled_group() -> None:
+    rows: list[dict[str, Any]] = [
+        {"type": "multi-session", "cause": "not extracted", "present": None},
+        {"type": "multi-session", "cause": "recalled, reader missed", "present": "some"},
+        {"type": "knowledge-update", "cause": "recalled, reader missed", "present": "all"},
+    ]
+    assert group(rows[1]) == "recalled, some present"
+    lines = table(rows).splitlines()
+    assert lines[2] == "| multi-session | 2 | 1 | 0 | 0 | 0 | 1 |"
+    assert lines[3] == "| knowledge-update | 1 | 0 | 0 | 0 | 1 | 0 |"
+    assert lines[4] == "| all | 3 | 1 | 0 | 0 | 1 | 1 |"
+
+
+def test_offline_replays_the_cache_and_stops_at_a_miss(tmp_path: Path) -> None:
+    path = tmp_path / "replies.sqlite"
+    CachedModels(lambda *_: Reply("yes", 1, 1), path)(READER, "p", 10)
+    replay = CachedModels(Offline(), path)
+    assert replay(READER, "p", 10).text == "yes"
+    with pytest.raises(CacheMiss):
+        replay(READER, "q", 10)
+    assert (replay.calls, replay.spent) == (0, 0.0)
