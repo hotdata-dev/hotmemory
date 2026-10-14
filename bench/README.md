@@ -85,10 +85,14 @@ The options are these:
 | `--recall-budget` | the `budget` of the memory recall, in characters | `8000` |
 | `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py` | `baseline` |
 | `--replay` | call no model, and stop at the first reply that the cache does not hold | off |
+| `--workers` | the number of processes that run the questions | `1` |
 | `--tag` | a suffix for the name of the result file | none |
 | `--limit` | the first N questions of the sample | every question |
 
-An extractor variant names a prompt and a model. The result file is
+Each worker gets the questions in turn, and runs them over a new local database of its
+own. Each table then holds one question at a time, as in a run with one worker. This
+matters because BM25 ranks over the whole table before the scope filter. An extractor
+variant names a prompt and a model. The result file is
 `bench/results/e2e-sample-<a or b>[-<tag>].json`, and it records each option.
 
 ## The checks of the results

@@ -15,6 +15,7 @@ from bench.e2e import (
     estimate,
     run_question,
     sample_ids,
+    shards_of,
     summarize,
 )
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Reply
@@ -198,3 +199,15 @@ def test_cached_models_call_once(tmp_path: Path) -> None:
     assert models(READER, "p", 11).text == "yes"
     assert calls == ["p", "p"]
     assert models.spent == pytest.approx(5.0)
+
+
+def test_shards_deal_every_question_once(questions: dict[str, Question]) -> None:
+    base = questions["q_one"]
+    pool = [replace(base, id=f"q{n}") for n in range(10)]
+    shards = shards_of(pool, 4, "r1")
+    assert [shard.run_id for shard in shards] == ["r1-w0", "r1-w1", "r1-w2", "r1-w3"]
+    dealt = [q.id for shard in shards for q in shard.questions]
+    assert sorted(dealt) == sorted(q.id for q in pool)
+    assert [q.id for q in shards[1].questions] == ["q1", "q5", "q9"]
+    assert [shard.run_id for shard in shards_of(pool, 1, "r1")] == ["r1"]
+    assert len(shards_of(pool[:2], 4, "r1")) == 2

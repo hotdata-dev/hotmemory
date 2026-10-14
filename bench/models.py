@@ -58,7 +58,7 @@ class CachedModels:
         self.calls = 0
         self._complete = complete
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        self._db = sqlite3.connect(path, timeout=60)
         self._db.execute("CREATE TABLE IF NOT EXISTS replies (key TEXT PRIMARY KEY, reply TEXT)")
 
     def __call__(

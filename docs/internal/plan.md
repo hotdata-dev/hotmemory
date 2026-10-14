@@ -145,6 +145,11 @@ defaults below, and the owner can change any of them in review.
   the marked facts that are in the block. It tells whether they hold every value that the
   answer needs ("all present") or not ("some present").
 - The diagnosis file is named after the result file, as `<result>-diagnosis.json`.
+- `--workers N` runs the questions in N processes, and each process has its own local
+  database. The plan did not ask for it. A run of the three arms took 3.6 hours in
+  phase 5 with one process, and each later phase runs the samples again. The runner reads
+  the commit at the start of a run, so a commit during the run does not change the commit
+  that the result file records.
 
 ## Phase 7. The extractor
 

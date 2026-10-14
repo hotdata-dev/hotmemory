@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import random
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -342,6 +344,99 @@ def local_store(
         client.close()
 
 
+@dataclass(frozen=True)
+class Job:
+    """What every worker of one run shares."""
+
+    url: str
+    arms: tuple[str, ...]
+    config: Config
+    replay: bool
+    total: int
+
+
+@dataclass(frozen=True)
+class Shard:
+    """The questions of one worker, and the run id that names its database."""
+
+    questions: list[Question]
+    run_id: str
+
+
+@dataclass(frozen=True)
+class Done:
+    """The rows of one shard, and what its model calls cost."""
+
+    rows: list[dict[str, Any]]
+    spent: float
+    calls: int
+    embedder_misses: int
+
+
+def shards_of(questions: Sequence[Question], workers: int, run_id: str) -> list[Shard]:
+    """Deal `questions` over at most `workers` shards, in turn, so each shard gets every type.
+
+    With one shard, the shard keeps `run_id`. With more, shard n gets `<run_id>-w<n>`.
+    """
+    count = max(1, min(workers, len(questions)))
+    return [
+        Shard(list(questions[n::count]), f"{run_id}-w{n}" if count > 1 else run_id)
+        for n in range(count)
+    ]
+
+
+def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
+    """Return the row of the result file for one question."""
+    return {
+        "id": question.id,
+        "type": question.type,
+        "abstention": question.is_abstention,
+        "arms": {
+            arm: {
+                "correct": found.correct,
+                "context_chars": found.context_chars,
+                "facts_written": found.extracted,
+                "reader_input_tokens": found.answer.input_tokens,
+                "answer": found.answer.text,
+                "verdict": found.verdict.text,
+            }
+            for arm, found in result.items()
+        },
+    }
+
+
+def run_shard(job: Job, shard: Shard) -> Done:
+    """Run the questions of `shard` in order, over a new local database of its own.
+
+    The worker opens its own model cache, embedder, and store, so it can run in its own
+    process. It prints one line for each question.
+    """
+    from bench.models import Offline, Remote
+
+    models = CachedModels(Offline() if job.replay else Remote(), CACHE_DIR / "replies.sqlite")
+    embedder = embed.openai_embedder()
+    rows: list[dict[str, Any]] = []
+    try:
+        with local_store(job.url, shard.run_id, embedder) as (stores, empty):
+            for question in shard.questions:
+                result = run_question(
+                    question, models, stores, empty, shard.run_id, job.arms, job.config
+                )
+                rows.append(row_of(question, result))
+                marks = " ".join(
+                    f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
+                )
+                print(
+                    f"{shard.run_id} {len(rows)}/{len(shard.questions)} of {job.total} "
+                    f"{question.id} {marks} spent ${models.spent:.2f}",
+                    flush=True,
+                )
+    finally:
+        models.close()
+        embedder.close()
+    return Done(rows, models.spent, models.calls, embedder.misses)
+
+
 def main(argv: Sequence[str] | None = None) -> Path | None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -362,12 +457,20 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     parser.add_argument(
         "--replay", action="store_true", help="call no model: use cached replies, stop at a miss"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="processes that run the questions, each over a database of its own",
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
     arms = tuple(arm for arm in args.arms.split(",") if arm)
     if not set(arms) <= set(ARMS):
         parser.error(f"arms must be among {', '.join(ARMS)}")
+    if args.workers < 1:
+        parser.error("workers must be at least 1")
     try:
         config = Config(
             retrieval_ranking=args.retrieval_ranking,
@@ -399,43 +502,23 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         print("no model was called; pass --run to run, or --replay to run from the cache")
         return None
 
-    from bench.models import Offline, Remote
-
+    commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
-    models = CachedModels(Offline() if args.replay else Remote(), CACHE_DIR / "replies.sqlite")
-    embedder = embed.openai_embedder()
-    rows: list[dict[str, Any]] = []
     clock_start = time.perf_counter()
-    with local_store(args.url, run_id, embedder) as (stores, empty):
-        for count, question in enumerate(questions, start=1):
-            result = run_question(question, models, stores, empty, run_id, arms, config)
-            rows.append(
-                {
-                    "id": question.id,
-                    "type": question.type,
-                    "abstention": question.is_abstention,
-                    "arms": {
-                        arm: {
-                            "correct": found.correct,
-                            "context_chars": found.context_chars,
-                            "facts_written": found.extracted,
-                            "reader_input_tokens": found.answer.input_tokens,
-                            "answer": found.answer.text,
-                            "verdict": found.verdict.text,
-                        }
-                        for arm, found in result.items()
-                    },
-                }
-            )
-            marks = " ".join(
-                f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
-            )
-            print(
-                f"{count}/{len(questions)} {question.id} {marks} spent ${models.spent:.2f}",
-                flush=True,
-            )
-    models.close()
+    shards = shards_of(questions, args.workers, run_id)
+    job = Job(args.url, arms, config, args.replay, len(questions))
+    if len(shards) == 1:
+        done = [run_shard(job, shards[0])]
+    else:
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(len(shards), mp_context=context) as pool:
+            done = list(pool.map(run_shard, [job] * len(shards), shards))
+    by_id = {row["id"]: row for found in done for row in found.rows}
+    rows = [by_id[question.id] for question in questions]
+    spent = sum(found.spent for found in done)
+    calls = sum(found.calls for found in done)
+    misses = sum(found.embedder_misses for found in done)
 
     summaries = {arm: summarize(rows, arm) for arm in arms}
     result_file = {
@@ -494,10 +577,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "questions": len(questions),
             "estimate_usd": round(total, 2),
             "replay": args.replay,
-            "spent_usd": round(models.spent, 2),
-            "model_calls": models.calls,
-            "embedder_misses": embedder.misses,
-            "hotmemory_commit": _commit(),
+            "workers": len(shards),
+            "spent_usd": round(spent, 2),
+            "model_calls": calls,
+            "embedder_misses": misses,
+            "hotmemory_commit": commit,
             "run_id": run_id,
             "started_at": started.isoformat(),
             "duration_s": round(time.perf_counter() - clock_start, 1),
@@ -513,7 +597,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     for arm in arms:
         found = summaries[arm]["all"]
         print(f"{arm}: {found['correct']}/{found['questions']} = {found['accuracy']:.3f}")
-    print(f"spent ${models.spent:.2f}; wrote {path}")
+    print(f"spent ${spent:.2f}; wrote {path}")
     return path
 
 
