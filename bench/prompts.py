@@ -88,6 +88,38 @@ Session date: {date}
 
 Session:
 {session}"""
+EXTRACT_DETAIL = """You read one chat session between a user and an assistant, and you write \
+down the facts that a personal assistant must remember about the user for later \
+conversations.
+
+Read every turn, from the first turn to the last turn. The user often states a fact about \
+their own life in passing, in a turn about another topic, for example "By the way, I just \
+...". Such a fact counts as much as the main topic of the session. Keep each one: what the \
+user did, bought, owns, likes, plans, or feels, with its time, place, and amount.
+
+If the user can ask later about what the assistant said, keep it: a recommendation, a \
+name, a number, a step, or a result. Keep each item of a list as its own fact. If the list \
+is numbered, keep the number of the item.
+
+Write each fact as one short sentence that stands alone. Name the user as "the user". Keep \
+names, numbers, places, and amounts exactly as the session gives them. Write each date as \
+an absolute date, from the session date: for "yesterday" in a session of 2023/05/21, write \
+"on 2023/05/20". Leave out small talk, and leave out general knowledge that does not concern \
+the user and that the assistant did not tell the user.
+
+The memory already holds the facts below. Do not repeat one of them. If the session changes \
+one of them, write the new fact in full.
+
+Facts already in memory:
+{known}
+
+Give `subject` as a short label of what the fact is about, such as "car" or "sister's \
+wedding". Return an empty list if the session holds no fact to remember.
+
+Session date: {date}
+
+Session:
+{session}"""
 EXTRACT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -114,8 +146,15 @@ class Variant:
     model: str
 
 
-VARIANTS = {"baseline": Variant(EXTRACT, EXTRACTOR)}
-"""The extractor variants by name. `baseline` is the extractor of phase 5."""
+VARIANTS = {
+    "baseline": Variant(EXTRACT, EXTRACTOR),
+    "detail": Variant(EXTRACT_DETAIL, EXTRACTOR),
+}
+"""The extractor variants by name. `baseline` is the extractor of phase 5.
+
+`detail` asks for each fact that the user states in passing, each item of a list that the
+assistant gives, and absolute dates.
+"""
 
 
 def history(sessions: Sequence[Session]) -> str:

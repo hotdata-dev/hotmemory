@@ -86,6 +86,7 @@ The options are these:
 | `--recall-k` | the `k` of the memory recall | `30` |
 | `--recall-budget` | the `budget` of the memory recall, in characters | `8000` |
 | `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py` | `baseline` |
+| `--no-fact-sources` | write the facts with no session source, as phases 5 and 6 did | off |
 | `--replay` | call no model, and stop at the first reply that the cache does not hold | off |
 | `--workers` | the number of processes that run the questions | `1` |
 | `--tag` | a suffix for the name of the result file | none |
@@ -94,8 +95,14 @@ The options are these:
 Each worker gets the questions in turn, and runs them over a new local database of its
 own. Each table then holds one question at a time, as in a run with one worker. BM25 ranks
 over the whole table before the scope filter, so the rows of a second question in a table
-can change the ranking. An extractor variant names a prompt and a model. The result file is
-`bench/results/e2e-sample-<a or b>[-<tag>].json`, and it records each option.
+can change the ranking. An extractor variant names a prompt and a model. Each fact carries
+the source `session:<hash>`, where the hash is the first 12 hex digits of the SHA-256 of
+the session id. The block shows the sources to the reader, and the id of an evidence
+session holds `answer`, so the source does not show the id. If an extractor reply reaches
+its limit of 4,000 output tokens, the session writes no facts. The cache keeps that reply,
+so a replay skips the same session. The result file counts these sessions in
+`sessions_at_limit`. The result file is `bench/results/e2e-sample-<a or b>[-<tag>].json`,
+and it records each option.
 
 ## The checks of the results
 
@@ -128,4 +135,5 @@ Each miss then gets one of four causes:
 For the last cause, GPT-4o tells whether the marked facts in the block hold every value
 that the answer needs ("all present") or only some of them ("some present"). The command
 prints the groups for each question type, and writes them next to the result file, as
-`<result>-diagnosis.json`.
+`<result>-diagnosis.json`. For each fact that holds the answer, the file gives its session
+id, if the fact has a source.

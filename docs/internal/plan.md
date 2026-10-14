@@ -127,7 +127,7 @@ Tasks:
    Read from `bench/models.py` and `bench/e2e.py`, not observed: a reply that reaches the
    limit raises before the cache stores it. A reply that fails to parse is stored in the
    cache, but it stops the run. So no completed result file holds either fault, and this
-   task confirms it.
+   task makes sure that this is true.
 3. Write a new prompt variant with these rules:
    - If the user can ask later about what the assistant said, keep it.
    - Keep each item of a list as its own fact.
@@ -155,6 +155,58 @@ Stop and ask if:
 - A variant needs a field that `Fact` does not have.
 - A variant writes more than three times the facts of the baseline. The block then fills
   faster, and the owner decides the trade.
+
+What tasks 1 and 2 found, observed on 2026-10-14 by a replay of `capture` from the cache
+of the sample A run:
+
+- The phase 5 finding holds for 5 of the 19 misses. Each of the 5 is of the type
+  single-session-assistant, and the answer is a value that the assistant said. The
+  baseline prompt already asks for such facts.
+- The other 14 misses are a fact that the user stated in passing, in a turn about another
+  topic, such as "By the way, I just repainted my bedroom walls a lighter shade of gray".
+- The first evidence turn is turn 0 or turn 2 in 21 of the 26 evidence sessions. The
+  extractor wrote 126 facts from these sessions, and about 21 percent of them come from
+  the first third of the session. A word-overlap match between each fact and each turn
+  gave this share, so it is approximate.
+- Task 2 found no fault in the cache. No cached extractor reply fails to parse, and the
+  largest has 2,602 output tokens, under the limit of 4,000. No list of "Facts already in
+  memory" for the 26 evidence sessions holds a fact near the answer.
+- The first runs with sources found fault 1. On question `a3332713`, both the baseline and
+  `detail` reached the limit of 4,000 output tokens on session `sharegpt_7uSzi6w_2`, and
+  both runs stopped. In that session, the user pastes a list of survey answers from other
+  people. The extractor wrote each line as a fact about the user.
+
+Decisions taken during the work. The owner can change any of them in review.
+
+- The variant `detail` adds the rules of task 3 to the baseline prompt. It also tells the
+  extractor to read every turn, and to keep a fact that the user states in passing.
+- The source of a fact is `session:` and the first 12 hex digits of the SHA-256 of the
+  session id, not `session:<id>` (agreed with the owner on 2026-10-14). The block shows
+  the sources to the reader, and LongMemEval names each evidence session `answer_...`.
+  The plain id tells the reader which facts hold the answer. The diagnosis maps the
+  source back to the session id. The episodes of the retrieval arm keep `session:<id>`,
+  because the reader does not see their sources.
+- The sources make each line of the block longer and change the reader prompt. They
+  also change the extractor prompt. `capture` gets "Facts already in memory" from
+  `recall` with its default budget of 2,000 characters, and a longer line lets fewer
+  facts fit (observed: 9 in place of 10 for question `66f24dbb`). So the extractor cache
+  of phase 6 does not replay with sources. The baseline runs again with sources, at the
+  full price, as the comparison point of this phase. `--no-fact-sources` runs the arm as
+  phases 5 and 6 did, and a result file records `fact_sources`.
+- A reply that reaches the token limit gives no facts for its session (agreed with the
+  owner on 2026-10-14). The cache keeps the reply, marked as stopped, so a replay and the
+  diagnosis skip the same session. A result file counts these sessions in
+  `sessions_at_limit`. The other choice was a second call with a higher limit. That call
+  stores a fact about the user for each line of a pasted document.
+- `detail` met a stop condition on sample A. It cut the group "no stored fact held the
+  answer" from 19 to 16, and the condition asks for 12 or fewer. The owner accepted
+  `detail` on 2026-10-14 and asked for its run on sample B. More prompt variants wait for
+  later work.
+- Task 6 did not run. The owner named no second extractor model.
+- The phase spent at least $5.23 on models, from the result files and the run logs:
+  $0.92 and $1.73 for the `baseline` and `detail` runs on sample A, $1.71 for `detail` on
+  sample B, and $0.87 for the three diagnoses. The first try of each run on sample A
+  printed its cost only after each question, so its last calls are not in the sum.
 
 ## Phase 8. Episodes behind facts
 

@@ -24,7 +24,16 @@ from typing import Any
 
 from bench import prompts
 from bench.data import DATA_DIR, DATA_FILE, QUESTION_TYPES, load
-from bench.e2e import ACTOR, BASELINE, RECALL_BUDGET, RECALL_K, Config, extractor, local_store
+from bench.e2e import (
+    ACTOR,
+    BASELINE,
+    RECALL_BUDGET,
+    RECALL_K,
+    Config,
+    extractor,
+    fact_source,
+    local_store,
+)
 from bench.embed import CACHE_DIR
 from bench.models import JUDGE, CachedModels, Offline, Remote
 from bench.retrieval import RANKINGS, RESULTS_DIR, _commit
@@ -103,7 +112,8 @@ def verdict(holding: set[str], best_rank: int | None, block: set[str], k: int = 
 def memory_config(result: dict[str, Any]) -> Config:
     """Return the configuration of the memory arm that a result file records.
 
-    A result file of phase 5 records no `memory` section, and its run used `BASELINE`.
+    A result file of phase 5 records no `memory` section, and its run used `BASELINE`. A
+    result file of phase 6 records no `fact_sources`, and its facts carried no source.
     """
     found = result["config"].get("memory")
     if found is None:
@@ -113,6 +123,7 @@ def memory_config(result: dict[str, Any]) -> Config:
         k=found["k"],
         budget=found["budget"],
         extractor=found["extractor"],
+        fact_sources=found.get("fact_sources", False),
     )
 
 
@@ -154,15 +165,16 @@ def main(argv: Sequence[str] | None = None) -> Path:
     run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     with local_store(args.url, run_id) as (stores, empty):
         memory = Memory(stores[config.memory_ranking])
-        extract = extractor(replay, config.variant)
         for count, question_id in enumerate(missed, start=1):
             question = questions[question_id]
             namespace = ("bench", "lme_s", run_id, question.id)
+            sessions = {fact_source(session.id): session.id for session in question.sessions}
             for session in question.sessions:
+                source = fact_source(session.id) if config.fact_sources else ""
                 memory.capture(
                     prompts.session_text(session),
                     namespace,
-                    extract,
+                    extractor(replay, config.variant, source, []),
                     actor=ACTOR,
                     observed_at=session.date,
                 )
@@ -189,6 +201,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                     "type": question.type,
                     "facts": len(facts),
                     "holding": [facts[n - 1].content for n in marked],
+                    "holding_sessions": [session_of_fact(facts[n - 1], sessions) for n in marked],
                     "best_rank": ranks,
                     "cause": cause,
                     "present": present,
@@ -207,6 +220,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 "k": config.k,
                 "budget": config.budget,
                 "extractor": config.extractor,
+                "fact_sources": config.fact_sources,
             },
             "marker": JUDGE,
             "hotmemory_commit": commit,
@@ -224,11 +238,24 @@ def main(argv: Sequence[str] | None = None) -> Path:
     return path
 
 
+def session_of_fact(fact: Record, sessions: dict[str, str]) -> str | None:
+    """Return the session id of `fact` from its sources, or None if no source names one.
+
+    `sessions` maps the result of `fact_source` to the session id.
+    """
+    for source in fact.sources:
+        if source in sessions:
+            return sessions[source]
+    return None
+
+
 def _mark(marker: CachedModels, question: str, answer: str, facts: Sequence[Record]) -> list[int]:
     """Return the numbers, from 1, of the facts that the marker says hold the answer."""
     numbered = "\n".join(f"{n}. {fact.content}" for n, fact in enumerate(facts, 1))
     prompt = MARK.format(question=question, answer=answer, facts=numbered)
     reply = marker(JUDGE, prompt, 1000, MARK_SCHEMA)
+    if reply.stopped:
+        raise RuntimeError(f"{JUDGE} stopped at 1000 tokens")
     return sorted({n for n in json.loads(reply.text)["facts"] if 1 <= n <= len(facts)})
 
 
@@ -237,6 +264,8 @@ def _complete(marker: CachedModels, question: str, answer: str, facts: Sequence[
     listed = "\n".join(f"- {fact}" for fact in facts)
     prompt = COMPLETE.format(question=question, answer=answer, facts=listed)
     reply = marker(JUDGE, prompt, 100, COMPLETE_SCHEMA)
+    if reply.stopped:
+        raise RuntimeError(f"{JUDGE} stopped at 100 tokens")
     return bool(json.loads(reply.text)["complete"])
 
 

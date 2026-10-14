@@ -1,11 +1,12 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from bench.diagnose import block_ids, group, memory_config, table, verdict
-from bench.e2e import BASELINE
+from bench.diagnose import block_ids, group, memory_config, session_of_fact, table, verdict
+from bench.e2e import BASELINE, fact_source
 from bench.models import READER, CachedModels, CacheMiss, Offline, Reply
 from hotmemory import Record
 
@@ -55,6 +56,17 @@ def test_memory_config_reads_the_result_file() -> None:
         }
     )
     assert (found.memory_ranking, found.k, found.budget) == ("vector", 50, 900)
+    assert not found.fact_sources
+    memory = {"ranking": "fused", "k": 30, "budget": 8000, "extractor": "detail"}
+    sourced = memory_config({"config": {"memory": {**memory, "fact_sources": True}}})
+    assert (sourced.extractor, sourced.fact_sources) == ("detail", True)
+
+
+def test_session_of_fact_reads_the_source() -> None:
+    sessions = {fact_source("answer_a_1"): "answer_a_1"}
+    sourced = replace(fact("k"), sources=(fact_source("answer_a_1"),))
+    assert session_of_fact(sourced, sessions) == "answer_a_1"
+    assert session_of_fact(fact("k"), sessions) is None
 
 
 def test_table_splits_the_recalled_group() -> None:

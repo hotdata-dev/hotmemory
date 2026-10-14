@@ -25,11 +25,16 @@ PRICES = {
 
 @dataclass(frozen=True)
 class Reply:
-    """The text of one model reply and its token counts."""
+    """The text of one model reply and its token counts.
+
+    `stopped` is True if a reply with a schema reached its token limit, so its text is not
+    whole JSON.
+    """
 
     text: str
     input_tokens: int
     output_tokens: int
+    stopped: bool = False
 
     def cost(self, model: str) -> float:
         """Return the price of this reply in US dollars."""
@@ -106,7 +111,8 @@ class Remote:
     """`Complete` over the OpenAI chat API, at temperature 0, with 120 seconds for each try.
 
     The client reads the key from `OPENAI_MODEL_KEY`. `OPENAI_API_KEY` stays the key of the
-    embedder. With a schema, the reply is JSON that the schema allows.
+    embedder. With a schema, the reply is JSON that the schema allows, or a reply with
+    `stopped` set if it reached `max_tokens`.
     """
 
     def __init__(self) -> None:
@@ -134,11 +140,10 @@ class Remote:
             **extra,
         )
         choice = completion.choices[0]
-        if choice.finish_reason == "length" and schema is not None:
-            raise RuntimeError(f"{model} stopped at {max_tokens} tokens")
         usage = completion.usage
         return Reply(
             text=(choice.message.content or "").strip(),
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
+            stopped=choice.finish_reason == "length" and schema is not None,
         )

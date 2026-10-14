@@ -14,6 +14,7 @@ It writes one JSON file into `bench/results/` with the configuration and the res
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import multiprocessing
 import random
@@ -71,6 +72,7 @@ class Config:
     `retrieval_ranking` ranks the sessions of the retrieval arm. The memory arm captures
     and recalls with `memory_ranking`, recalls `k` records into a block of at most
     `budget` characters, and extracts with the variant `extractor` of `prompts.VARIANTS`.
+    With `fact_sources`, each fact carries the source of its session from `fact_source`.
     """
 
     retrieval_ranking: str = "fused"
@@ -78,6 +80,7 @@ class Config:
     k: int = RECALL_K
     budget: int = RECALL_BUDGET
     extractor: str = "baseline"
+    fact_sources: bool = True
 
     def __post_init__(self) -> None:
         for ranking in (self.retrieval_ranking, self.memory_ranking):
@@ -94,7 +97,7 @@ class Config:
         return prompts.VARIANTS[self.extractor]
 
 
-BASELINE = Config()
+BASELINE = Config(fact_sources=False)
 """The configuration of the phase 5 run."""
 
 
@@ -147,19 +150,45 @@ def sample_ids(name: str, questions: Sequence[Question], root: Path = HERE.paren
     return ids
 
 
+def fact_source(session_id: str) -> str:
+    """Return the source of the facts of a session: `session:` and 12 hex digits of its SHA-256.
+
+    The reader sees the sources in the block, and an evidence session id holds `answer`, so
+    the source does not show the id.
+    """
+    return "session:" + hashlib.sha256(session_id.encode()).hexdigest()[:12]
+
+
 def extractor(
-    models: Models, variant: prompts.Variant = prompts.VARIANTS["baseline"]
+    models: Models,
+    variant: prompts.Variant = prompts.VARIANTS["baseline"],
+    source: str = "",
+    at_limit: list[str] | None = None,
 ) -> Callable[[str, datetime | None, list[Record]], list[Fact]]:
-    """Return the extractor callable of `capture`: one call to the variant's model per session."""
+    """Return the extractor callable of `capture`: one call to the variant's model per session.
+
+    With `source`, each fact carries it in `sources`. A reply that reached the token limit
+    gives no facts, and `source` is appended to `at_limit`.
+    """
+    sources = (source,) if source else ()
 
     def extract(text: str, observed_at: datetime | None, current: list[Record]) -> list[Fact]:
         date = observed_at.strftime("%Y/%m/%d (%a) %H:%M") if observed_at else "unknown"
         known = [f"- {record.content}" for record in current]
         prompt = prompts.extract(text, date, known, variant.prompt)
         reply = models(variant.model, prompt, EXTRACTOR_MAX_TOKENS, prompts.EXTRACT_SCHEMA)
+        if reply.stopped:
+            if at_limit is not None:
+                at_limit.append(source)
+            return []
         facts = json.loads(reply.text)["facts"]
         return [
-            Fact(kind="fact", subject=item["subject"].strip(), content=item["content"].strip())
+            Fact(
+                kind="fact",
+                subject=item["subject"].strip(),
+                content=item["content"].strip(),
+                sources=sources,
+            )
             for item in facts
             if item["content"].strip()
         ]
@@ -175,6 +204,7 @@ class Arm:
     answer: Reply
     verdict: Reply
     extracted: int = 0
+    at_limit: int = 0
 
     @property
     def correct(self) -> bool:
@@ -182,12 +212,17 @@ class Arm:
 
 
 def answer(
-    models: Models, question: Question, prompt: str, context_chars: int, extracted: int = 0
+    models: Models,
+    question: Question,
+    prompt: str,
+    context_chars: int,
+    extracted: int = 0,
+    at_limit: int = 0,
 ) -> Arm:
     """Read `prompt` with READER, judge the answer with JUDGE, and return the arm."""
     reply = models(READER, prompt, READER_MAX_TOKENS)
     verdict = models(JUDGE, prompts.judge(question, reply.text), JUDGE_MAX_TOKENS)
-    return Arm(context_chars, reply, verdict, extracted)
+    return Arm(context_chars, reply, verdict, extracted, at_limit)
 
 
 def run_question(
@@ -220,14 +255,15 @@ def run_question(
     if "memory" in arms:
         namespace = ("bench", "lme_s", run_id, "memory", question.id)
         memory = Memory(stores[config.memory_ranking])
-        extract = extractor(models, config.variant)
         written = 0
+        at_limit: list[str] = []
         for session in question.sessions:
+            source = fact_source(session.id) if config.fact_sources else ""
             written += len(
                 memory.capture(
                     prompts.session_text(session),
                     namespace,
-                    extract,
+                    extractor(models, config.variant, source, at_limit),
                     actor=ACTOR,
                     observed_at=session.date,
                 )
@@ -237,7 +273,7 @@ def run_question(
         )
         empty(namespace)
         prompt = prompts.read_facts(question, block)
-        result["memory"] = answer(models, question, prompt, len(block), written)
+        result["memory"] = answer(models, question, prompt, len(block), written, len(at_limit))
     return result
 
 
@@ -396,6 +432,7 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
                 "correct": found.correct,
                 "context_chars": found.context_chars,
                 "facts_written": found.extracted,
+                "sessions_at_limit": found.at_limit,
                 "reader_input_tokens": found.answer.input_tokens,
                 "answer": found.answer.text,
                 "verdict": found.verdict.text,
@@ -455,6 +492,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     )
     parser.add_argument("--extractor", choices=tuple(prompts.VARIANTS), default="baseline")
     parser.add_argument(
+        "--no-fact-sources",
+        action="store_true",
+        help="write the facts with no session source, as phases 5 and 6 did",
+    )
+    parser.add_argument(
         "--replay", action="store_true", help="call no model: use cached replies, stop at a miss"
     )
     parser.add_argument(
@@ -478,6 +520,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             k=args.recall_k,
             budget=args.recall_budget,
             extractor=args.extractor,
+            fact_sources=not args.no_fact_sources,
         )
     except ValueError as error:
         parser.error(str(error))
@@ -560,6 +603,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "k": config.k,
                 "budget": config.budget,
                 "extractor": config.extractor,
+                "fact_sources": config.fact_sources,
             },
             "arms": {
                 "full": "every session of the question",
@@ -580,6 +624,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "workers": len(shards),
             "spent_usd": round(spent, 2),
             "model_calls": calls,
+            "sessions_at_limit": sum(
+                row["arms"]["memory"]["sessions_at_limit"]
+                for row in rows
+                if "memory" in row["arms"]
+            ),
             "embedder_misses": misses,
             "hotmemory_commit": commit,
             "run_id": run_id,

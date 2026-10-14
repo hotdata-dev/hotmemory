@@ -145,11 +145,12 @@ sample B on 2026-10-14. The reader and the judge were `gpt-4o-2024-08-06`.
 |---|---|---|
 | Every session of the question, about 114,000 tokens | 39 of 54 (72.2%) | 43 of 54 (79.6%) |
 | The 10 sessions that the search ranked first | 45 of 54 (83.3%) | 48 of 54 (88.9%) |
-| The block of `recall`, after `capture` with a `gpt-4o-mini` extractor | 19 of 54 (35.2%) | 27 of 54 (50.0%) |
+| The block of `recall`, after `capture` with a `gpt-4o-mini` extractor and the `baseline` prompt | 19 of 54 (35.2%) | 27 of 54 (50.0%) |
+| The same, on 2026-10-14, with the `detail` prompt and a session source on each fact | 31 of 54 (57.4%) | 32 of 54 (59.3%) |
 
-The memory contract, with this extractor, scores below the full history. The extractor
-did not store the answer in 19 of the 35 misses on sample A, and in 16 of the 27 misses on
-sample B. With 54 questions, each score can be about 10 points off, and the memory arm
+The memory contract scores below the full history. With the `baseline` prompt, the
+extractor did not store the answer in 19 of the 35 misses on sample A, and in 16 of the 27
+misses on sample B. With the `detail` prompt, these counts are 16 of 23 and 14 of 22. With 54 questions, each score can be about 10 points off, and the memory arm
 differs by 14.8 points between the two samples. In the cloud, a search took 361 ms at p50 with the vector ranking, and
 998 ms with the fused ranking.
 
