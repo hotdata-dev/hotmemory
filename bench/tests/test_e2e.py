@@ -13,6 +13,8 @@ from bench.e2e import (
     Config,
     choose_sample,
     estimate,
+    extractor,
+    fact_source,
     run_question,
     sample_ids,
     shards_of,
@@ -211,3 +213,52 @@ def test_shards_deal_every_question_once(questions: dict[str, Question]) -> None
     assert [q.id for q in shards[1].questions] == ["q1", "q5", "q9"]
     assert [shard.run_id for shard in shards_of(pool, 1, "r1")] == ["r1"]
     assert len(shards_of(pool[:2], 4, "r1")) == 2
+
+
+def test_each_variant_formats_and_keeps_the_baseline() -> None:
+    assert prompts.VARIANTS["baseline"] == prompts.Variant(prompts.EXTRACT, EXTRACTOR)
+    for name, variant in prompts.VARIANTS.items():
+        text = prompts.extract("user: hi", "2023/05/21 (Sun) 10:00", ["- old fact"], variant.prompt)
+        assert text.endswith("Session date: 2023/05/21 (Sun) 10:00\n\nSession:\nuser: hi"), name
+        assert "Facts already in memory:\n- old fact\n" in text, name
+    detail = prompts.VARIANTS["detail"].prompt
+    assert "in passing" in detail
+    assert "Keep each item of a list as its own fact" in detail
+    assert "absolute date" in detail
+
+
+def test_fact_source_hides_the_session_id() -> None:
+    source = fact_source("answer_a_1")
+    assert source == fact_source("answer_a_1")
+    assert source != fact_source("answer_a_2")
+    assert source.startswith("session:")
+    assert len(source) == len("session:") + 12
+    assert "answer" not in source
+
+
+def test_extractor_adds_the_source(questions: dict[str, Question]) -> None:
+    session = questions["q_one"].sessions[0]
+    text = prompts.session_text(session)
+    plain = extractor(FakeModels())(text, session.date, [])
+    sourced = extractor(FakeModels(), source="session:abc")(text, session.date, [])
+    assert plain and all(fact.sources == () for fact in plain)
+    assert [fact.sources for fact in sourced] == [("session:abc",)] * len(plain)
+
+
+def test_run_question_gives_each_fact_its_session(questions: dict[str, Question]) -> None:
+    question = questions["q_one"]
+    store = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    models = FakeModels()
+
+    def empty(namespace: Sequence[str]) -> None:
+        for record in store.list(namespace, limit=1000):
+            store.delete(record.namespace, record.key)
+
+    run_question(
+        question, models, {"fused": store, "vector": store}, empty, "r1", ("memory",), Config()
+    )
+    block = [p for m, p in models.prompts if m == READER and "several facts" in p[:60]][-1]
+    late = next(s for s in question.sessions if s.id == "answer_a_late")
+    assert f"[sources: {fact_source(late.id)}]" in block
+    assert "[sources: none]" not in block
+    assert "answer_" not in block
