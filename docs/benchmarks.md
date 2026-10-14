@@ -269,7 +269,10 @@ only. Both are in `bench/prompts.py`.
 From phase 7, each fact carries the source `session:<hash>`, with the first 12 hex digits
 of the SHA-256 of the session id. The block shows the sources to the reader, so each line
 is longer than in phases 5 and 6. The runs of phases 5 and 6 had no sources. The baseline
-therefore ran again with sources, as the point of comparison.
+therefore ran again with sources, as the point of comparison. On 2026-10-14, at commit
+`db2fe63`, a replay of sample A with `--no-fact-sources` gave the same answer and the same
+mark on each of the 54 questions as phase 6, with no model call. File:
+`e2e-sample-a-replay-no-sources.json`.
 
 Observed on 2026-10-14, at commit `a9d87c0`, with 4 workers.
 
