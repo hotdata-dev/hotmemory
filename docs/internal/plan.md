@@ -174,7 +174,7 @@ of the sample A run:
 - The first runs with sources found fault 1. On question `a3332713`, both the baseline and
   `detail` reached the limit of 4,000 output tokens on session `sharegpt_7uSzi6w_2`, and
   both runs stopped. In that session, the user pastes a list of survey answers from other
-  people, and the extractor wrote each line as a fact about the user.
+  people. The extractor wrote each line as a fact about the user.
 
 Decisions taken during the work. The owner can change any of them in review.
 
@@ -191,13 +191,22 @@ Decisions taken during the work. The owner can change any of them in review.
   `recall` with its default budget of 2,000 characters, and a longer line lets fewer
   facts fit (observed: 9 in place of 10 for question `66f24dbb`). So the extractor cache
   of phase 6 does not replay with sources. The baseline runs again with sources, at the
-  full price, as the comparison point of this phase.
+  full price, as the comparison point of this phase. `--no-fact-sources` runs the arm as
+  phases 5 and 6 did, and a result file records `fact_sources`.
 - A reply that reaches the token limit gives no facts for its session (agreed with the
   owner on 2026-10-14). The cache keeps the reply, marked as stopped, so a replay and the
   diagnosis skip the same session. A result file counts these sessions in
-  `sessions_at_limit`. The other choice was a second call with a higher limit. It would
-  store a fact about the user for each line of a pasted document. `--no-fact-sources` runs the arm as phases 5 and 6 did, and a
-  result file records `fact_sources`.
+  `sessions_at_limit`. The other choice was a second call with a higher limit. That call
+  stores a fact about the user for each line of a pasted document.
+- `detail` met a stop condition on sample A. It cut the group "no stored fact held the
+  answer" from 19 to 16, and the condition asks for 12 or fewer. The owner accepted
+  `detail` on 2026-10-14 and asked for its run on sample B. More prompt variants wait for
+  later work.
+- Task 6 did not run. The owner named no second extractor model.
+- The phase spent at least $5.23 on models, from the result files and the run logs:
+  $0.92 and $1.73 for the `baseline` and `detail` runs on sample A, $1.71 for `detail` on
+  sample B, and $0.87 for the three diagnoses. The first try of each run on sample A
+  printed its cost only after each question, so its last calls are not in the sum.
 
 ## Phase 8. Episodes behind facts
 

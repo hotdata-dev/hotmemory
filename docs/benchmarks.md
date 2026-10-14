@@ -144,7 +144,7 @@ sample.
 |---|---|
 | Reader | `gpt-4o-2024-08-06`, temperature 0, up to 800 output tokens, the chain-of-thought prompt of the reference code |
 | Judge | `gpt-4o-2024-08-06`, temperature 0, the prompt of the reference code for each question type |
-| Extractor of the memory arm | `gpt-4o-mini-2024-07-18`, with the `baseline` prompt in `bench/prompts.py` |
+| Extractor of the memory arm | `gpt-4o-mini-2024-07-18`, with the `baseline` prompt in `bench/prompts.py`, except in the section on extractor variants |
 | Driver | `HotdataStore` with the fused ranking, on the local stack |
 
 The arms:
@@ -256,6 +256,80 @@ The misses of each question type, on sample B:
 | knowledge-update | 4 | 1 | 0 | 1 | 2 |
 | temporal-reasoning | 2 | 1 | 0 | 0 | 1 |
 
+### The extractor variants
+
+Phase 7 tried two extractor prompts, each with `gpt-4o-mini-2024-07-18`, on the memory arm
+only. Both are in `bench/prompts.py`.
+
+| Variant | What the prompt asks for |
+|---|---|
+| `baseline` | The prompt of phases 5 and 6. |
+| `detail` | The `baseline` rules, with four more. Read every turn. Keep a fact that the user states in passing. Keep each item of a list as its own fact. Write each date as an absolute date. |
+
+From phase 7, each fact carries the source `session:<hash>`, with the first 12 hex digits
+of the SHA-256 of the session id. The block shows the sources to the reader, so each line
+is longer than in phases 5 and 6. The runs of phases 5 and 6 had no sources. The baseline
+therefore ran again with sources, as the point of comparison.
+
+Observed on 2026-10-14, at commit `a9d87c0`, with 4 workers.
+
+| Run | Sample | Correct of 54 | Facts per session | Reader tokens at the median | Sessions at the token limit | Cost | File |
+|---|---|---|---|---|---|---|---|
+| `baseline`, no sources (phase 6) | A | 19 | 5.34 | 1,462 | not recorded | see above | `e2e-sample-a.json` |
+| `baseline` | A | 22 | 5.36 | 1,698 | 0 | at least $0.92 | `e2e-sample-a-baseline-sources.json` |
+| `detail` | A | 31 | 5.39 | 1,655 | 1 | at least $1.73 | `e2e-sample-a-detail.json` |
+| `baseline`, no sources (phase 6) | B | 27 | 5.20 | 1,466 | not recorded | see above | `e2e-sample-b.json` |
+| `detail` | B | 32 | 5.00 | 1,664 | 0 | $1.71 | `e2e-sample-b-detail.json` |
+
+The first try of each run on sample A stopped at question `a3332713`. One extractor reply
+reached the limit of 4,000 output tokens on a session where the user pastes a list of
+survey answers. From commit `a9d87c0`, such a reply gives no facts for its session, and
+the run goes on. The second try took the replies of the first from the cache. The cost of
+each run on sample A is the sum of both tries. The first try printed its cost only after
+each question, so its last calls are not in the sum.
+
+Correct answers by question type:
+
+| Question type | `baseline`, A | `detail`, A | `baseline` no sources, B | `detail`, B |
+|---|---|---|---|---|
+| single-session-user | 4 | 4 | 6 | 6 |
+| single-session-assistant | 3 | 2 | 4 | 4 |
+| single-session-preference | 3 | 4 | 0 | 1 |
+| multi-session | 3 | 6 | 5 | 6 |
+| knowledge-update | 4 | 8 | 5 | 7 |
+| temporal-reasoning | 5 | 7 | 7 | 8 |
+| All | 22 | 31 | 27 | 32 |
+
+The diagnosis of each run, with the same commands as above. The diagnoses cost $0.31,
+$0.29, and $0.27.
+
+| Cause | `baseline`, A | `detail`, A | `baseline` no sources, B | `detail`, B |
+|---|---|---|---|---|
+| No stored fact states the answer or a value that it needs | 19 | 16 | 16 | 14 |
+| A stored fact holds it, and the fused search ranked it below 30 | 1 | 1 | 0 | 0 |
+| A marked fact was in the top 30, and `recall` left it out | 0 | 0 | 0 | 0 |
+| The block holds every needed fact, and the reader missed | 0 | 0 | 1 | 1 |
+| The block holds some of the needed facts | 12 | 6 | 10 | 7 |
+| Misses | 32 | 23 | 27 | 22 |
+
+`detail` gained 13 questions on sample A over the `baseline` with sources, and lost 4. Of
+the 13, 9 were misses where the block of the baseline held some of the needed facts. So
+most of the gain comes from facts that are more complete, with exact values and absolute
+dates. The group with no stored fact got smaller by 3 on sample A and by 2 on sample B.
+
+Phase 7 read the misses and found these facts:
+
+- Phase 5 said that the extractor dropped what the assistant said. On sample A, that
+  holds for 5 of the 19 misses with no stored fact. The other 14 are a fact that the user
+  states in passing, in a turn about another topic.
+- With `detail`, the extractor still drops what the assistant said. On sample A, 7 misses
+  of the type single-session-assistant have no stored fact. For 3 of their sessions,
+  `detail` wrote no fact at all.
+- The marker of the diagnosis can miss facts. On sample A, `detail` stored the facts that
+  hold the answer for `2ce6a0f2`, `92a0aa75`, and `71017277`, and the marker marked none of
+  them. The marker reads all facts of a question in one call, 226 to 300 facts here. So
+  the group with no stored fact can be smaller than the table shows, in each run.
+
 ## Known limits
 
 - The end-to-end numbers come from samples of 54 questions, so one question moves an arm
@@ -263,7 +337,9 @@ The misses of each question type, on sample B:
   run on all 500 questions waits for the owner's agreement.
 - The full-context arm gives the reader every session. The reference code keeps the last
   50 sessions, so the two differ for histories longer than 50 sessions.
-- The extractor of the memory arm is the only one tried. A stronger extractor or another
-  prompt was not measured.
+- The memory arm tried one extractor model, `gpt-4o-mini-2024-07-18`, with two prompts. A
+  stronger extractor model was not measured.
+- The diagnosis marks the facts of a question in one model call, and it can miss facts in
+  a long list. Its count of misses with no stored fact can be too high.
 - `recall` keeps the records that are valid at `as_of`, and a search over history does not
   exist yet. A question about a value before it changed can need a superseded record.
