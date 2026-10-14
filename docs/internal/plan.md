@@ -124,9 +124,10 @@ Tasks:
    - A fact that the extractor left out because a near fact was in "Facts already in
      memory".
 
-   Read from `bench/models.py`, not observed: a reply that reaches the limit raises
-   before the cache stores it, and a reply that fails to parse stops the run. So the
-   first two faults are not expected in the cache, and this task confirms it.
+   Read from `bench/models.py` and `bench/e2e.py`, not observed: a reply that reaches the
+   limit raises before the cache stores it. A reply that fails to parse is stored in the
+   cache, but it stops the run. So no completed result file holds either fault, and this
+   task confirms it.
 3. Write a new prompt variant with these rules:
    - If the user can ask later about what the assistant said, keep it.
    - Keep each item of a list as its own fact.
