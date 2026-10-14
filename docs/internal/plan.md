@@ -1,10 +1,12 @@
 # Plan: the second workstream, memory accuracy
 
 Status: agreed, 2026-10-13. The owner agreed to each decision and to the target on
-2026-10-13. Phase 6 is open, as issue #16. This file holds the open workstream, phases 6 to 13. Each phase becomes one GitHub
+2026-10-13. Phase 6 closed on 2026-10-14 with PR #18. Phase 7 is open, as issue
+#19. This file holds the open workstream, phases 7 to 13. Each phase becomes one GitHub
 issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
-git history, at commit `4a6fb36`.
+git history, at commit `4a6fb36`. The plan of phase 6, with the decisions taken during
+its work, is at commit `8a7318d`.
 
 ## Goal
 
@@ -34,7 +36,8 @@ writes, and does not try to reduce it. The roadmap lists the latency work under 
 
 ## Where we start
 
-All numbers are from `docs/benchmarks.md`, observed on 2026-10-10.
+All numbers are from `docs/benchmarks.md`. The rows of sample A were observed on
+2026-10-10, and the rows of sample B on 2026-10-14.
 
 | Item | Value |
 |---|---|
@@ -45,7 +48,11 @@ All numbers are from `docs/benchmarks.md`, observed on 2026-10-10.
 | Sample of 54, memory arm | 19 correct, 1,462 reader tokens |
 | Memory misses, no stored fact held the answer | 19 of 35 |
 | Memory misses, stored but ranked below 30 | 2 of 35, both ranked higher by the vector ranking |
-| Memory misses, a needed fact was in the block | 14 of 35, an upper bound |
+| Memory misses, a needed fact was in the block | 14 of 35: 1 with every needed fact, 13 with some |
+| Sample B, full context, retrieval, and memory arms | 43, 48, and 27 correct of 54 |
+| Sample B memory misses, no stored fact held the answer | 16 of 27 |
+| Sample B memory misses, stored but ranked below 30 | 0 of 27 |
+| Sample B memory misses, a needed fact was in the block | 11 of 27: 1 with every needed fact, 10 with some |
 
 Four facts about the memory arm, read from `bench/e2e.py` and `src/hotmemory/contract.py`,
 shape the phases below:
@@ -91,74 +98,17 @@ The owner agreed to each item on 2026-10-13.
   `docs/contracts.md`, and `docs/guarantees.md` in the same commit, and `MemoryStore` gets
   the same behavior as `HotdataStore`.
 
-## Phase 6. The accuracy loop
-
-Goal: one command runs a variant of the memory arm on a sample, and one command explains
-its misses. Every later phase uses these two commands.
-
-Tasks:
-
-1. Mark phase 6 open in `roadmap.md`.
-2. `bench/e2e.py` takes `--sample a|b`. Sample B is drawn with a new fixed seed, has no
-   question of sample A, and its ids are committed as `bench/sample-b.json`.
-3. The memory arm takes its configuration from the command line and writes it into the
-   result file: the ranking of the store, `k`, `budget`, and a name for the extractor
-   variant. The extractor variant names a prompt and a model in `bench/prompts.py`.
-4. The retrieval arm takes the ranking from the command line too. Today it is fixed to
-   fused.
-5. `bench/diagnose.py` runs on any result file of the memory arm. It prints the three
-   groups of misses for each question type. It splits the group "a needed fact was in the
-   block" in two. The marker tells whether the block holds every needed fact ("all
-   present") or only some of them ("some present").
-6. Rerun the memory arm on sample A from the caches. It must give 19 of 54 at no model
-   cost. If it does not, stop.
-7. Run all three arms on sample B. This is the baseline of B.
-8. Record both baselines in `docs/benchmarks.md`, with their configuration.
-
-Acceptance criteria:
-
-- `make verify` passes, with offline tests for the new options and for the sample draw.
-- The rerun of sample A from the caches reproduces 19 of 54 and the 19, 2, and 14 split.
-- `docs/benchmarks.md` reports the baseline of sample B for each arm and each type.
-
-Stop and ask if:
-
-- The cached rerun of sample A does not reproduce the published numbers.
-- The estimate for sample B is over 50 dollars.
-
-Decisions taken during the work. The plan left these details open. The work took the
-defaults below, and the owner can change any of them in review.
-
-- Sample B uses the seed `20261013` and the draw rule of sample A, over the questions that
-  are not in sample A. It holds 4 abstention questions, and sample A holds 2 (observed).
-- One `Config` in `bench/e2e.py` holds the options of tasks 3 and 4, so the two tasks are
-  one commit. The memory arm uses one ranking for the search inside `capture` and for
-  `recall`. The options are `--retrieval-ranking`, `--memory-ranking`, `--recall-k`,
-  `--recall-budget`, `--extractor`, and `--tag`.
-- A result file is named `e2e-sample-<a or b>[-<tag>].json`. The phase 5 file
-  `e2e-sample.json` stays as the record of phase 5.
-- `--replay` runs the arms with a model stand-in that raises at the first reply that the
-  cache does not hold. The diagnosis replays `capture` the same way, in place of the stop
-  at 1 dollar of spend.
-- The diagnosis keeps the marker prompt of phase 5 unchanged, so the cache reproduces the
-  three groups. A second GPT-4o call splits the group "recalled, reader missed". It gets
-  the marked facts that are in the block. It tells whether they hold every value that the
-  answer needs ("all present") or not ("some present").
-- The diagnosis file is named after the result file, as `<result>-diagnosis.json`.
-- `--workers N` runs the questions in N processes, and each process has its own local
-  database. The plan did not ask for it. A run of the three arms took 3.6 hours in
-  phase 5 with one process, and each later phase runs the samples again. The runner reads
-  the commit at the start of a run, so a commit during the run does not change the commit
-  that the result file records.
-- The phase spent $21.80 on models, from the result files: $21.42 for the run of sample
-  B, $0.37 for its diagnosis, and $0.01 for the split of the diagnosis of sample A. The
-  replays of sample A spent nothing. The first diagnosis run of sample A stalled on one
-  call and was stopped, and the cost of that call is not observed.
-
 ## Phase 7. The extractor
 
 Goal: the extractor stores the facts that the questions ask about. The target is the
-group of 19 misses where no stored fact held the answer.
+group of misses where no stored fact held the answer: 19 on sample A and 16 on sample B.
+
+Phase 6 built the commands that this phase uses. `--extractor <name>` runs a variant
+from `VARIANTS` in `bench/prompts.py`. `bench/diagnose.py --result <file>` gives the
+groups of misses of any result file. `--replay` and `--workers N` are described in
+`bench/README.md`. A new prompt misses the reply cache, so each variant pays for its
+capture, reader, and judge calls. The full-context and retrieval arms do not change, so
+run each variant with `--arms memory`.
 
 The library does not change in this phase. All work is in `bench/`.
 
@@ -173,6 +123,10 @@ Tasks:
    - A reply that failed to parse.
    - A fact that the extractor left out because a near fact was in "Facts already in
      memory".
+
+   Read from `bench/models.py`, not observed: a reply that reaches the limit raises
+   before the cache stores it, and a reply that fails to parse stops the run. So the
+   first two faults are not expected in the cache, and this task confirms it.
 3. Write a new prompt variant with these rules:
    - If the user can ask later about what the assistant said, keep it.
    - Keep each item of a list as its own fact.
