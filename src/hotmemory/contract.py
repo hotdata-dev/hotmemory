@@ -10,7 +10,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, TypeAlias
 
 from hotmemory._chunks import chunk_document
-from hotmemory._rules import check_prefix, is_duplicate, newest_first, next_revision, under_prefix
+from hotmemory._rules import (
+    check_prefix,
+    is_duplicate,
+    is_forgotten,
+    newest_first,
+    next_revision,
+    under_prefix,
+)
 from hotmemory._writer import check_count
 from hotmemory.filter import Filter
 from hotmemory.memory import utc_now
@@ -225,7 +232,7 @@ class Memory:
         """Return the episodes that the sources of `records` name, in order, without repeats.
 
         A source that is not a record id, is outside `allowed`, or names no episode is
-        skipped.
+        skipped, and so is an episode past its `forget_after`. A superseded revision stays.
         """
         cited: dict[str, Record | None] = {}
         for record in records:
@@ -241,7 +248,11 @@ class Memory:
                     continue
                 revision = int(source.rpartition("@")[2])
                 found = self._store.get(namespace, key, revision)
-                if found is not None and found.kind == "episode":
+                if (
+                    found is not None
+                    and found.kind == "episode"
+                    and not is_forgotten(found, self._clock())
+                ):
                     cited[source] = found
         return [episode for episode in cited.values() if episode is not None]
 

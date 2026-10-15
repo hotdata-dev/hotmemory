@@ -61,7 +61,8 @@ each one, and its failure message points to this file.
   A capture of the same text under the same key writes nothing and calls no extractor.
 - `Memory.recall` takes `episodes`, `"cited"` or `"search"`. With it, the block adds the
   episodes that its facts cite, or the top episodes for the query, after the facts and
-  inside the budget. Without it, `recall` returns no episode, as before.
+  inside the budget. Without it, `recall` returns no episode, as before. Neither value
+  returns an episode past its `forget_after`.
 - The block of `recall` and `profile` shows a source that is the id of a record in the
   namespace of its line as `<key>@<revision>`. Before, it showed the full id. The stored
   sources do not change.

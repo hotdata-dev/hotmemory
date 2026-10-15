@@ -746,6 +746,39 @@ def test_recall_cited_skips_an_episode_outside_the_scopes(memory: Memory) -> Non
     assert "episodes:" not in block
 
 
+def test_recall_cited_skips_an_episode_past_its_forget_after(
+    memory: Memory, clock: FakeClock
+) -> None:
+    memory.store.put(
+        SCOPE,
+        "chat-0001",
+        kind="episode",
+        content="The disk fills at night.",
+        forget_after=START + timedelta(hours=1),
+    )
+    sources = ("team/alerts/chat-0001@1",)
+    memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)
+    records, _ = memory.recall("disk", [SCOPE], budget=10_000, episodes="cited")
+    assert [record.kind for record in records] == ["fact", "episode"]
+
+    clock.advance(timedelta(hours=2))
+    for episodes in ("cited", "search"):
+        records, block = memory.recall("disk", [SCOPE], budget=10_000, episodes=episodes)
+        assert [record.kind for record in records] == ["fact"]
+        assert "episodes:" not in block
+
+
+def test_recall_cited_keeps_a_superseded_revision(memory: Memory, clock: FakeClock) -> None:
+    memory.store.put(SCOPE, "chat-0001", kind="episode", content="The disk fills at night.")
+    sources = ("team/alerts/chat-0001@1",)
+    memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)
+    clock.advance()
+    memory.store.put(SCOPE, "chat-0001", kind="episode", content="The disk fills at noon.")
+    records, block = memory.recall("disk", [SCOPE], budget=10_000, episodes="cited")
+    assert [(record.key, record.revision) for record in records[1:]] == [("chat-0001", 1)]
+    assert "The disk fills at night." in block
+
+
 def test_recall_search_adds_the_top_episodes(memory: Memory, clock: FakeClock) -> None:
     capture_two_chats(memory, clock)
     records, block = memory.recall("pool nodes ceiling", [SCOPE], k=1, episodes="search")

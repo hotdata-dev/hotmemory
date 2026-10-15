@@ -346,7 +346,8 @@ The two values of `episodes` choose the episodes in two ways.
 - `"cited"` reads the sources of each fact of the block, in order. Each source that is
   the id of a record of kind `episode` in the allowed scopes gives that revision, read
   with `get`. An episode cited twice comes once, at its first place. A source that is not
-  such an id is skipped.
+  such an id is skipped. An episode past its `forget_after` is skipped, as `search`
+  hides it. A superseded revision stays, because the fact cites that revision.
 - `"search"` searches the current episodes in the allowed scopes with the query, for the
   top k, in the order of the search.
 
