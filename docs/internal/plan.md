@@ -1,18 +1,19 @@
 # Plan: the second workstream, memory accuracy
 
 Status: agreed, 2026-10-13. The owner agreed to each decision and to the target on
-2026-10-13. Phase 6 closed on 2026-10-14 with PR #18. Phase 7 is open, as issue
-#19. This file holds the open workstream, phases 7 to 13. Each phase becomes one GitHub
+2026-10-13. Phase 7 closed on 2026-10-14 with PR #21. Phase 8 is open, as issue
+#22. This file holds the open workstream, phases 8 to 13. Each phase becomes one GitHub
 issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
 git history, at commit `4a6fb36`. The plan of phase 6, with the decisions taken during
-its work, is at commit `8a7318d`.
+its work, is at commit `8a7318d`. The plan of phase 7 is at commit `ab93da1`.
 
 ## Goal
 
 When this workstream closes, the memory arm meets the target below, and hotmemory is on
-PyPI. The memory arm scored 19 of 54 on sample A (35.2 percent). The retrieval arm scored
-45 of 54.
+PyPI. At the start of the workstream, the memory arm scored 19 of 54 on sample A (35.2
+percent). After phase 7, it scores 31 of 54 on sample A and 32 on sample B. The retrieval
+arm scored 45 of 54 on sample A.
 
 The target (agreed) is a distance from the lowest published score of a memory layer with
 a GPT-4o reader: Zep at 71.2 percent (read, not reproduced). The published range goes up
@@ -37,7 +38,8 @@ writes, and does not try to reduce it. The roadmap lists the latency work under 
 ## Where we start
 
 All numbers are from `docs/benchmarks.md`. The rows of sample A were observed on
-2026-10-10, and the rows of sample B on 2026-10-14.
+2026-10-10, and the rows of sample B on 2026-10-14. The rows of phase 7 were observed on
+2026-10-14.
 
 | Item | Value |
 |---|---|
@@ -53,13 +55,19 @@ All numbers are from `docs/benchmarks.md`. The rows of sample A were observed on
 | Sample B memory misses, no stored fact held the answer | 16 of 27 |
 | Sample B memory misses, stored but ranked below 30 | 0 of 27 |
 | Sample B memory misses, a needed fact was in the block | 11 of 27: 1 with every needed fact, 10 with some |
+| Phase 7, memory arm with `detail` and sources, sample A | 31 correct, 1,655 reader tokens at the median |
+| Phase 7, memory arm with `detail` and sources, sample B | 32 correct, 1,664 reader tokens at the median |
+| Phase 7 misses with `detail`, no stored fact held the answer | 16 of 23 on sample A, 14 of 22 on sample B |
+| Phase 7 misses with `detail`, the block held some needed facts | 6 of 23 on sample A, 7 of 22 on sample B |
 
 Four facts about the memory arm, read from `bench/e2e.py` and `src/hotmemory/contract.py`,
 shape the phases below:
 
-1. The extractor is `bench/e2e.py:77`. It sends each session to `gpt-4o-mini-2024-07-18`
-   with the prompt in `bench/prompts.py`, and returns `Fact(kind="fact")` with a subject
-   and content only. The facts carry no `sources`.
+1. The extractor is `extractor` in `bench/e2e.py`. It sends each session to
+   `gpt-4o-mini-2024-07-18` with a prompt variant from `VARIANTS` in `bench/prompts.py`,
+   and returns `Fact(kind="fact")` with a subject, content, and the source
+   `session:<hash>`. The hash is the first 12 hex digits of the SHA-256 of the session id.
+   From phase 7, the memory arm runs with `--extractor detail`.
 2. `capture` stores facts only. It does not store the session, so the memory arm keeps no
    session text in the store.
 3. `remember` derives each key from the subject and a hash of the content. A changed value
@@ -83,9 +91,9 @@ The owner agreed to each item on 2026-10-13.
   The diagnosis shows the targeted group of misses getting smaller. A phase reports every
   variant it tried, not only the best one.
 - Fixed models (agreed). The reader and the judge stay `gpt-4o-2024-08-06` at
-  temperature 0, with the reference prompts. The baseline extractor stays
-  `gpt-4o-mini-2024-07-18`. Phase 7 tries at most one other extractor model, chosen by the
-  owner.
+  temperature 0, with the reference prompts. The extractor stays
+  `gpt-4o-mini-2024-07-18`. From phase 7, its prompt is `detail`. Phase 7 tried no other
+  extractor model, because the owner named none.
 - The full-context arm (agreed). It runs once on sample B, in phase 6, as the baseline
   of B. No later phase runs it again on 54 questions. It costs the most, at about 114,000
   tokens per question.
@@ -98,123 +106,35 @@ The owner agreed to each item on 2026-10-13.
   `docs/contracts.md`, and `docs/guarantees.md` in the same commit, and `MemoryStore` gets
   the same behavior as `HotdataStore`.
 
-## Phase 7. The extractor
-
-Goal: the extractor stores the facts that the questions ask about. The target is the
-group of misses where no stored fact held the answer: 19 on sample A and 16 on sample B.
-
-Phase 6 built the commands that this phase uses. `--extractor <name>` runs a variant
-from `VARIANTS` in `bench/prompts.py`. `bench/diagnose.py --result <file>` gives the
-groups of misses of any result file. `--replay` and `--workers N` are described in
-`bench/README.md`. A new prompt misses the reply cache, so each variant pays for its
-capture, reader, and judge calls. The full-context and retrieval arms do not change, so
-run each variant with `--arms memory`.
-
-The library does not change in this phase. All work is in `bench/`.
-
-Tasks:
-
-1. Read the 19 misses of sample A with their sessions, and list what the extractor
-   dropped in each. Phase 5 found that it kept the interest of the user and dropped what
-   the assistant said: a number, a name, or an item of a list. Make sure that the data
-   agrees with this before you change the prompt.
-2. Look for three faults in the extractor replies:
-   - A reply that reached the limit of 4,000 output tokens.
-   - A reply that failed to parse.
-   - A fact that the extractor left out because a near fact was in "Facts already in
-     memory".
-
-   Read from `bench/models.py` and `bench/e2e.py`, not observed: a reply that reaches the
-   limit raises before the cache stores it. A reply that fails to parse is stored in the
-   cache, but it stops the run. So no completed result file holds either fault, and this
-   task makes sure that this is true.
-3. Write a new prompt variant with these rules:
-   - If the user can ask later about what the assistant said, keep it.
-   - Keep each item of a list as its own fact.
-   - Write each date as an absolute date.
-   - Keep names and numbers exactly.
-
-   Each variant gets a name, and the old prompt stays as the baseline variant.
-4. Each fact carries the source `session:<id>`, as each episode of the retrieval arm
-   does. This prepares phase 8, and it lets the diagnosis name the session of a fact.
-5. Run each variant on sample A, from the session cache where the prompt did not change.
-   Report accuracy, the diagnosis, the facts written per session, and the cost.
-6. If the owner names one other extractor model, try it with the best prompt.
-7. Run the best variant once on sample B.
-8. Record the variants and the result in `docs/benchmarks.md`.
-
-Acceptance criteria:
-
-- The group "no stored fact held the answer" is smaller on sample A and on sample B than
-  in their baselines.
-- `docs/benchmarks.md` reports every variant tried, with its prompt name, model, and cost.
-
-Stop and ask if:
-
-- No variant reduces the group of 19 by at least a third on sample A.
-- A variant needs a field that `Fact` does not have.
-- A variant writes more than three times the facts of the baseline. The block then fills
-  faster, and the owner decides the trade.
-
-What tasks 1 and 2 found, observed on 2026-10-14 by a replay of `capture` from the cache
-of the sample A run:
-
-- The phase 5 finding holds for 5 of the 19 misses. Each of the 5 is of the type
-  single-session-assistant, and the answer is a value that the assistant said. The
-  baseline prompt already asks for such facts.
-- The other 14 misses are a fact that the user stated in passing, in a turn about another
-  topic, such as "By the way, I just repainted my bedroom walls a lighter shade of gray".
-- The first evidence turn is turn 0 or turn 2 in 21 of the 26 evidence sessions. The
-  extractor wrote 126 facts from these sessions, and about 21 percent of them come from
-  the first third of the session. A word-overlap match between each fact and each turn
-  gave this share, so it is approximate.
-- Task 2 found no fault in the cache. No cached extractor reply fails to parse, and the
-  largest has 2,602 output tokens, under the limit of 4,000. No list of "Facts already in
-  memory" for the 26 evidence sessions holds a fact near the answer.
-- The first runs with sources found fault 1. On question `a3332713`, both the baseline and
-  `detail` reached the limit of 4,000 output tokens on session `sharegpt_7uSzi6w_2`, and
-  both runs stopped. In that session, the user pastes a list of survey answers from other
-  people. The extractor wrote each line as a fact about the user.
-
-Decisions taken during the work. The owner can change any of them in review.
-
-- The variant `detail` adds the rules of task 3 to the baseline prompt. It also tells the
-  extractor to read every turn, and to keep a fact that the user states in passing.
-- The source of a fact is `session:` and the first 12 hex digits of the SHA-256 of the
-  session id, not `session:<id>` (agreed with the owner on 2026-10-14). The block shows
-  the sources to the reader, and LongMemEval names each evidence session `answer_...`.
-  The plain id tells the reader which facts hold the answer. The diagnosis maps the
-  source back to the session id. The episodes of the retrieval arm keep `session:<id>`,
-  because the reader does not see their sources.
-- The sources make each line of the block longer and change the reader prompt. They
-  also change the extractor prompt. `capture` gets "Facts already in memory" from
-  `recall` with its default budget of 2,000 characters, and a longer line lets fewer
-  facts fit (observed: 9 in place of 10 for question `66f24dbb`). So the extractor cache
-  of phase 6 does not replay with sources. The baseline runs again with sources, at the
-  full price, as the comparison point of this phase. `--no-fact-sources` runs the arm as
-  phases 5 and 6 did, and a result file records `fact_sources`.
-- A reply that reaches the token limit gives no facts for its session (agreed with the
-  owner on 2026-10-14). The cache keeps the reply, marked as stopped, so a replay and the
-  diagnosis skip the same session. A result file counts these sessions in
-  `sessions_at_limit`. The other choice was a second call with a higher limit. That call
-  stores a fact about the user for each line of a pasted document.
-- `detail` met a stop condition on sample A. It cut the group "no stored fact held the
-  answer" from 19 to 16, and the condition asks for 12 or fewer. The owner accepted
-  `detail` on 2026-10-14 and asked for its run on sample B. More prompt variants wait for
-  later work.
-- Task 6 did not run. The owner named no second extractor model.
-- The phase spent at least $5.23 on models, from the result files and the run logs:
-  $0.92 and $1.73 for the `baseline` and `detail` runs on sample A, $1.71 for `detail` on
-  sample B, and $0.87 for the three diagnoses. The first try of each run on sample A
-  printed its cost only after each question, so its last calls are not in the sum.
-
 ## Phase 8. Episodes behind facts
 
 Goal: `recall` can give the reader the source text of its facts. The retrieval arm shows
 that whole sessions answer 45 of 54. This phase lets the memory contract use them, within
 a budget.
 
-This phase changes the library.
+The target is the two largest groups of misses after phase 7. With `detail`, no stored fact
+held the answer in 16 of 23 misses on sample A and 14 of 22 on sample B. The block held
+some of the needed facts in 6 and 7. An episode holds the turns that the extractor
+dropped, so it can answer both groups.
+
+This phase changes the library. The memory arm runs with `--extractor detail` and fact
+sources, the configuration of phase 7. Its results are the baseline of this phase: 31 of
+54 on sample A and 32 on sample B.
+
+What phase 7 left for this phase, read from `bench/e2e.py` and `src/hotmemory/contract.py`,
+not observed:
+
+- Each benchmark fact carries the source `session:<hash>`, set by the extractor in
+  `bench/e2e.py`. `load` adds the id of its episode to the sources of each fact, and the id
+  is `<namespace>/<key>@<revision>`. If `capture` does the same, each fact gets a second,
+  longer source.
+- The block shows the sources to the reader, and `capture` passes the block of `recall` to
+  the extractor as "Facts already in memory". A change to the sources changes both
+  prompts, so the extractor cache of phase 7 does not replay. Phase 7 observed this for
+  its own change. A run with a new source pays for the extractor again, at about the cost
+  of a run of phase 7.
+- The key of the episode must not show the session id, for the reason of phase 7:
+  LongMemEval names each evidence session `answer_...`, and the reader sees the sources.
 
 Tasks:
 
@@ -227,12 +147,19 @@ Tasks:
      episodes that the recalled facts cite, or the episodes that a search over episodes
      ranks first. The block gives the facts first, then the episodes, each with its date.
      One `budget` covers both, and the facts never lose their place to an episode.
+   - How a fact shows its episode. The proposal names the source string that the block
+     shows, and whether the extractor of the benchmark still sets `session:<hash>`.
 2. Build the agreed surface in `Memory`, for both drivers. The conformance suite, the
    ledger in `docs/guarantees.md`, the skill commands, and `CHANGELOG.md` follow.
-3. The memory arm captures each session with an episode key. Then it recalls with each
-   `episodes` value, at three budgets: 8,000, 32,000, and 64,000 characters.
-4. Report accuracy against reader tokens for each value on sample A, then the best one
-   on sample B.
+3. The memory arm captures each session with an episode key, the hash of phase 7. Then it
+   recalls with each `episodes` value, at three budgets: 8,000, 32,000, and 64,000
+   characters. The search inside `capture` does not change with these values, so each
+   run after the first replays `capture` from the extractor cache (read from source, not
+   observed). Only the reader and the judge pay for each value and budget.
+4. `bench/diagnose.py` reports, for each miss, whether the block held an evidence session
+   as an episode.
+5. Report accuracy against reader tokens for each value on sample A, then the best one
+   on sample B, with the diagnosis and the cost of each run.
 
 Acceptance criteria:
 
@@ -241,12 +168,15 @@ Acceptance criteria:
 - A capture with an episode writes the episode and the facts in one flush per table, and
   a retried capture writes nothing new.
 - `docs/benchmarks.md` reports accuracy and reader tokens for each value and budget.
+- The best value scores more than 31 of 54 on sample A and more than 32 on sample B, the
+  results of phase 7.
 
 Stop and ask if:
 
 - The surface needs a new `Store` method or a new record field.
 - The best value needs more reader tokens than the retrieval arm, 29,878 at the median.
   Then memory costs as much as retrieval, and the owner decides whether the trade holds.
+- The estimate of a run is over 50 dollars.
 
 ## Phase 9. The ranking
 
@@ -431,7 +361,6 @@ These wait, and `roadmap.md` lists them under Deferred:
 
 ## Questions for the owner
 
-- Phase 7: name a second extractor model to try, or none.
 - Phase 8: agree the budgets to try, or change them from 8,000, 32,000, and 64,000
   characters.
 - Phase 13: the first version number, and whether to publish to TestPyPI first.
