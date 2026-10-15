@@ -164,9 +164,11 @@ Tasks:
 Decisions of task 1, agreed by the owner on 2026-10-15. `docs/contracts.md` holds the
 surface.
 
-- `capture` takes an optional `episode` key. The facts and the episode go through one
-  writer, the facts first. If the episode is current with the same content, `capture`
-  calls no extractor, writes nothing, and returns no id.
+- `capture` takes an optional `episode` key. `remember` writes the facts, and then one
+  `put` writes the episode, as in `load`. The proposal said one writer, but a flush of
+  `HotdataStore` loads its tables at the same time, so the order of the two writes was
+  not fixed (read from source, not observed). If the episode is current with the same
+  content, `capture` calls no extractor, writes nothing, and returns no id.
 - `recall` takes `episodes`: none, `"cited"`, or `"search"`. Both values read with the
   `Store` methods of today. `"search"` uses the same `k` as the facts.
 - The block gives the facts first, then a line `episodes:`, then each episode under a

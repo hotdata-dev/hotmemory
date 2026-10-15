@@ -1,6 +1,7 @@
 """Tests of the memory contract. Each test runs `Memory` over every driver."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import pytest
 
@@ -587,3 +588,213 @@ def test_a_loaded_fact_is_valid_from_the_observed_time(memory: Memory) -> None:
         [],
         "",
     )
+
+
+CHAT = "user: The disk fills at night.\n\nassistant: Rotate the logs before noon."
+LATER = "user: The pool ran out of nodes.\n\nassistant: Raise the node group ceiling."
+
+
+def first_turn(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+    """Return one fact with the first turn of a chat, without its role."""
+    turn = text.split("\n\n")[0].removeprefix("user: ")
+    return [Fact(kind="fact", subject="chat", content=turn, sources=("chat",))]
+
+
+class CountingStore:
+    """A store that counts the calls of `put` and `writer`, and passes each call on."""
+
+    def __init__(self, store: Store) -> None:
+        self.inner = store
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str) -> object:
+        if name in ("put", "writer"):
+            self.calls.append(name)
+        return getattr(self.inner, name)
+
+
+def test_capture_with_an_episode_stores_it_and_links_its_facts(memory: Memory) -> None:
+    observed = START - timedelta(days=2)
+    ids = memory.capture(
+        CHAT, SCOPE, first_turn, actor="extractor", observed_at=observed, episode="chat-0001"
+    )
+
+    episode = memory.store.get(SCOPE, "chat-0001")
+    assert episode is not None
+    assert (episode.kind, episode.content, episode.actor, episode.observed_at) == (
+        "episode",
+        CHAT,
+        "extractor",
+        observed,
+    )
+    [fact] = [memory.store.get(SCOPE, record_id.split("/")[-1].split("@")[0]) for record_id in ids]
+    assert fact is not None
+    assert (fact.content, fact.sources) == ("The disk fills at night.", ("chat", episode.id))
+
+
+def test_capture_writes_one_flush_per_table(store: Store, clock: FakeClock) -> None:
+    counting = CountingStore(store)
+    memory = Memory(cast(Store, counting), clock=clock)
+    memory.capture(CHAT, SCOPE, first_turn, episode="chat-0001")
+    assert counting.calls == ["writer", "put"]
+
+
+def test_a_retried_capture_with_an_episode_writes_nothing_new(
+    memory: Memory, clock: FakeClock
+) -> None:
+    calls: list[str] = []
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        calls.append(text)
+        return first_turn(text, observed_at, current)
+
+    memory.capture(CHAT, SCOPE, extractor, episode="chat-0001")
+    before = memory.store.list(SCOPE, limit=1000)
+    clock.advance()
+    assert memory.capture(CHAT, SCOPE, extractor, episode="chat-0001") == []
+
+    assert calls == [CHAT]
+    assert memory.store.list(SCOPE, limit=1000) == before
+    assert all(len(memory.store.history(SCOPE, r.key)) == 1 for r in before)
+
+
+def test_capture_with_a_failing_extractor_writes_no_episode(memory: Memory) -> None:
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        raise RuntimeError("the model is down")
+
+    with pytest.raises(RuntimeError, match="down"):
+        memory.capture(CHAT, SCOPE, extractor, episode="chat-0001")
+    assert memory.store.list(SCOPE) == []
+    memory.capture(CHAT, SCOPE, first_turn, episode="chat-0001")
+    assert memory.store.get(SCOPE, "chat-0001") is not None
+
+
+@pytest.mark.parametrize(
+    ("episode", "text"), [("a/b", CHAT), ("a@b", CHAT), ("", CHAT), ("chat", " \n")]
+)
+def test_capture_refuses_a_bad_episode(memory: Memory, episode: str, text: str) -> None:
+    with pytest.raises(ValueError):
+        memory.capture(text, SCOPE, first_turn, episode=episode)
+    assert memory.store.list(SCOPE) == []
+
+
+def test_capture_refuses_an_episode_key_that_holds_a_fact(memory: Memory) -> None:
+    memory.store.put(SCOPE, "chat-0001", kind="fact", content="Not an episode.")
+    with pytest.raises(ValueError, match="episode"):
+        memory.capture(CHAT, SCOPE, first_turn, episode="chat-0001")
+    assert [record.key for record in memory.store.list(SCOPE)] == ["chat-0001"]
+
+
+def test_recall_shows_a_source_in_its_namespace_as_key_and_revision(memory: Memory) -> None:
+    sources = ("team/alerts/chat-0001@2", "team/alerts/night/chat-0002@1", "team/x@1", "wiki")
+    memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)
+    _, block = memory.recall("disk", [SCOPE])
+    assert block == (
+        "- The disk fills. [sources: chat-0001@2, team/alerts/night/chat-0002@1, team/x@1, wiki]"
+        " [valid: unknown to now]"
+    )
+
+
+def capture_two_chats(memory: Memory, clock: FakeClock) -> None:
+    memory.capture(
+        CHAT, SCOPE, first_turn, observed_at=datetime(2026, 9, 1, tzinfo=UTC), episode="chat-0001"
+    )
+    clock.advance()
+    memory.capture(
+        LATER, SCOPE, first_turn, observed_at=datetime(2026, 9, 2, tzinfo=UTC), episode="chat-0002"
+    )
+
+
+PINNED_CITED = (
+    "- The disk fills at night. [sources: chat, chat-0001@1] "
+    "[valid: 2026-09-01T00:00:00Z to now]\n"
+    "episodes:\n"
+    "## chat-0001@1 [observed: 2026-09-01T00:00:00Z]\n"
+    "user: The disk fills at night.\n\nassistant: Rotate the logs before noon."
+)
+
+
+def test_recall_cited_adds_the_episodes_of_the_facts(memory: Memory, clock: FakeClock) -> None:
+    capture_two_chats(memory, clock)
+    records, block = memory.recall("disk at night", [SCOPE], k=1, episodes="cited")
+    assert block == PINNED_CITED
+    assert [(record.kind, record.key) for record in records] == [
+        ("fact", records[0].key),
+        ("episode", "chat-0001"),
+    ]
+
+
+def test_recall_cited_names_each_episode_once(memory: Memory, clock: FakeClock) -> None:
+    capture_two_chats(memory, clock)
+    clock.advance()
+    memory.capture(LATER, SCOPE, first_turn, episode="chat-0003")
+    records, block = memory.recall("pool nodes", [SCOPE], k=1, budget=10_000, episodes="cited")
+    assert [record.key for record in records if record.kind == "episode"] == [
+        "chat-0002",
+        "chat-0003",
+    ]
+    assert "[sources: chat, chat-0002@1, chat-0003@1]" in block
+
+
+def test_recall_cited_skips_an_episode_outside_the_scopes(memory: Memory) -> None:
+    other = ("team", "billing")
+    memory.store.put(other, "chat-0009", kind="episode", content="The disk bill is due.")
+    sources = ("team/billing/chat-0009@1",)
+    memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)
+    records, block = memory.recall("disk", [SCOPE], budget=10_000, episodes="cited")
+    assert [record.kind for record in records] == ["fact"]
+    assert "episodes:" not in block
+
+
+def test_recall_search_adds_the_top_episodes(memory: Memory, clock: FakeClock) -> None:
+    capture_two_chats(memory, clock)
+    records, block = memory.recall("pool nodes ceiling", [SCOPE], k=1, episodes="search")
+    assert [record.kind for record in records] == ["fact", "episode"]
+    assert records[1].key == "chat-0002"
+    assert block.split("\n")[1:3] == [
+        "episodes:",
+        "## chat-0002@1 [observed: 2026-09-02T00:00:00Z]",
+    ]
+
+
+def test_recall_episodes_never_take_the_place_of_a_fact(memory: Memory, clock: FakeClock) -> None:
+    capture_two_chats(memory, clock)
+    facts, fact_block = memory.recall("disk at night", [SCOPE], k=1)
+    for budget in (len(fact_block), len(PINNED_CITED) - 1):
+        records, block = memory.recall(
+            "disk at night", [SCOPE], k=1, budget=budget, episodes="cited"
+        )
+        assert (records, block) == (facts, fact_block)
+    records, block = memory.recall(
+        "disk at night", [SCOPE], k=1, budget=len(PINNED_CITED), episodes="cited"
+    )
+    assert block == PINNED_CITED
+
+
+def test_recall_stops_before_the_first_episode_that_does_not_fit(
+    memory: Memory, clock: FakeClock
+) -> None:
+    capture_two_chats(memory, clock)
+    _, both = memory.recall("disk pool", [SCOPE], k=2, budget=10_000, episodes="search")
+    cut = len(both) - 1
+    records, block = memory.recall("disk pool", [SCOPE], k=2, budget=cut, episodes="search")
+    assert [record.kind for record in records] == ["fact", "fact", "episode"]
+    assert both.startswith(block + "\n## ")
+    assert len(block) <= cut
+
+
+def test_recall_as_of_filters_the_episodes(memory: Memory, clock: FakeClock) -> None:
+    capture_two_chats(memory, clock)
+    records, _ = memory.recall(
+        "pool nodes ceiling",
+        [SCOPE],
+        as_of=datetime(2026, 9, 1, 12, tzinfo=UTC),
+        budget=10_000,
+        episodes="search",
+    )
+    assert [record.key for record in records if record.kind == "episode"] == ["chat-0001"]
+
+
+def test_recall_refuses_an_unknown_episodes_value(memory: Memory) -> None:
+    with pytest.raises(ValueError, match="episodes"):
+        memory.recall("disk", [SCOPE], episodes=cast(Any, "all"))

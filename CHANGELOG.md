@@ -56,3 +56,12 @@ each one, and its failure message points to this file.
 - `Memory.recall` and `Memory.profile` read the records of kind `fact`, `profile`, and
   `procedure` only. They never return an episode, and the counts of `profile` leave
   episodes out.
+- `Memory.capture` takes `episode`, a key. With it, `capture` also stores the text as an
+  episode under that key, after the facts, and each fact names the episode in `sources`.
+  A capture of the same text under the same key writes nothing and calls no extractor.
+- `Memory.recall` takes `episodes`, `"cited"` or `"search"`. With it, the block adds the
+  episodes that its facts cite, or the top episodes for the query, after the facts and
+  inside the budget. Without it, `recall` returns no episode, as before.
+- The block of `recall` and `profile` shows a source that is the id of a record in the
+  namespace of its line as `<key>@<revision>`. Before, it showed the full id. The stored
+  sources do not change.

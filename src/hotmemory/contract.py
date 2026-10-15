@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from hotmemory._chunks import chunk_document
 from hotmemory._rules import check_prefix, is_duplicate, newest_first, next_revision, under_prefix
@@ -35,6 +35,9 @@ PROFILE_LIMIT = 100
 COUNT_LIMIT = 1000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
 RECALLED_KINDS: tuple[Kind, ...] = ("fact", "profile", "procedure")
+EPISODES_LINE = "episodes:"
+Episodes: TypeAlias = Literal["cited", "search"]
+"""Which episodes `recall` adds after the facts: those the facts cite, or a search over them."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -77,13 +80,25 @@ def render_line(record: Record) -> str:
 
     The line is `- <content> [sources: a, b] [valid: <from> to <until>]`. Each run of
     whitespace in the content becomes one space. A null `valid_from` shows as `unknown`,
-    a null `valid_until` as `now`, and no sources as `none`.
+    a null `valid_until` as `now`, and no sources as `none`. A source that is the id of a
+    record in the namespace of `record` shows as `<key>@<revision>`.
     """
     content = " ".join(record.content.split())
-    sources = ", ".join(record.sources) or "none"
+    sources = ", ".join(_shown_source(source, record.namespace) for source in record.sources)
+    sources = sources or "none"
     start = _time(record.valid_from, "unknown")
     end = _time(record.valid_until, "now")
     return f"- {content} [sources: {sources}] [valid: {start} to {end}]"
+
+
+def render_episode(record: Record) -> str:
+    """Return the part of a rendered block for the episode `record`.
+
+    The part is a header `## <key>@<revision> [observed: <observed_at>]`, a newline, and
+    the content with its line breaks. A null `observed_at` shows as `unknown`.
+    """
+    observed = _time(record.observed_at, "unknown")
+    return f"## {record.key}@{record.revision} [observed: {observed}]\n{record.content}"
 
 
 def fit_lines(lines: Sequence[str], budget: int) -> int:
@@ -164,22 +179,71 @@ class Memory:
         as_of: datetime | None = None,
         budget: int = DEFAULT_BUDGET,
         k: int = 10,
+        episodes: Episodes | None = None,
     ) -> tuple[list[Record], str]:
         """Return the top current records for `query` under `scopes`, and their block.
 
-        The search returns up to `k` current records of the kinds in RECALLED_KINDS, so
-        it never returns an episode. With `as_of`, only the ones valid at `as_of` remain.
-        The block holds one line for each record, in order, and stops before the first
-        line that would pass `budget` characters. The list holds the records of the block.
+        The search returns up to `k` current records of the kinds in RECALLED_KINDS. With
+        `as_of`, only the ones valid at `as_of` remain. The block holds one line for each
+        record, in order, and stops before the first line that would pass `budget`
+        characters. With `episodes`, the block then holds the episodes that fit in what is
+        left, after a line `episodes:`: those that the facts of the block cite with
+        `"cited"`, or the top `k` episodes for `query` with `"search"`. The list holds the
+        records of the block, the facts first.
         """
         check_count("budget", budget)
+        if episodes not in (None, "cited", "search"):
+            raise ValueError(f"episodes must be None, 'cited', or 'search', got {episodes!r}")
         recalled = Filter(kind=RECALLED_KINDS)
         records = [hit.record for hit in self._store.search(query, scopes, recalled, k=k)]
         if as_of is not None:
             records = [record for record in records if is_valid_at(record, as_of)]
         lines = [render_line(record) for record in records]
         count = fit_lines(lines, budget)
-        return records[:count], "\n".join(lines[:count])
+        records, lines = records[:count], lines[:count]
+        if episodes is None:
+            return records, "\n".join(lines)
+        if episodes == "cited":
+            found = self._cited(records, _scopes(scopes))
+        else:
+            kind = Filter(kind="episode")
+            found = [hit.record for hit in self._store.search(query, scopes, kind, k=k)]
+        if as_of is not None:
+            found = [episode for episode in found if is_valid_at(episode, as_of)]
+        parts: list[str] = []
+        shown: list[Record] = []
+        for episode in found:
+            more = [*parts, render_episode(episode)]
+            if len("\n".join([*lines, EPISODES_LINE, *more])) > budget:
+                break
+            parts, shown = more, [*shown, episode]
+        if not shown:
+            return records, "\n".join(lines)
+        return [*records, *shown], "\n".join([*lines, EPISODES_LINE, *parts])
+
+    def _cited(self, records: Sequence[Record], allowed: Sequence[tuple[str, ...]]) -> list[Record]:
+        """Return the episodes that the sources of `records` name, in order, without repeats.
+
+        A source that is not a record id, is outside `allowed`, or names no episode is
+        skipped.
+        """
+        cited: dict[str, Record | None] = {}
+        for record in records:
+            for source in record.sources:
+                if source in cited:
+                    continue
+                cited[source] = None
+                try:
+                    namespace, key = _slot(source)
+                except ValueError:
+                    continue
+                if not any(under_prefix(namespace, scope) for scope in allowed):
+                    continue
+                revision = int(source.rpartition("@")[2])
+                found = self._store.get(namespace, key, revision)
+                if found is not None and found.kind == "episode":
+                    cited[source] = found
+        return [episode for episode in cited.values() if episode is not None]
 
     def candidates(self, fact: Fact, scopes: Sequence[Sequence[str]], k: int = 5) -> list[Hit]:
         """Return up to `k` current records near the content of `fact`, closest first.
@@ -326,14 +390,26 @@ class Memory:
         extractor: Extractor,
         actor: str = "",
         observed_at: datetime | None = None,
+        episode: str | None = None,
     ) -> list[str]:
         """Call `extractor` on `text` and remember the facts that it returns.
 
         The extractor gets `text`, `observed_at`, and the records that `recall` returns for
-        `text` under `scope`. A fact with no `observed_at` gets `observed_at`. Returns the
-        ids that `remember` returns.
+        `text` under `scope`. A fact with no `observed_at` gets `observed_at`. With
+        `episode`, a key, `text` is also stored as an episode under that key, written after
+        the facts, and each fact gets the id of the episode added to its `sources`. If that
+        episode is current with the same content, the extractor is not called and nothing
+        is written. Raises ValueError if `episode` is not a valid key, holds another kind,
+        or `text` is blank. Returns the ids that `remember` returns.
         """
-        return self._extract(text, scope, extractor, actor, observed_at, ())
+        if episode is None:
+            return self._extract(text, scope, extractor, actor, observed_at, ())
+        check_key(episode)
+        if not text.strip():
+            raise ValueError("text must not be blank when capture stores an episode")
+        namespace = check_namespace(scope)
+        _, facts = self._episode(namespace, episode, text, extractor, actor, observed_at)
+        return facts
 
     def load(
         self,
@@ -366,21 +442,39 @@ class Memory:
         for number, chunk in enumerate(chunk_document(text, chunk_chars), start=1):
             key = f"{document}-{number:04d}"
             check_key(key)
-            current = self._store.get(namespace, key)
-            if current is not None and current.kind != "episode":
-                raise ValueError(f"key {key!r} holds kind {current.kind!r}, not an episode")
-            if current is not None and is_duplicate(current, chunk, self._clock()):
-                episodes.append(current.id)
-                continue
-            episode = record_id(namespace, key, next_revision(current))
-            facts.extend(self._extract(chunk, namespace, extractor, actor, observed_at, (episode,)))
-            written = self._store.put(
-                namespace, key, kind="episode", content=chunk, actor=actor, observed_at=observed_at
-            )
-            if written != episode:
-                raise RuntimeError(f"episode {key!r} was written as {written!r}, not {episode!r}")
-            episodes.append(written)
+            episode, written = self._episode(namespace, key, chunk, extractor, actor, observed_at)
+            episodes.append(episode)
+            facts.extend(written)
         return episodes, facts
+
+    def _episode(
+        self,
+        namespace: tuple[str, ...],
+        key: str,
+        text: str,
+        extractor: Extractor,
+        actor: str,
+        observed_at: datetime | None,
+    ) -> tuple[str, list[str]]:
+        """Extract the facts of `text`, then store `text` as the episode under `key`.
+
+        Each fact gets the id of the episode in its `sources`. If the episode is current
+        with the same content, nothing is called or written. Returns the id of the episode
+        and the ids of the facts.
+        """
+        current = self._store.get(namespace, key)
+        if current is not None and current.kind != "episode":
+            raise ValueError(f"key {key!r} holds kind {current.kind!r}, not an episode")
+        if current is not None and is_duplicate(current, text, self._clock()):
+            return current.id, []
+        episode = record_id(namespace, key, next_revision(current))
+        facts = self._extract(text, namespace, extractor, actor, observed_at, (episode,))
+        written = self._store.put(
+            namespace, key, kind="episode", content=text, actor=actor, observed_at=observed_at
+        )
+        if written != episode:
+            raise RuntimeError(f"episode {key!r} was written as {written!r}, not {episode!r}")
+        return written, facts
 
     def _extract(
         self,
@@ -424,6 +518,16 @@ def _slot(record_id: str) -> tuple[tuple[str, ...], str]:
     namespace, key = check_namespace(labels[:-1]), labels[-1]
     check_key(key)
     return namespace, key
+
+
+def _shown_source(source: str, namespace: tuple[str, ...]) -> str:
+    """Return `source` as the block shows it: `<key>@<revision>` for a record in `namespace`."""
+    prefix = "/".join(namespace) + "/"
+    rest = source.removeprefix(prefix)
+    key, separator, revision = rest.rpartition("@")
+    if rest == source or not separator or not key or "/" in key or not revision.isdigit():
+        return source
+    return rest
 
 
 def _time(value: datetime | None, missing: str) -> str:

@@ -357,6 +357,14 @@ retried call write nothing new.
 The extractor sees the records that `recall` returns for the text, before the capture
 writes anything. A write is never visible inside the same turn.
 
+With an `episode` key, `capture` first reads the current revision of that key with `get`.
+If it holds the same content, the call ends there, with no extractor call. Else the
+diagram above runs with the id of the next episode revision added to the `sources` of
+each fact, and then one `put` writes the text to `episode_v1`. The two writes are two
+flushes, one for each table, in that order. A flush of `HotdataStore` loads its tables at
+the same time, so with one writer for both, the episode can land without the facts. A retry
+would then skip the extractor.
+
 ## Recall and search
 
 `recall` calls `search` with the filter `kind` in (`fact`, `profile`, `procedure`). That
@@ -373,8 +381,20 @@ flowchart TD
     asof -- "no" --> render
     keep --> render["Render one line for each record"]
     render --> fit["Keep whole lines up to the budget"]
-    fit --> out["Return the records and the block"]
+    fit --> eps{"episodes given?"}
+    eps -- "no" --> out["Return the records and the block"]
+    eps -- "cited" --> get["get each episode that the facts<br/>of the block name in sources"]
+    eps -- "search" --> find["search the episodes,<br/>kind episode, top k"]
+    get --> whole["Add whole episodes while they fit<br/>in what the facts left"]
+    find --> whole
+    whole --> out
 ```
+
+With `episodes="cited"`, `recall` sends one `get` for each distinct source that is an
+episode id in the allowed scopes. With `episodes="search"`, it sends a second search with
+the filter `kind` = `episode`, so that search reads `episode_v1`. The episodes that
+`capture` and `load` write have no cues, so the fused ranking of that search is BM25 and
+the content vector.
 
 The `as_of` filter runs in the process, after the search. Thus `recall` with `as_of` can
 return fewer than k records. The search keeps k records before the filter, so a record that
