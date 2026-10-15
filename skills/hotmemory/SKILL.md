@@ -42,7 +42,10 @@ python scripts/remember.py --memory-file memory.json --scope team/alerts --subje
 
 Print the records that match the query, one line each, inside the budget in characters.
 Each line holds the content, the sources, and the validity span. Add `--as-of` to keep
-only the records that were valid at that time.
+only the records that were valid at that time. Add `--episodes cited` to print, after the
+facts, the episodes that they name in their sources. Add `--episodes search` to print
+the episodes that match the query. Each episode is printed whole, under a line that
+gives its key and its date, while it fits in the budget.
 
 ```sh
 python scripts/recall.py --memory-file memory.json --scope team --query "When does the disk fill?" \
@@ -89,13 +92,26 @@ python scripts/capture.py --memory-file memory.json --scope team/alerts --actor 
   --extractor extractors:one_fact_per_sentence --text "The CPU spikes at noon. The disk fills at noon."
 ```
 
+Add `--episode` with a key to also store the text as an episode under that key. Each fact
+then names the episode in its sources. If you capture the same text under the same key
+again, the script writes nothing and calls no extractor.
+
+```sh
+python scripts/capture.py --memory-file memory.json --scope team/alerts --actor sentence-splitter \
+  --extractor extractors:one_fact_per_sentence --episode chat-0001 \
+  --text "The pool ran out of nodes. The node group was at its ceiling."
+python scripts/recall.py --memory-file memory.json --scope team --query "Why did the pool run out?" \
+  --budget 1000 --episodes cited
+```
+
 ## Load a document
 
 Store a Markdown document as episodes, one for each chunk, and run an extractor on each
 chunk. A chunk starts at a heading, never inside a code block, and starts with the first
 heading of the document and its heading path. Each fact names the episode of its chunk in
-its sources. `recall` never returns an episode. The script prints the episode ids and then
-the fact ids. If you load the same file again, it writes nothing and calls no extractor.
+its sources. `recall` prints an episode only with `--episodes`. The script prints the
+episode ids and then the fact ids. If you load the same file again, it writes nothing and
+calls no extractor.
 
 ```sh
 python scripts/load.py --memory-file memory.json --scope team/alerts --document disk-incident \

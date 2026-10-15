@@ -87,6 +87,8 @@ The options are these:
 | `--recall-budget` | the `budget` of the memory recall, in characters | `8000` |
 | `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py` | `baseline` |
 | `--no-fact-sources` | write the facts with no session source, as phases 5 and 6 did | off |
+| `--session-episodes` | capture each session as an episode, with the facts citing it | off |
+| `--episodes` | `none`, `cited`, or `search`, the `episodes` of the memory recall; a value other than `none` needs `--session-episodes` | `none` |
 | `--replay` | call no model, and stop at the first reply that the cache does not hold | off |
 | `--workers` | the number of processes that run the questions | `1` |
 | `--tag` | a suffix for the name of the result file | none |
@@ -101,7 +103,14 @@ the session id. The block shows the sources to the reader, and the id of an evid
 session holds `answer`, so the source does not show the id. If an extractor reply reaches
 its limit of 4,000 output tokens, the session writes no facts. The cache keeps that reply,
 so a replay skips the same session. The result file counts these sessions in
-`sessions_at_limit`. The result file is `bench/results/e2e-sample-<a or b>[-<tag>].json`,
+`sessions_at_limit`.
+
+With `--session-episodes`, `capture` stores each session as an episode under the key
+`session-<hash>`, with the same hash. Each fact then cites that episode, and carries no
+`session:<hash>` source. The block shows the source as `session-<hash>@1`. The source
+holds no run id, so a second run with another `--episodes` or `--recall-budget` replays
+`capture` from the cache. The result file lists the episode keys of each block in
+`episodes_in_block`. The result file is `bench/results/e2e-sample-<a or b>[-<tag>].json`,
 and it records each option.
 
 ## The checks of the results
@@ -136,4 +145,6 @@ For the last cause, GPT-4o tells whether the marked facts in the block hold ever
 that the answer needs ("all present") or only some of them ("some present"). The command
 prints the groups for each question type, and writes them next to the result file, as
 `<result>-diagnosis.json`. For each fact that holds the answer, the file gives its session
-id, if the fact has a source.
+id, if the fact has a source. If the run recalled episodes, each miss also gets
+`evidence_in_block`: whether the block held an evidence session as an episode. The table
+then counts these misses in a last column.

@@ -152,7 +152,7 @@ Tasks:
 2. Build the agreed surface in `Memory`, for both drivers. The conformance suite, the
    ledger in `docs/guarantees.md`, the skill commands, and `CHANGELOG.md` follow.
 3. The memory arm captures each session with an episode key, the hash of phase 7. Then it
-   recalls with each `episodes` value, at three budgets: 8,000, 32,000, and 64,000
+   recalls with each `episodes` value, at three budgets: 16,000, 32,000, and 64,000
    characters. The search inside `capture` does not change with these values, so each
    run after the first replays `capture` from the extractor cache (read from source, not
    observed). Only the reader and the judge pay for each value and budget.
@@ -160,6 +160,28 @@ Tasks:
    as an episode.
 5. Report accuracy against reader tokens for each value on sample A, then the best one
    on sample B, with the diagnosis and the cost of each run.
+
+Decisions of task 1, agreed by the owner on 2026-10-15. `docs/contracts.md` holds the
+surface.
+
+- `capture` takes an optional `episode` key. `remember` writes the facts, and then one
+  `put` writes the episode, as in `load`. The proposal said one writer, but a flush of
+  `HotdataStore` loads its tables at the same time, so the order of the two writes was
+  not fixed (read from source, not observed). If the episode is current with the same
+  content, `capture` calls no extractor, writes nothing, and returns no id.
+- `recall` takes `episodes`: none, `"cited"`, or `"search"`. Both values read with the
+  `Store` methods of today. `"search"` uses the same `k` as the facts.
+- The block gives the facts first, then a line `episodes:`, then each episode under a
+  header `## <key>@<revision> [observed: <observed_at>]`. It holds whole episodes only,
+  and it stops before the first episode that does not fit.
+- A source that is the id of a record in the same namespace shows as `<key>@<revision>`.
+  So the run id of the benchmark is in no prompt, and a run after the first replays
+  `capture` from the cache. The blocks of documents that `load` stored get shorter.
+- The benchmark extractor stops setting `session:<hash>`. The episode key is
+  `session-<hash>`, with the hash of phase 7. The first run pays for the extractor again.
+- The budgets are 16,000, 32,000, and 64,000 characters. The reason for dropping 8,000 was
+  an estimate that the facts of phase 7 leave no room for a whole session. The runs then
+  showed blocks of facts of at most 5,626 characters, so the estimate was too high.
 
 Acceptance criteria:
 
@@ -361,6 +383,4 @@ These wait, and `roadmap.md` lists them under Deferred:
 
 ## Questions for the owner
 
-- Phase 8: agree the budgets to try, or change them from 8,000, 32,000, and 64,000
-  characters.
 - Phase 13: the first version number, and whether to publish to TestPyPI first.

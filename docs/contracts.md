@@ -296,12 +296,12 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 | Operation | Arguments | Behavior |
 |---|---|---|
 | `remember` | facts, scope, actor | Writes facts that are already structured, and returns their ids in order. Each fact is a `Fact`, with `kind`, `content`, and the optional record fields. The key comes from the subject and a hash of the normalized content, so a retried call writes nothing new. The facts go through one writer. Thus one refused fact means that no fact is written. |
-| `recall` | query, scopes, optional as_of, budget in characters, k | Searches the current revisions of kind `fact`, `profile`, and `procedure` in the allowed scopes for the top k records. It never returns an episode. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. It returns the records inside the budget as a list and as one rendered block. The block labels each record with its sources and its validity span, and with nothing else. |
+| `recall` | query, scopes, optional as_of, budget in characters, k, optional episodes | Searches the current revisions of kind `fact`, `profile`, and `procedure` in the allowed scopes for the top k records. With `as_of`, it keeps the ones that are valid at `as_of`, so a fact superseded after `as_of` is not returned. With `episodes`, it also returns episodes after the facts. `"cited"` gives the episodes that the facts of the block name in `sources`. `"search"` gives the top k episodes for the query. With no `episodes`, it returns no episode. It returns the records inside the budget as a list and as one rendered block. The facts take the budget first, and the episodes fill what is left. |
 | `candidates` | fact, scopes, k | Returns the top k hits of `search` for the content of the fact, sorted by distance, closest first. It makes no decision. A consolidator that the caller writes reads this before it calls `remember` or `supersede`. |
 | `supersede` | scope, key of the record to close, new fact, optional valid_from, actor | Closes the named record and writes the new fact as the next revision under its key, in one `put` with `close_previous`. The new `valid_from` is the argument, else that of the fact, else now. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the key has no current revision, or the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
 | `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
 | `profile` | subject, scopes, budget in characters | Returns the current records of kind `fact`, `profile`, and `procedure` for the subject, grouped by `kind`. It returns them as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
-| `capture` | text, scope, extractor, actor, observed_at | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. The extractor is a plain callable. The library ships no model and names no model. |
+| `capture` | text, scope, extractor, actor, observed_at, optional episode | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. With `episode`, a key, it also stores the text as a record of kind `episode` under that key, and adds the id of the episode to the `sources` of each fact. `remember` writes the facts in one flush, and then one `put` writes the episode, as in `load`. If the episode is not written, a retry calls the extractor again. If the episode is current with the same content, `capture` calls no extractor, writes nothing, and returns no id. With `episode`, a blank text, a key that is not valid, or a key that holds another kind makes the call refuse before the extractor runs. The extractor is a plain callable. The library ships no model and names no model. |
 | `load` | document, text, scope, extractor, actor, observed_at, chunk_chars | Cuts a Markdown document into chunks. It stores chunk n as a record of kind `episode` under the key `<document>-<n>`, with n from 1 in four digits. For each chunk, it calls the extractor as `capture` does, on the chunk with its heading prefix. Each fact gets the id of the episode of its chunk added to its `sources`. The facts of a chunk are written before its episode. A chunk whose episode is current with the same content is skipped, with no call to the extractor. Thus a second load of the same text writes nothing new. It returns the ids of the episodes and the ids of the facts that the extractor returned. The document must be a valid key. |
 
 The key of a fact has two parts joined by `-`. The first part is the subject, with each
@@ -317,12 +317,42 @@ The block of `recall` has one line for each record, in the order of the search:
 
 Each run of whitespace in the content becomes one space, so a record is always one line.
 Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unknown`, a
-null `valid_until` as `now`, and a record with no sources as `none`. The block holds whole
+null `valid_until` as `now`, and a record with no sources as `none`. A source that is the
+id of a record in the same namespace shows as `<key>@<revision>`, without the namespace.
+For example, a fact under `team/alerts` with the source `team/alerts/notes-0001@1` shows
+`[sources: notes-0001@1]`. Any other source shows in full. The block holds whole
 lines only, joined by newlines. It stops before the first line that does not fit
 in the budget. The list holds the records of the block. The budget counts the characters of
 the block in this line format, and its default is 2,000. A consumer that renders the
 records in its own format passes its own `budget` and `k`. Then the default does not
 cut the list first.
+
+With `episodes`, the fact lines come first, and they fit in the budget as above. Then, if
+an episode fits in what is left, a line `episodes:` follows, and then each episode in this
+form:
+
+```text
+## <key>@<revision> [observed: <observed_at>]
+<content>
+```
+
+The content of an episode keeps its line breaks. A null `observed_at` shows as `unknown`.
+The block holds whole episodes only, and it stops before the first episode that does not
+fit. Each part of the block is joined to the next by a newline, and the budget counts
+every character. An episode never takes the place of a fact.
+
+The two values of `episodes` choose the episodes in two ways.
+
+- `"cited"` reads the sources of each fact of the block, in order. Each source that is
+  the id of a record of kind `episode` in the allowed scopes gives that revision, read
+  with `get`. An episode cited twice comes once, at its first place. A source that is not
+  such an id is skipped. An episode past its `forget_after` is skipped, as `search`
+  hides it. A superseded revision stays, because the fact cites that revision.
+- `"search"` searches the current episodes in the allowed scopes with the query, for the
+  top k, in the order of the search.
+
+With `as_of`, only the episodes that are valid at `as_of` remain. The list holds the
+facts of the block and then its episodes.
 
 The block of `profile` has a group for each kind that has records, in the order fact,
 profile, procedure. A line `<kind>:` starts each group, and its records follow
@@ -365,8 +395,9 @@ extractor returns no fact still gets its episode. If the text of a chunk changes
 second load writes the next revision of its episode and calls the extractor again. If a
 document gets fewer chunks, the episodes of its old last chunks stay current.
 
-An episode is the evidence that a fact names in `sources`, so `recall` and `profile` leave
-it out. A consumer reads an episode with `get`, or joins the two record tables in SQL. A
+An episode is the evidence that a fact names in `sources`. `profile` leaves it out, and
+`recall` gives it only with `episodes`. A consumer also reads an episode with `get`, or
+joins the two record tables in SQL. A
 namespace that holds only episodes shows a count of 0 in the block of `profile`.
 
 Two conditions make a record valid at time T. `valid_from` is null or at most T, and
