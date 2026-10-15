@@ -30,8 +30,8 @@ calls a model. Latency is not a goal, and its work waits under Deferred.
 | Phase | Delivers | Status |
 |---|---|---|
 | 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | closed 2026-10-14, PR #18 |
-| 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | open, issue #19 |
-| 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | proposed |
+| 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | closed 2026-10-14, PR #21 |
+| 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | open, issue #22 |
 | 9. The ranking | An ablation of the fused ranking, and a default ranking chosen by the benchmark. | proposed |
 | 10. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
 | 11. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
@@ -52,6 +52,11 @@ taken up now.
 - Model calls, from the discussion of 2026-10-13: a model-backed extractor in an extra,
   and decision calls with a probability, for example to decide a supersede or to route a
   recall. The library stays deterministic in the second workstream.
+- More extractor prompts, from phase 7. The prompt `detail` cut the misses with no
+  stored fact from 19 to 16 on sample A, and the stop condition asked for 12 or fewer.
+  The owner accepted it on 2026-10-14. With `detail`, the extractor still drops what the
+  assistant said: 7 misses of the type single-session-assistant on sample A have no
+  stored fact. A second extractor model was not tried, because the owner named none.
 - The ideas of the hindsight study of 2026-10-09 that the second workstream does not
   take, for later planning:
   - A chunk-hash delta on re-capture.
@@ -122,3 +127,16 @@ A closed phase keeps its row above with the date it closed and the pull request.
   sample B, so the ranking has little to gain on these samples. The runner gained
   `--replay` and `--workers`, and a replay of the memory arm of sample A took 519 s with
   4 workers, against 2,264 s with one process.
+- Phase 7 closed on 2026-10-14 with PR #21, which closed issue #19. With the extractor
+  prompt `detail`, the memory arm scored 31 of 54 on sample A and 32 on sample B, over
+  the pass level of 28 on each sample. The `baseline` prompt with sources scored 22 on
+  sample A. It changed the plan for later phases in five ways. Each fact of the benchmark
+  carries the source `session:` and a hash of the session id, because the block shows the
+  sources to the reader and LongMemEval names each evidence session `answer_...`. The
+  sources change the extractor prompt, so the extractor cache of phase 6 does not replay
+  with them. Most of the gain came from facts that are more complete: 9 of the 13 gains on
+  sample A were misses where the block of the baseline held some of the needed facts. The
+  misses with no stored fact went from 19 to 16 on sample A and from 16 to 14 on sample
+  B, and they are still the largest group. The marker of the diagnosis can miss facts,
+  so that group can be smaller than the diagnosis shows. A reply that reaches the token
+  limit gives no facts for its session, and a result file counts such sessions.
