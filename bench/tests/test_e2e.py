@@ -11,7 +11,9 @@ from bench.data import QUESTION_TYPES, Question, load
 from bench.e2e import (
     SAMPLES,
     Config,
+    capture_session,
     choose_sample,
+    episode_key,
     estimate,
     extractor,
     fact_source,
@@ -21,7 +23,7 @@ from bench.e2e import (
     summarize,
 )
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Offline, Reply
-from hotmemory import MemoryStore
+from hotmemory import Memory, MemoryStore
 from tests.conftest import FakeClock, fake_embedder
 
 FIXTURE = Path(__file__).with_name("fixture.json")
@@ -293,3 +295,58 @@ def test_cached_models_keep_a_stopped_reply(tmp_path: Path) -> None:
         )
     found = replay._db.execute("SELECT reply FROM replies WHERE key = 'old'").fetchone()[0]
     assert not Reply(**json.loads(found)).stopped
+
+
+def test_config_refuses_episodes_without_session_episodes() -> None:
+    with pytest.raises(ValueError, match="session_episodes"):
+        Config(episodes="cited")
+    with pytest.raises(ValueError, match="episodes must be"):
+        Config(session_episodes=True, episodes="all")
+
+
+def test_episode_key_hides_the_session_id() -> None:
+    key = episode_key("answer_a_1")
+    assert key == "session-" + fact_source("answer_a_1").removeprefix("session:")
+    assert "answer" not in key
+
+
+@pytest.mark.parametrize("episodes", ["cited", "search"])
+def test_run_question_recalls_the_sessions_as_episodes(
+    questions: dict[str, Question], episodes: str
+) -> None:
+    question = questions["q_one"]
+    store = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    models = FakeModels()
+
+    def empty(namespace: Sequence[str]) -> None:
+        for record in store.list(namespace, limit=1000):
+            store.delete(record.namespace, record.key)
+
+    config = Config(budget=100_000, session_episodes=True, episodes=episodes)
+    result = run_question(
+        question, models, {"fused": store, "vector": store}, empty, "r1", ("memory",), config
+    )
+    block = [p for m, p in models.prompts if m == READER and "several facts" in p[:60]][-1]
+    late = next(s for s in question.sessions if s.id == "answer_a_late")
+    assert f"[sources: {episode_key(late.id)}@1]" in block
+    assert "\nepisodes:\n## session-" in block
+    assert f"\n## {episode_key(late.id)}@1 [observed: " in block
+    assert "session:" not in block
+    assert "answer_" not in block
+    assert episode_key(late.id) in result["memory"].episodes
+    assert store.list(("bench",)) == []
+
+
+def test_capture_session_replays_the_same_extractor_prompts(
+    questions: dict[str, Question],
+) -> None:
+    question = questions["q_one"]
+    config = Config(session_episodes=True)
+    seen: list[list[str]] = []
+    for run in ("r1", "r2"):
+        models = FakeModels()
+        memory = Memory(MemoryStore(embedder=fake_embedder, clock=FakeClock()))
+        for session in question.sessions:
+            capture_session(memory, ("bench", run, question.id), session, models, config, [])
+        seen.append([p for m, p in models.prompts if m == EXTRACTOR])
+    assert seen[0] == seen[1]

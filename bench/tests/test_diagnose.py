@@ -5,8 +5,17 @@ from typing import Any
 
 import pytest
 
-from bench.diagnose import block_ids, group, memory_config, session_of_fact, table, verdict
-from bench.e2e import BASELINE, fact_source
+from bench.data import Question
+from bench.diagnose import (
+    block_ids,
+    evidence_in_block,
+    group,
+    memory_config,
+    session_of_fact,
+    table,
+    verdict,
+)
+from bench.e2e import BASELINE, episode_key, fact_source
 from bench.models import READER, CachedModels, CacheMiss, Offline, Reply
 from hotmemory import Record
 
@@ -60,6 +69,10 @@ def test_memory_config_reads_the_result_file() -> None:
     memory = {"ranking": "fused", "k": 30, "budget": 8000, "extractor": "detail"}
     sourced = memory_config({"config": {"memory": {**memory, "fact_sources": True}}})
     assert (sourced.extractor, sourced.fact_sources) == ("detail", True)
+    assert (sourced.session_episodes, sourced.episodes) == (False, "none")
+    episodes = {**memory, "session_episodes": True, "episodes": "search"}
+    found = memory_config({"config": {"memory": episodes}})
+    assert (found.session_episodes, found.episodes) == (True, "search")
 
 
 def test_session_of_fact_reads_the_source() -> None:
@@ -67,6 +80,44 @@ def test_session_of_fact_reads_the_source() -> None:
     sourced = replace(fact("k"), sources=(fact_source("answer_a_1"),))
     assert session_of_fact(sourced, sessions) == "answer_a_1"
     assert session_of_fact(fact("k"), sessions) is None
+    keys = {episode_key("answer_a_1"): "answer_a_1"}
+    cited = replace(fact("k"), sources=(f"bench/q/{episode_key('answer_a_1')}@1",))
+    assert session_of_fact(cited, keys) == "answer_a_1"
+
+
+def test_evidence_in_block_matches_the_episode_keys() -> None:
+    question = Question(
+        id="q",
+        type="multi-session",
+        question="?",
+        answer="!",
+        date=AS_OF,
+        answer_session_ids=("answer_a_1",),
+        sessions=(),
+    )
+    assert evidence_in_block(question, [episode_key("answer_a_1")])
+    assert not evidence_in_block(question, [episode_key("other")])
+    assert not evidence_in_block(question, [])
+
+
+def test_table_counts_the_evidence_episodes() -> None:
+    rows: list[dict[str, Any]] = [
+        {
+            "type": "multi-session",
+            "cause": "not extracted",
+            "present": None,
+            "evidence_in_block": True,
+        },
+        {
+            "type": "multi-session",
+            "cause": "not extracted",
+            "present": None,
+            "evidence_in_block": False,
+        },
+    ]
+    lines = table(rows).splitlines()
+    assert lines[0].endswith("| evidence episode in block |")
+    assert lines[2] == "| multi-session | 2 | 2 | 0 | 0 | 0 | 0 | 1 |"
 
 
 def test_table_splits_the_recalled_group() -> None:

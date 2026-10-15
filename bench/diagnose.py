@@ -6,7 +6,8 @@ stops at the first reply that the cache does not hold. It uses the ranking, `k`,
 and extractor variant that the result file records. A model marks the facts that hold the
 answer, and the search ranks every fact for the question. If a marked fact is in the block,
 a second model call tells whether the block holds every needed fact ("all present") or only
-some of them ("some present").
+some of them ("some present"). If the run recalled episodes, each miss also records whether
+the block held an evidence session as an episode, from the episode keys of the result file.
 
     uv run --group bench --env-file .env python -m bench.diagnose --result <file>
 """
@@ -22,15 +23,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from bench import prompts
-from bench.data import DATA_DIR, DATA_FILE, QUESTION_TYPES, load
+from bench.data import DATA_DIR, DATA_FILE, QUESTION_TYPES, Question, load
 from bench.e2e import (
-    ACTOR,
     BASELINE,
     RECALL_BUDGET,
     RECALL_K,
     Config,
-    extractor,
+    capture_session,
+    episode_key,
     fact_source,
     local_store,
 )
@@ -113,7 +113,8 @@ def memory_config(result: dict[str, Any]) -> Config:
     """Return the configuration of the memory arm that a result file records.
 
     A result file of phase 5 records no `memory` section, and its run used `BASELINE`. A
-    result file of phase 6 records no `fact_sources`, and its facts carried no source.
+    result file of phase 6 records no `fact_sources`, and its facts carried no source. A
+    result file before phase 8 records no `session_episodes` and no `episodes`.
     """
     found = result["config"].get("memory")
     if found is None:
@@ -124,18 +125,40 @@ def memory_config(result: dict[str, Any]) -> Config:
         budget=found["budget"],
         extractor=found["extractor"],
         fact_sources=found.get("fact_sources", False),
+        session_episodes=found.get("session_episodes", False),
+        episodes=found.get("episodes", "none"),
     )
 
 
+def evidence_in_block(question: Question, shown: Sequence[str]) -> bool:
+    """Return True if an episode key in `shown` is that of an evidence session of `question`."""
+    return any(episode_key(session_id) in shown for session_id in question.answer_session_ids)
+
+
 def table(rows: Sequence[dict[str, Any]]) -> str:
-    """Return the groups of misses for each question type, and in total, as Markdown."""
-    columns = ("missed", *CAUSES[:3], "recalled, all present", "recalled, some present")
+    """Return the groups of misses for each question type, and in total, as Markdown.
+
+    If the rows record `evidence_in_block`, the last column counts the misses whose block
+    held an evidence session as an episode.
+    """
+    columns: tuple[str, ...] = (
+        "missed",
+        *CAUSES[:3],
+        "recalled, all present",
+        "recalled, some present",
+    )
+    episodes = any(row.get("evidence_in_block") is not None for row in rows)
+    if episodes:
+        columns = (*columns, "evidence episode in block")
     header = "| Type | " + " | ".join(columns) + " |"
     lines = [header, "|" + "---|" * (len(columns) + 1)]
     kinds = [kind for kind in QUESTION_TYPES if any(row["type"] == kind for row in rows)]
     for kind in [*kinds, "all"]:
         chosen = [row for row in rows if kind in ("all", row["type"])]
         groups = Counter(group(row) for row in chosen)
+        groups["evidence episode in block"] = sum(
+            bool(row.get("evidence_in_block")) for row in chosen
+        )
         counts = [len(chosen), *(groups[name] for name in columns[1:])]
         lines.append(f"| {kind} | " + " | ".join(str(count) for count in counts) + " |")
     return "\n".join(lines)
@@ -158,6 +181,9 @@ def main(argv: Sequence[str] | None = None) -> Path:
     result = json.loads(args.result.read_text())
     config = memory_config(result)
     missed = [row["id"] for row in result["questions"] if not row["arms"]["memory"]["correct"]]
+    in_block = {
+        row["id"]: row["arms"]["memory"].get("episodes_in_block", []) for row in result["questions"]
+    }
     questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
     replay = CachedModels(Offline(), CACHE_DIR / "replies.sqlite")
     marker = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
@@ -169,15 +195,9 @@ def main(argv: Sequence[str] | None = None) -> Path:
             question = questions[question_id]
             namespace = ("bench", "lme_s", run_id, question.id)
             sessions = {fact_source(session.id): session.id for session in question.sessions}
+            sessions |= {episode_key(session.id): session.id for session in question.sessions}
             for session in question.sessions:
-                source = fact_source(session.id) if config.fact_sources else ""
-                memory.capture(
-                    prompts.session_text(session),
-                    namespace,
-                    extractor(replay, config.variant, source, []),
-                    actor=ACTOR,
-                    observed_at=session.date,
-                )
+                capture_session(memory, namespace, session, replay, config, [])
             store = stores[config.memory_ranking]
             facts = store.list(namespace, Filter(kind=RECALLED_KINDS), limit=10_000)
             marked = _mark(marker, question.question, question.answer, facts)
@@ -205,6 +225,11 @@ def main(argv: Sequence[str] | None = None) -> Path:
                     "best_rank": ranks,
                     "cause": cause,
                     "present": present,
+                    "evidence_in_block": (
+                        None
+                        if config.episodes == "none"
+                        else evidence_in_block(question, in_block[question.id])
+                    ),
                 }
             )
             empty(namespace)
@@ -221,6 +246,8 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 "budget": config.budget,
                 "extractor": config.extractor,
                 "fact_sources": config.fact_sources,
+                "session_episodes": config.session_episodes,
+                "episodes": config.episodes,
             },
             "marker": JUDGE,
             "hotmemory_commit": commit,
@@ -241,11 +268,14 @@ def main(argv: Sequence[str] | None = None) -> Path:
 def session_of_fact(fact: Record, sessions: dict[str, str]) -> str | None:
     """Return the session id of `fact` from its sources, or None if no source names one.
 
-    `sessions` maps the result of `fact_source` to the session id.
+    `sessions` maps the results of `fact_source` and of `episode_key` to the session id. A
+    source that is an episode id matches by its key.
     """
     for source in fact.sources:
-        if source in sessions:
-            return sessions[source]
+        key = source.rpartition("/")[2].rpartition("@")[0]
+        for name in (source, key):
+            if name in sessions:
+                return sessions[name]
     return None
 
 

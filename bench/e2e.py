@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from bench import embed, prompts
 from bench.data import (
@@ -36,6 +36,7 @@ from bench.data import (
     DATA_SHA256,
     QUESTION_TYPES,
     Question,
+    Session,
     load,
 )
 from bench.embed import CACHE_DIR, Tokens
@@ -52,6 +53,7 @@ from bench.models import (
 )
 from bench.retrieval import RANKINGS, RESULTS_DIR, _commit
 from hotmemory import Embedder, Fact, Filter, Memory, Record, Store
+from hotmemory.contract import Episodes
 
 HERE = Path(__file__).resolve().parent
 PER_TYPE = 9
@@ -59,6 +61,7 @@ ARMS = ("full", "retrieval", "memory")
 RETRIEVED = 10
 RECALL_K = 30
 RECALL_BUDGET = 8000
+EPISODES = ("none", "cited", "search")
 COST_LIMIT = 50.0
 EXTRACT_OVERHEAD = 700
 ACTOR = "longmemeval-extractor"
@@ -73,6 +76,9 @@ class Config:
     and recalls with `memory_ranking`, recalls `k` records into a block of at most
     `budget` characters, and extracts with the variant `extractor` of `prompts.VARIANTS`.
     With `fact_sources`, each fact carries the source of its session from `fact_source`.
+    With `session_episodes`, `capture` stores each session as an episode under the key
+    from `episode_key`, and the facts carry no session source. `episodes` is the value of
+    `recall`, and needs `session_episodes` unless it is `none`.
     """
 
     retrieval_ranking: str = "fused"
@@ -81,6 +87,8 @@ class Config:
     budget: int = RECALL_BUDGET
     extractor: str = "baseline"
     fact_sources: bool = True
+    session_episodes: bool = False
+    episodes: str = "none"
 
     def __post_init__(self) -> None:
         for ranking in (self.retrieval_ranking, self.memory_ranking):
@@ -90,6 +98,10 @@ class Config:
             raise ValueError(f"no extractor variant {self.extractor!r}")
         if self.k < 1 or self.budget < 1:
             raise ValueError("k and budget must be at least 1")
+        if self.episodes not in EPISODES:
+            raise ValueError(f"episodes must be one of {', '.join(EPISODES)}")
+        if self.episodes != "none" and not self.session_episodes:
+            raise ValueError("episodes needs session_episodes")
 
     @property
     def variant(self) -> prompts.Variant:
@@ -156,7 +168,17 @@ def fact_source(session_id: str) -> str:
     The reader sees the sources in the block, and an evidence session id holds `answer`, so
     the source does not show the id.
     """
-    return "session:" + hashlib.sha256(session_id.encode()).hexdigest()[:12]
+    return "session:" + _session_hash(session_id)
+
+
+def episode_key(session_id: str) -> str:
+    """Return the key of the episode of a session: `session-` and the hash of `fact_source`."""
+    return "session-" + _session_hash(session_id)
+
+
+def _session_hash(session_id: str) -> str:
+    """Return the first 12 hex digits of the SHA-256 of `session_id`."""
+    return hashlib.sha256(session_id.encode()).hexdigest()[:12]
 
 
 def extractor(
@@ -205,6 +227,7 @@ class Arm:
     verdict: Reply
     extracted: int = 0
     at_limit: int = 0
+    episodes: tuple[str, ...] = ()
 
     @property
     def correct(self) -> bool:
@@ -218,11 +241,12 @@ def answer(
     context_chars: int,
     extracted: int = 0,
     at_limit: int = 0,
+    episodes: tuple[str, ...] = (),
 ) -> Arm:
     """Read `prompt` with READER, judge the answer with JUDGE, and return the arm."""
     reply = models(READER, prompt, READER_MAX_TOKENS)
     verdict = models(JUDGE, prompts.judge(question, reply.text), JUDGE_MAX_TOKENS)
-    return Arm(context_chars, reply, verdict, extracted, at_limit)
+    return Arm(context_chars, reply, verdict, extracted, at_limit, episodes)
 
 
 def run_question(
@@ -258,23 +282,49 @@ def run_question(
         written = 0
         at_limit: list[str] = []
         for session in question.sessions:
-            source = fact_source(session.id) if config.fact_sources else ""
-            written += len(
-                memory.capture(
-                    prompts.session_text(session),
-                    namespace,
-                    extractor(models, config.variant, source, at_limit),
-                    actor=ACTOR,
-                    observed_at=session.date,
-                )
-            )
-        _, block = memory.recall(
-            question.question, [namespace], as_of=question.as_of, budget=config.budget, k=config.k
+            written += len(capture_session(memory, namespace, session, models, config, at_limit))
+        records, block = memory.recall(
+            question.question,
+            [namespace],
+            as_of=question.as_of,
+            budget=config.budget,
+            k=config.k,
+            episodes=None if config.episodes == "none" else cast(Episodes, config.episodes),
         )
         empty(namespace)
+        shown = tuple(record.key for record in records if record.kind == "episode")
         prompt = prompts.read_facts(question, block)
-        result["memory"] = answer(models, question, prompt, len(block), written, len(at_limit))
+        result["memory"] = answer(
+            models, question, prompt, len(block), written, len(at_limit), shown
+        )
     return result
+
+
+def capture_session(
+    memory: Memory,
+    namespace: Sequence[str],
+    session: Session,
+    models: Models,
+    config: Config,
+    at_limit: list[str],
+) -> list[str]:
+    """Run `capture` on one session as the memory arm does, and return the fact ids.
+
+    With `config.session_episodes`, the session is stored as an episode under
+    `episode_key`. Else, with `config.fact_sources`, each fact carries `fact_source`.
+    """
+    if config.session_episodes:
+        source, episode = "", episode_key(session.id)
+    else:
+        source, episode = (fact_source(session.id) if config.fact_sources else ""), None
+    return memory.capture(
+        prompts.session_text(session),
+        namespace,
+        extractor(models, config.variant, source, at_limit),
+        actor=ACTOR,
+        observed_at=session.date,
+        episode=episode,
+    )
 
 
 def estimate(
@@ -433,6 +483,7 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
                 "context_chars": found.context_chars,
                 "facts_written": found.extracted,
                 "sessions_at_limit": found.at_limit,
+                "episodes_in_block": list(found.episodes),
                 "reader_input_tokens": found.answer.input_tokens,
                 "answer": found.answer.text,
                 "verdict": found.verdict.text,
@@ -497,6 +548,14 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         help="write the facts with no session source, as phases 5 and 6 did",
     )
     parser.add_argument(
+        "--session-episodes",
+        action="store_true",
+        help="capture each session as an episode, and write the facts with no session source",
+    )
+    parser.add_argument(
+        "--episodes", choices=EPISODES, default="none", help="the episodes value of recall"
+    )
+    parser.add_argument(
         "--replay", action="store_true", help="call no model: use cached replies, stop at a miss"
     )
     parser.add_argument(
@@ -521,6 +580,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             budget=args.recall_budget,
             extractor=args.extractor,
             fact_sources=not args.no_fact_sources,
+            session_episodes=args.session_episodes,
+            episodes=args.episodes,
         )
     except ValueError as error:
         parser.error(str(error))
@@ -604,6 +665,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "budget": config.budget,
                 "extractor": config.extractor,
                 "fact_sources": config.fact_sources,
+                "session_episodes": config.session_episodes,
+                "episodes": config.episodes,
             },
             "arms": {
                 "full": "every session of the question",
@@ -614,8 +677,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "memory": (
                     f"capture on each session in date order with the {config.extractor} "
                     f"extractor, then recall with the {config.memory_ranking} ranking, k "
-                    f"{config.k}, budget {config.budget} characters, as_of the end of the "
-                    "question day"
+                    f"{config.k}, budget {config.budget} characters, episodes "
+                    f"{config.episodes}, as_of the end of the question day"
                 ),
             },
             "questions": len(questions),
