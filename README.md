@@ -141,7 +141,8 @@ had these results with the vector ranking. For 98.3% of them, an evidence sessio
 the top 5. For 99.3% of them, every evidence session was in the top 10.
 
 The end-to-end score ran on two samples of 54 questions, sample A on 2026-10-10 and
-sample B on 2026-10-14. The reader and the judge were `gpt-4o-2024-08-06`.
+sample B on 2026-10-14. Later rows give their own date. The reader and the judge were
+`gpt-4o-2024-08-06`.
 
 | What the reader got | Sample A | Sample B |
 |---|---|---|
@@ -149,12 +150,16 @@ sample B on 2026-10-14. The reader and the judge were `gpt-4o-2024-08-06`.
 | The 10 sessions that the search ranked first | 45 of 54 (83.3%) | 48 of 54 (88.9%) |
 | The block of `recall`, after `capture` with a `gpt-4o-mini` extractor and the `baseline` prompt | 19 of 54 (35.2%) | 27 of 54 (50.0%) |
 | The same, on 2026-10-14, with the `detail` prompt and a session source on each fact | 31 of 54 (57.4%) | 32 of 54 (59.3%) |
+| The same, on 2026-10-15, with each session stored as an episode, and `recall` with `episodes="search"` and a budget of 64,000 characters, about 12,800 tokens | 45 of 54 (83.3%) | 45 of 54 (83.3%) |
 
-The memory contract scores below the full history. With the `baseline` prompt, the
-extractor did not store the answer in 19 of the 35 misses on sample A, and in 16 of the 27
-misses on sample B. With the `detail` prompt, these counts are 16 of 23 and 14 of 22. With 54 questions, each score can be about 10 points off, and the memory arm
-differs by 14.8 points between the two samples. In the cloud, a search took 361 ms at p50 with the vector ranking, and
-998 ms with the fused ranking.
+Facts alone score below the full history. With the `baseline` prompt, the extractor did
+not store the answer in 19 of the 35 misses on sample A, and in 16 of the 27 misses on
+sample B. With the `detail` prompt, these counts are 16 of 23 and 14 of 22. With the
+episodes that a search adds after the facts, the memory arm scores above the full history
+and equal to the 10 sessions on sample A, with less than half of their tokens. With 54
+questions, each score can be about 10 points off. With the `baseline` prompt, the memory
+arm differed by 14.8 points between the two samples. In the cloud, a search took 361 ms at
+p50 with the vector ranking, and 998 ms with the fused ranking.
 
 ## Documents
 

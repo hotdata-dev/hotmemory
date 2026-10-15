@@ -179,8 +179,9 @@ surface.
   `capture` from the cache. The blocks of documents that `load` stored get shorter.
 - The benchmark extractor stops setting `session:<hash>`. The episode key is
   `session-<hash>`, with the hash of phase 7. The first run pays for the extractor again.
-- The budgets are 16,000, 32,000, and 64,000 characters. At 8,000 characters, the facts
-  of phase 7 leave no room for a whole session (estimate, not observed).
+- The budgets are 16,000, 32,000, and 64,000 characters. The reason for dropping 8,000 was
+  an estimate that the facts of phase 7 leave no room for a whole session. The runs then
+  showed blocks of facts of at most 5,626 characters, so the estimate was too high.
 
 Acceptance criteria:
 

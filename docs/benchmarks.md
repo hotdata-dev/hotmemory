@@ -333,6 +333,93 @@ Phase 7 read the misses and found these facts:
   them. The marker reads all facts of a question in one call, 226 to 300 facts here. So
   the group with no stored fact can be smaller than the table shows, in each run.
 
+### Episodes behind facts
+
+Phase 8 stored each session as an episode beside its facts, and let `recall` add episodes
+to the block after the facts. The runs use the `detail` extractor of phase 7, and the
+options `--session-episodes` and `--episodes` of the runner. `capture` stores each session
+under the key `session-<hash>`, with the hash of phase 7, and each fact cites that episode.
+The block shows the source as `session-<hash>@1`. The facts carry no `session:<hash>`
+source. The two values of `episodes`:
+
+| Value | The episodes after the facts |
+|---|---|
+| `none` | No episode. The block holds the facts only. |
+| `cited` | The episodes that the facts of the block cite, in the order of the facts. |
+| `search` | The top 30 episodes of a fused search with the question. |
+
+Each block holds whole episodes only, and it stops before the first episode that does not
+fit in the budget. `none` was run at 16,000 characters only. With k of 30, its largest
+block held 5,344 characters on sample A and 5,626 on sample B, so a larger budget gives
+the same block.
+
+Observed on 2026-10-15, at commit `320e891`, with 4 workers.
+
+| Run | Sample | Correct of 54 | Reader tokens at the median | Episodes in the block at the median | Gained and lost against `none` | Cost | File |
+|---|---|---|---|---|---|---|---|
+| `none`, 16,000 | A | 29 | 1,715 | 0 | | $0.52 | `e2e-sample-a-p8-none-16k.json` |
+| `cited`, 16,000 | A | 31 | 1,728 | 0 | +3, -1 | $0.12 | `e2e-sample-a-p8-cited-16k.json` |
+| `search`, 16,000 | A | 34 | 1,738 | 0 | +6, -1 | $0.08 | `e2e-sample-a-p8-search-16k.json` |
+| `cited`, 32,000 | A | 38 | 6,300 | 2 | +10, -1 | $1.04 | `e2e-sample-a-p8-cited-32k.json` |
+| `search`, 32,000 | A | 43 | 5,715 | 2 | +14, -0 | $0.75 | `e2e-sample-a-p8-search-32k.json` |
+| `cited`, 64,000 | A | 44 | 12,446 | 4 | +15, -0 | at least $1.01 | `e2e-sample-a-p8-cited-64k.json` |
+| `search`, 64,000 | A | 45 | 12,849 | 4 | +17, -1 | $1.93 | `e2e-sample-a-p8-search-64k.json` |
+| `none`, 16,000 | B | 31 | 1,723 | 0 | | $0.57 | `e2e-sample-b-p8-none-16k.json` |
+| `search`, 64,000 | B | 45 | 12,676 | 4 | +15, -1 | $1.91 | `e2e-sample-b-p8-search-64k.json` |
+
+The retrieval arm read 29,878 tokens at the median on sample A, and scored 45. `search` at
+64,000 characters scored 45 on sample A and 45 on sample B, with 12,849 and 12,676 reader
+tokens. Sample A and sample B moved the same way, from 29 to 45 and from 31 to 45.
+
+The `none` runs scored 29 on sample A and 31 on sample B, against 31 and 32 with the
+`session:<hash>` source of phase 7. The new source changes the line length in the block,
+so the list of known facts that `capture` gives the extractor can change. Then the
+extractor gets a new prompt and a new reply. The `none` runs are the baseline of this
+section.
+
+Each run after the first on a sample replayed `capture` from the extractor cache. A run
+that changed only `episodes` or the budget paid for the reader and the judge only. The
+first try of the runs with `cited` at 64,000 and every `search` run stopped at an internet
+outage, and the next try of `cited` at 64,000 stopped at one engine error. Each later try
+took the replies of the earlier tries from the cache. The log of the first try of `cited` at
+64,000 was lost, so its cost is not known. The cost of a run is the sum of its tries. The
+runs and the diagnoses cost at least $8.10.
+
+Correct answers by question type:
+
+| Question type | A `none` | A `cited` 64,000 | A `search` 32,000 | A `search` 64,000 | B `none` | B `search` 64,000 |
+|---|---|---|---|---|---|---|
+| single-session-user | 3 | 9 | 9 | 8 | 6 | 9 |
+| single-session-assistant | 2 | 6 | 9 | 9 | 2 | 9 |
+| single-session-preference | 4 | 7 | 5 | 6 | 1 | 5 |
+| multi-session | 6 | 6 | 6 | 6 | 6 | 7 |
+| knowledge-update | 8 | 8 | 8 | 8 | 7 | 7 |
+| temporal-reasoning | 6 | 8 | 6 | 8 | 9 | 8 |
+| All | 29 | 44 | 43 | 45 | 31 | 45 |
+
+The diagnosis of the `none` runs and of `search` at 64,000, with the commands above. The
+last row counts the misses whose block held an evidence session as an episode. The
+diagnoses cost $0.17 in total.
+
+| Cause | A `none` | A `search` 64,000 | B `none` | B `search` 64,000 |
+|---|---|---|---|---|
+| No stored fact states the answer or a value that it needs | 17 | 5 | 17 | 5 |
+| A stored fact holds it, and the fused search ranked it below 30 | 1 | 0 | 0 | 0 |
+| A marked fact was in the top 30, and `recall` left it out | 0 | 0 | 0 | 0 |
+| The block holds every needed fact, and the reader missed | 1 | 2 | 0 | 1 |
+| The block holds some of the needed facts | 6 | 2 | 6 | 3 |
+| Misses | 25 | 9 | 23 | 9 |
+| The block held an evidence session as an episode | not run | 8 | not run | 8 |
+
+The two target groups of the phase got smaller on both samples. The misses with no stored
+fact went from 17 to 5 on each sample. The misses with some needed facts went from 6 to 2
+on sample A and from 6 to 3 on sample B. The `none` runs missed every question of the
+type single-session-assistant with no stored fact, 7 on each sample. `search` at 64,000
+missed none of that type. In 8 of the 9 misses on each sample, the block held an evidence
+session. A question of the type multi-session can need more sessions than the block held.
+The type single-session-preference has the most misses with `search` at 64,000: 3 on
+sample A and 4 on sample B.
+
 ## Known limits
 
 - The end-to-end numbers come from samples of 54 questions, so one question moves an arm
@@ -344,5 +431,10 @@ Phase 7 read the misses and found these facts:
   stronger extractor model was not measured.
 - The diagnosis marks the facts of a question in one model call, and it can miss facts in
   a long list. Its count of misses with no stored fact can be too high.
+- The reader prompt of the memory arm calls the block "facts extracted from history chats",
+  also when the block holds episodes. A prompt that names the episodes was not tried.
+- In the runs of phase 8, the local engine refused one fused search once, because it
+  found a BM25 index of `memory_v1` stale against its table. A second try of the same run
+  did not show the error. The cause was not found.
 - `recall` keeps the records that are valid at `as_of`, and a search over history does not
   exist yet. A question about a value before it changed can need a superseded record.

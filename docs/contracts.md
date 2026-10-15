@@ -323,7 +323,9 @@ For example, a fact under `team/alerts` with the source `team/alerts/notes-0001@
 `[sources: notes-0001@1]`. Any other source shows in full. The block holds whole
 lines only, joined by newlines. It stops before the first line that does not fit
 in the budget. The list holds the records of the block. The budget counts the characters of
-the block in this line format, and its default is 2,000.
+the block in this line format, and its default is 2,000. A consumer that renders the
+records in its own format passes its own `budget` and `k`. Then the default does not
+cut the list first.
 
 With `episodes`, the fact lines come first, and they fit in the budget as above. Then, if
 an episode fits in what is left, a line `episodes:` follows, and then each episode in this
@@ -349,9 +351,7 @@ The two values of `episodes` choose the episodes in two ways.
   top k, in the order of the search.
 
 With `as_of`, only the episodes that are valid at `as_of` remain. The list holds the
-facts of the block and then its episodes. A consumer that renders the
-records in its own format passes its own `budget` and `k`. Then the default does not
-cut the list first.
+facts of the block and then its episodes.
 
 The block of `profile` has a group for each kind that has records, in the order fact,
 profile, procedure. A line `<kind>:` starts each group, and its records follow
