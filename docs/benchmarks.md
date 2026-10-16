@@ -445,6 +445,22 @@ The diagnosis of the `--keep` run read the kept databases, and did not run `capt
 took 7 seconds and called no model. For each of the 9 misses, it gave the same cause,
 marked facts, and evidence check as the phase 8 diagnosis of `search` at 64,000.
 
+The smoke run uses the same options with `search` at 64,000 characters, on the 18
+questions of `bench/sample-smoke.json` and `MemoryStore`, in one process. Its first run
+paid for the extraction. `MemoryStore` ranks by vector only, so the extractor saw other
+lists of known facts than in the runs on the local engine. Observed on
+2026-10-16, at commit `298fbe7`:
+
+| Run | Correct of 18 | Time | Cost | Model calls | File |
+|---|---|---|---|---|---|
+| First, `--run` | 16 | 2,080.0 s | $1.07 | 842 | `e2e-smoke-p9-first.json` |
+| Again, `--replay` | 16 | 12.7 s | $0 | 0 | `e2e-smoke-p9-cached.json` |
+
+The replay gave the same answer, verdict, and block SHA-256 for each of the 18 questions.
+The time in the table is `duration_s` of the result file. The whole command took 563
+seconds the first time, and 14.9 seconds on a later try. The cause of the first wait was
+not found.
+
 ## Known limits
 
 - The end-to-end numbers come from samples of 54 questions, so one question moves an arm

@@ -169,7 +169,8 @@ and a later one replays it from the cache. `--smoke` refuses `--keep`, `--reuse`
 Each run writes the file `bench/results/<name>.rows.jsonl` as it goes, where `<name>` is
 the name of its result file. The first line holds the arms, the configuration, the sample,
 the limit, and the kept name. Each later line holds the row of one finished question. If a
-call to a model or to the engine fails, the question fails, and the next question runs. A
+call to a model or to the engine fails, the question fails, and the next question runs. If
+the runner then cannot empty the namespaces of that question, the worker stops. A
 `CacheMiss` of `--replay` still stops the run. If a question failed, or the run stopped,
 the runner writes no result file. Run the same command again with `--resume`: it skips the
 questions that the rows file holds. It refuses a rows file of another configuration, and a

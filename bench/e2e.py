@@ -10,7 +10,10 @@ does not hold:
     uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms memory
 
 With `--smoke`, it runs the 18 questions of `bench/sample-smoke.json` on `MemoryStore`, in
-the process. It writes one JSON file into `bench/results/` with the configuration and the results.
+the process. With `--keep`, it keeps the memory of each question, and `--reuse` recalls from
+it with no `capture`. It appends the row of each finished question to a rows file, and
+`--resume` skips those rows. At the end, it writes one JSON file into `bench/results/` with
+the configuration and the results.
 """
 
 from __future__ import annotations
