@@ -189,7 +189,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     marker = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
     rows: list[dict[str, Any]] = []
     run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
-    with local_store(args.url, run_id) as (stores, empty):
+    with local_store(args.url, f"hotmemory-bench-{run_id}") as (stores, empty):
         memory = Memory(stores[config.memory_ranking])
         for count, question_id in enumerate(missed, start=1):
             question = questions[question_id]

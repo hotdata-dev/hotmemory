@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from bench import embed, prompts
 from bench.data import (
@@ -227,9 +227,10 @@ class Arm:
     context_chars: int
     answer: Reply
     verdict: Reply
-    extracted: int = 0
-    at_limit: int = 0
+    extracted: int | None = 0
+    at_limit: int | None = 0
     episodes: tuple[str, ...] = ()
+    block_sha256: str | None = None
 
     @property
     def correct(self) -> bool:
@@ -241,14 +242,15 @@ def answer(
     question: Question,
     prompt: str,
     context_chars: int,
-    extracted: int = 0,
-    at_limit: int = 0,
+    extracted: int | None = 0,
+    at_limit: int | None = 0,
     episodes: tuple[str, ...] = (),
+    block_sha256: str | None = None,
 ) -> Arm:
     """Read `prompt` with READER, judge the answer with JUDGE, and return the arm."""
     reply = models(READER, prompt, READER_MAX_TOKENS)
     verdict = models(JUDGE, prompts.judge(question, reply.text), JUDGE_MAX_TOKENS)
-    return Arm(context_chars, reply, verdict, extracted, at_limit, episodes)
+    return Arm(context_chars, reply, verdict, extracted, at_limit, episodes, block_sha256)
 
 
 def run_question(
@@ -259,10 +261,13 @@ def run_question(
     run_id: str,
     arms: Sequence[str] = ARMS,
     config: Config = BASELINE,
+    capture: bool = True,
 ) -> dict[str, Arm]:
     """Run each arm on `question`, and empty its namespaces after.
 
-    `stores` maps each ranking to a store, and every store holds the same records.
+    `stores` maps each ranking to a store, and every store holds the same records. Without
+    `capture`, the memory arm recalls from the records that its namespace holds already,
+    and its count of facts written and of sessions at the limit is None.
     """
     result: dict[str, Arm] = {}
     if "full" in arms:
@@ -281,10 +286,14 @@ def run_question(
     if "memory" in arms:
         namespace = ("bench", "lme_s", run_id, "memory", question.id)
         memory = Memory(stores[config.memory_ranking])
-        written = 0
+        written: int | None = None
         at_limit: list[str] = []
-        for session in question.sessions:
-            written += len(capture_session(memory, namespace, session, models, config, at_limit))
+        if capture:
+            written = 0
+            for session in question.sessions:
+                written += len(
+                    capture_session(memory, namespace, session, models, config, at_limit)
+                )
         records, block = memory.recall(
             question.question,
             [namespace],
@@ -297,7 +306,14 @@ def run_question(
         shown = tuple(record.key for record in records if record.kind == "episode")
         prompt = prompts.read_facts(question, block)
         result["memory"] = answer(
-            models, question, prompt, len(block), written, len(at_limit), shown
+            models,
+            question,
+            prompt,
+            len(block),
+            written,
+            len(at_limit) if capture else None,
+            shown,
+            hashlib.sha256(block.encode()).hexdigest(),
         )
     return result
 
@@ -381,15 +397,19 @@ def summarize(rows: Sequence[dict[str, Any]], arm: str) -> dict[str, Any]:
     }
 
 
+Delete = Literal["always", "on_error", "never"]
+
+
 @contextmanager
 def local_store(
-    url: str, name: str, embedder: Embedder | None = None, keep: bool = False
+    url: str, name: str, embedder: Embedder | None = None, delete: Delete = "always"
 ) -> Iterator[tuple[dict[str, Store], Callable[[Sequence[str]], None]]]:
     """Yield a HotdataStore for each ranking, and a call that empties a namespace.
 
     The stores share the local database named `name`, which `provision` opens or creates.
-    The database is deleted after, unless `keep` is true and the block exits without an
-    error. Without `embedder`, the stores embed with `embed.openai_embedder()`.
+    `delete` says when the database is deleted after the block: `always`, `on_error` when
+    the block raises, or `never`. Without `embedder`, the stores embed with
+    `embed.openai_embedder()`.
     """
     import pyarrow as pa
     from hotdata_framework import HotdataClient
@@ -426,12 +446,12 @@ def local_store(
         )
         for ranking in RANKINGS
     }
-    kept = False
+    failed = True
     try:
         yield stores, empty
-        kept = keep
+        failed = False
     finally:
-        if not kept:
+        if delete == "always" or (delete == "on_error" and failed):
             client.delete_managed_database(store.database)
         client.close()
 
@@ -505,6 +525,7 @@ class Job:
     replay: bool
     total: int
     kept: str | None = None
+    reuse: bool = False
 
 
 @dataclass(frozen=True)
@@ -550,6 +571,7 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
                 "facts_written": found.extracted,
                 "sessions_at_limit": found.at_limit,
                 "episodes_in_block": list(found.episodes),
+                "block_sha256": found.block_sha256,
                 "reader_input_tokens": found.answer.input_tokens,
                 "answer": found.answer.text,
                 "verdict": found.verdict.text,
@@ -564,8 +586,10 @@ def run_shard(job: Job, shard: Shard) -> Done:
 
     With `job.kept`, each question runs over a new database named `<job.kept>-<question
     id>`, and the database keeps the memory of the question after the run. A question that
-    raises deletes its database. The worker opens its own model cache, embedder, and
-    store, so it can run in its own process. It prints one line for each question.
+    raises deletes its database. With `job.reuse` as well, each question opens its kept
+    database, skips `capture`, and never deletes the database. The worker opens its own
+    model cache, embedder, and store, so it can run in its own process. It prints one line
+    for each question.
     """
     from bench.models import Offline, Remote
 
@@ -588,9 +612,17 @@ def run_shard(job: Job, shard: Shard) -> Done:
         if job.kept is not None:
             for question in shard.questions:
                 name = f"{job.kept}-{question.id}"
-                with local_store(job.url, name, embedder, keep=True) as (stores, _):
+                delete: Delete = "never" if job.reuse else "on_error"
+                with local_store(job.url, name, embedder, delete) as (stores, _):
                     result = run_question(
-                        question, models, stores, _keep, KEPT_RUN, job.arms, job.config
+                        question,
+                        models,
+                        stores,
+                        _keep,
+                        KEPT_RUN,
+                        job.arms,
+                        job.config,
+                        capture=not job.reuse,
                     )
                 finish(question, result)
         else:
@@ -655,6 +687,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         action="store_true",
         help="keep the memory of each question in a local database of its own",
     )
+    parser.add_argument(
+        "--reuse",
+        action="store_true",
+        help="recall from the memory that a run with --keep kept, and skip capture",
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
@@ -663,8 +700,10 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error(f"arms must be among {', '.join(ARMS)}")
     if args.workers < 1:
         parser.error("workers must be at least 1")
-    if args.keep and arms != ("memory",):
-        parser.error("--keep needs --arms memory")
+    if args.keep and args.reuse:
+        parser.error("pass --keep or --reuse, not both")
+    if (args.keep or args.reuse) and arms != ("memory",):
+        parser.error(f"--{'keep' if args.keep else 'reuse'} needs --arms memory")
     try:
         config = Config(
             retrieval_ranking=args.retrieval_ranking,
@@ -700,22 +739,26 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         return None
 
     kept = None
-    if args.keep:
+    if args.keep or args.reuse:
         try:
             kept = kept_name(args.sample, config, library_commit())
         except RuntimeError as error:
             parser.error(str(error))
-        found = existing_databases(args.url, [f"{kept}-{question.id}" for question in questions])
-        if found:
+        names = [f"{kept}-{question.id}" for question in questions]
+        found = existing_databases(args.url, names)
+        if args.keep and found:
             parser.error(f"{len(found)} kept databases exist already, for example {found[0]}")
-        print(f"keeping the memory as {kept}-<question id>")
+        missing = sorted(set(names) - set(found))
+        if args.reuse and missing:
+            parser.error(f"{len(missing)} kept databases do not exist, for example {missing[0]}")
+        print(f"{'keeping' if args.keep else 'reusing'} the memory as {kept}-<question id>")
 
     commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     clock_start = time.perf_counter()
     shards = shards_of(questions, args.workers, run_id)
-    job = Job(args.url, arms, config, args.replay, len(questions), kept)
+    job = Job(args.url, arms, config, args.replay, len(questions), kept, args.reuse)
     if len(shards) == 1:
         done = [run_shard(job, shards[0])]
     else:
@@ -772,6 +815,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "session_episodes": config.session_episodes,
                 "episodes": config.episodes,
                 "kept": kept,
+                "reused": args.reuse,
             },
             "arms": {
                 "full": "every session of the question",
@@ -792,7 +836,9 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "workers": len(shards),
             "spent_usd": round(spent, 2),
             "model_calls": calls,
-            "sessions_at_limit": sum(
+            "sessions_at_limit": None
+            if args.reuse
+            else sum(
                 row["arms"]["memory"]["sessions_at_limit"]
                 for row in rows
                 if "memory" in row["arms"]

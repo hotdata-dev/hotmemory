@@ -414,10 +414,43 @@ def test_library_commit_refuses_a_change_that_is_not_committed(tmp_path: Path) -
         library_commit(tmp_path)
 
 
-def test_keep_needs_the_memory_arm_only(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("argv", "error"),
+    [
+        (["--keep", "--arms", "retrieval,memory"], "--keep needs --arms memory"),
+        (["--reuse", "--arms", "full"], "--reuse needs --arms memory"),
+        (["--keep", "--reuse", "--arms", "memory"], "pass --keep or --reuse, not both"),
+    ],
+)
+def test_keep_and_reuse_refuse_other_arms(
+    argv: list[str], error: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     with pytest.raises(SystemExit):
-        main(["--keep", "--arms", "retrieval,memory"])
-    assert "--keep needs --arms memory" in capsys.readouterr().err
+        main(argv)
+    assert error in capsys.readouterr().err
+
+
+def test_run_question_without_capture_recalls_the_kept_memory(
+    questions: dict[str, Question],
+) -> None:
+    question = questions["q_one"]
+    store = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    stores = {"fused": store, "vector": store}
+    config = Config(budget=100_000, session_episodes=True, episodes="search")
+    captured = FakeModels()
+    first = run_question(question, captured, stores, lambda _: None, "kept", ("memory",), config)[
+        "memory"
+    ]
+    reused = FakeModels()
+    second = run_question(
+        question, reused, stores, lambda _: None, "kept", ("memory",), config, capture=False
+    )["memory"]
+    assert [model for model, _ in reused.prompts] == [READER, JUDGE]
+    assert reused.prompts[0] == next(p for p in captured.prompts if p[0] == READER)
+    assert second.block_sha256 == first.block_sha256 is not None
+    assert (second.context_chars, second.episodes) == (first.context_chars, first.episodes)
+    assert first.extracted and first.at_limit == 0
+    assert second.extracted is None and second.at_limit is None
 
 
 def _embed(texts: Sequence[str]) -> list[list[float]]:
@@ -425,26 +458,27 @@ def _embed(texts: Sequence[str]) -> list[list[float]]:
 
 
 @pytest.mark.hotdata
-def test_local_store_keeps_the_database_only_on_success() -> None:
+def test_local_store_deletes_the_database_as_asked() -> None:
     url = os.environ.get("HOTMEMORY_TEST_URL")
     if not url:
         pytest.skip("HOTMEMORY_TEST_URL is not set")
-    kept = f"hotmemory-test-kept-{uuid.uuid4().hex[:8]}"
-    failed = f"{kept}-failed"
-    temporary = f"{kept}-temporary"
-    with local_store(url, kept, _embed, keep=True):
+    base = f"hotmemory-test-kept-{uuid.uuid4().hex[:8]}"
+    names = {case: f"{base}-{case}" for case in ("always", "error", "kept", "never")}
+    with local_store(url, names["always"], _embed):
         pass
-    with pytest.raises(ValueError), local_store(url, failed, _embed, keep=True):
+    with pytest.raises(ValueError), local_store(url, names["error"], _embed, "on_error"):
         raise ValueError("stop")
-    with local_store(url, temporary, _embed):
+    with local_store(url, names["kept"], _embed, "on_error"):
         pass
+    with pytest.raises(ValueError), local_store(url, names["never"], _embed, "never"):
+        raise ValueError("stop")
     try:
-        assert existing_databases(url, [kept, failed, temporary]) == [kept]
+        assert existing_databases(url, names.values()) == [names["kept"], names["never"]]
     finally:
         from hotdata_framework import HotdataClient
 
         client = HotdataClient("local", "local", host=url)
         for database in client.list_managed_databases():
-            if database.description == kept:
+            if database.description in (names["kept"], names["never"]):
                 client.delete_managed_database(database)
         client.close()
