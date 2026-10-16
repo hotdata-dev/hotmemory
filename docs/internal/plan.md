@@ -3,14 +3,14 @@
 Status: agreed, 2026-10-13. The owner agreed to each decision and to the target on
 2026-10-13. Phase 8 closed on 2026-10-15 with PR #24. On 2026-10-16 the owner added
 three phases after it: faster evaluation, the ranking with episode chunks, and a large
-memory store. The later phases moved to 12 to 15. Phase 9 is open as issue #25, and
-the brief of phase 10 is issue #26. This file holds the open workstream,
-phases 9 to 15. Each phase becomes one GitHub
-issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
+memory store. The later phases moved to 12 to 15. Phase 9 closed on 2026-10-16 with PR
+#28, and phase 10 is open as issue #26. This file holds the open workstream, phases 10 to
+15. Each phase becomes one GitHub issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
 git history, at commit `4a6fb36`. The plan of phase 6, with the decisions taken during
 its work, is at commit `8a7318d`. The plan of phase 7 is at commit `ab93da1`. The plan
-of phase 8, with the decisions of its task 1, is at commit `b5443ac`.
+of phase 8, with the decisions of its task 1, is at commit `b5443ac`. The plan of phase 9
+is at commit `2df6881`.
 
 ## Goal
 
@@ -115,60 +115,6 @@ The owner agreed to each item on 2026-10-13.
   `docs/contracts.md`, and `docs/guarantees.md` in the same commit, and `MemoryStore` gets
   the same behavior as `HotdataStore`.
 
-## Phase 9. Faster evaluation
-
-Goal: a run that changes only `recall` or the reader takes minutes, not 20 minutes, and a
-smoke run checks a change in a few minutes. This phase changes `bench/` only.
-
-Phase 8 ran seven configurations on sample A. Each run captured the same memory again,
-because the episodes value and the budget act after `capture`. A run took 1,133 to
-2,085 seconds with 4 workers (observed, `duration_s` in the result files), and most of
-that time was `capture`: about four engine round trips for each of about 2,700 sessions
-(read from the code, not timed).
-The diagnosis replays `capture` again. An internet outage stopped four runs, and each
-lost every finished question, because a run writes its result file only at the end.
-
-Tasks:
-
-1. Keep the memory of a run. With `--keep`, the runner does not empty the namespaces, and
-   it keeps one database for each question. The name of the database states what decides
-   the memory: the sample, the extractor variant, the episode setting, the fact sources,
-   the ranking, the last commit that changed `src/hotmemory`, and the question id. The
-   runner records the name in the result file. One database holds one question, because
-   BM25 ranks the whole table before the namespace filter applies. In a shared table, the
-   memory of other questions changes the block and the known facts of `capture`. The
-   owner agreed to this layout on 2026-10-16.
-2. Reuse the memory. With `--reuse`, the runner opens the kept databases, skips
-   `capture`, and runs `recall`, the reader, and the judge. It refuses to run if a
-   database with the expected name does not exist.
-3. Let `bench.diagnose` read a kept database, so that it does not replay `capture`.
-4. A smoke run. `--smoke` runs 18 questions, 3 of each type from sample A, on
-   `MemoryStore`, in the process. A committed file lists the 18 ids. The smoke run checks
-   that a change runs and that the block looks right. It decides no gain: 18 questions can
-   be off by about 23 points, and `MemoryStore` ranks by vector only.
-5. Keep finished questions. The runner appends each finished row to a file as it goes,
-   and `--resume` skips the rows that the file holds. A failed call to a model fails its
-   question and not the whole run.
-6. Prove the reuse. Run `search` at 64,000 characters on sample A with `--keep`, then
-   `search` at 32,000 and `cited` at 64,000 with `--reuse`. Each answer must equal the
-   answer of the phase 8 run of the same configuration, from the caches. Record the time
-   of each run.
-7. Update `bench/README.md` and `docs/benchmarks.md` with the new options and the times.
-
-Acceptance criteria:
-
-- A run with `--reuse` gives the same block, answer, and mark for each question as a run
-  that captures, and it takes less than 5 minutes on sample A with cached replies.
-- A smoke run with cached replies takes less than 3 minutes.
-- A run that loses its model connection keeps its finished questions, and `--resume`
-  completes it.
-- No file in `src/hotmemory` changes.
-
-Stop and ask if:
-
-- A reused memory gives a different block than a fresh capture for any question.
-- The kept databases of one sample need more than 10 GB on the local stack.
-
 ## Phase 10. The ranking, and episode chunks
 
 Goal: the default ranking of `HotdataStore` is the one that scores best, and the reason
@@ -182,6 +128,13 @@ tokens. A session is one episode, so an episode that holds one needed turn still
 the budget with every other turn. `load` already cuts a document into chunks of
 `chunk_chars`, and each chunk is an episode.
 
+The runs use the options of phase 9. A run with `--keep` captures once for each ranking,
+chunk size, and commit of `src/hotmemory`, and each other budget or episodes value is a run
+with `--reuse`. A commit that changes `src/hotmemory` makes the kept memory of earlier
+commits unusable: delete it by hand after the runs that need it. Check each library change
+first with `--smoke --workers 4`. The first smoke run after a change to `capture` pays
+for extraction.
+
 Tasks:
 
 1. Explain the gap on the 419 retrieval questions, with no reader model. Run the fused
@@ -189,7 +142,8 @@ Tasks:
    alone. Episodes have no cues, so in the retrieval run the cue arm adds nothing. Find
    which arm costs the most and on which question types.
 2. Run the memory arm on sample A with each ranking, with `search` at 64,000 characters.
-   With phase 9, each ranking captures once and reuses the memory.
+   The fused memory of the phase 9 proof is kept, at commit `b5443ac` of `src/hotmemory`.
+   The vector ranking needs one run with `--keep`.
 3. Propose the default ranking and the surface of episode chunks in `docs/contracts.md`,
    and stop for the owner's agreement. The ranking: the vector ranking, or a rebuilt
    fusion that ranks BM25 inside the scope or fuses two arms with no weights. The chunks,
@@ -201,8 +155,9 @@ Tasks:
    `docs/guarantees.md`, and the skill commands. If the default ranking changes, the
    oracle test and the benchmark runner follow.
 5. Run `search` with chunks of 1,000, 2,000, and 4,000 characters, at budgets of 8,000,
-   16,000, and 32,000 characters, on sample A, with reuse wherever the memory is the same.
-   Report accuracy against reader tokens, next to the phase 8 runs.
+   16,000, and 32,000 characters, on sample A. Each chunk size is one run with `--keep`,
+   and each budget after the first is a run with `--reuse`. Report accuracy against
+   reader tokens, next to the phase 8 runs.
 6. Run the best configuration on sample B, rerun the retrieval score on all 419 questions
    with the agreed ranking, and diagnose the misses.
 
@@ -241,6 +196,9 @@ The parts discussed so far:
   revision, and delete is found through the vector index and the BM25 index.
 - Retrieval at scale: LongMemEval-M, about 500 sessions for each question, scored by
   `recall_any@k` with no reader model.
+- Recall over a narrow scope in a shared table. BM25 ranks the whole table before the
+  namespace filter, so a scope that holds a small share of the rows can lose BM25 hits.
+  Phase 9 found this in the benchmark runner. Measure the score at each scope size.
 - A comparison with other memory layers in one harness, such as MemoryBench, with the
   same questions, reader, and judge. It needs accounts for each service and the owner's
   yes on its cost.
