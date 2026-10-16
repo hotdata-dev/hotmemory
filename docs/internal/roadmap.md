@@ -25,18 +25,22 @@ that proves it.
 
 Agreed on 2026-10-13. `plan.md` holds the tasks, the acceptance criteria, and the stop
 conditions of each phase. The library stays deterministic: no code in `src/hotmemory`
-calls a model. Latency is not a goal, and its work waits under Deferred.
+calls a model. Latency is not a goal, and its work waits under Deferred, except the
+measurements at scale of phase 11. On 2026-10-16 the owner added phases 9 to 11, and the
+later phases moved to 12 to 15.
 
 | Phase | Delivers | Status |
 |---|---|---|
 | 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | closed 2026-10-14, PR #18 |
 | 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | closed 2026-10-14, PR #21 |
-| 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | open, issue #22 |
-| 9. The ranking | An ablation of the fused ranking, and a default ranking chosen by the benchmark. | proposed |
-| 10. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
-| 11. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
-| 12. The full benchmark | The final configuration on all 500 LongMemEval-S questions, and a LoCoMo smoke test. | proposed |
-| 13. Release on PyPI | The release flow of the sibling repository `hotdata-langchain`, and the first release. | proposed |
+| 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | closed 2026-10-15, PR #24 |
+| 9. Faster evaluation | The runner keeps the memory of a run and reuses it for runs that change only `recall` or the reader. A smoke run of 18 questions on `MemoryStore`. A run keeps its finished questions when it stops. No library change. | open, issue #25 |
+| 10. The ranking, and episode chunks | An ablation of the fused ranking, and a default ranking chosen by the benchmark. `capture` stores a session as chunks, so the block holds the chunks that match and not whole sessions, for fewer reader tokens. | proposed, issue #26 |
+| 11. A large memory store | The time of a write and a search at 10,000, 100,000, and 1,000,000 memories, by scope size, locally and in the cloud. The vector rankings on the vector index once the engine fixes the filtered search, with tests that every record is found through both indexes. Retrieval on LongMemEval-M. Then a comparison with other memory layers in one harness. | proposed |
+| 12. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
+| 13. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
+| 14. The full benchmark | The final configuration on all 500 LongMemEval-S questions, and a LoCoMo smoke test. | proposed |
+| 15. Release on PyPI | The release flow of the sibling repository `hotdata-langchain`, and the first release. | proposed |
 
 ## Deferred
 
@@ -46,9 +50,10 @@ taken up now.
 - Adapters, planned as phase 6 of the first roadmap: a LangGraph `BaseStore` adapter in
   `hotdata-langchain`, then an MCP server. They wait until the memory contract scores well
   and is on PyPI.
-- Latency, from phase 5: native DML for writes, the filtered vector index search, a
-  conditional write for more than one writer, text loaded only for ranked rows, and the
-  time of each cloud request. The second workstream measures accuracy first.
+- Latency, from phase 5: a conditional write for more than one writer, text loaded only
+  for ranked rows, and the time of each cloud request. The second workstream measures
+  accuracy first. Native DML for writes and the filtered vector index search moved to
+  phase 11 on 2026-10-16, to be measured at scale.
 - Model calls, from the discussion of 2026-10-13: a model-backed extractor in an extra,
   and decision calls with a probability, for example to decide a supersede or to route a
   recall. The library stays deterministic in the second workstream.
@@ -140,3 +145,16 @@ A closed phase keeps its row above with the date it closed and the pull request.
   B, and they are still the largest group. The marker of the diagnosis can miss facts,
   so that group can be smaller than the diagnosis shows. A reply that reaches the token
   limit gives no facts for its session, and a result file counts such sessions.
+- Phase 8 closed on 2026-10-15 with PR #24, which closed issue #22. `capture` stores a
+  session as an episode that its facts cite, and `recall` adds episodes after the facts.
+  With `episodes="search"` at 64,000 characters, the memory arm scored 45 of 54 on sample
+  A and 45 on sample B, against 29 and 31 with facts only, at about 12,800 reader tokens
+  at the median. The retrieval arm scored 45 on sample A with 29,878 tokens. It changed
+  the plan for later phases in four ways. The misses with no stored fact went from 17 to
+  5 on each sample, and in 8 of the 9 misses on each sample the block held an evidence
+  session, so the reader is now a larger loss than the extractor. The block shows a
+  source in its own namespace as `<key>@<revision>`, so the run id stays out of every
+  prompt and a run replays `capture` from the cache. Each run captured the same memory
+  again for about 20 minutes, which led to phase 9. Whole sessions cost the tokens, which
+  led to the chunks of phase 10. An internet outage stopped four runs, and the local
+  engine refused one search with a stale BM25 index, which a second try did not show.
