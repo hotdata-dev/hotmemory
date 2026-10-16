@@ -7,8 +7,10 @@ does not hold:
     uv run --group bench --env-file .env python -m bench.e2e
     uv run --group bench --env-file .env python -m bench.e2e --run
     uv run --group bench --env-file .env python -m bench.e2e --replay --arms memory
+    uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms memory
 
-It writes one JSON file into `bench/results/` with the configuration and the results.
+With `--smoke`, it runs the 18 questions of `bench/sample-smoke.json` on `MemoryStore`, in
+the process. It writes one JSON file into `bench/results/` with the configuration and the results.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -52,8 +54,8 @@ from bench.models import (
     CachedModels,
     Reply,
 )
-from bench.retrieval import RANKINGS, RESULTS_DIR, _commit
-from hotmemory import Embedder, Fact, Filter, Memory, Record, Store
+from bench.retrieval import FIXED_TIME, RANKINGS, RESULTS_DIR, _commit
+from hotmemory import Embedder, Fact, Filter, Memory, MemoryStore, Record, Store
 from hotmemory.contract import Episodes
 
 HERE = Path(__file__).resolve().parent
@@ -128,6 +130,8 @@ SAMPLES = {
     "a": Sample("bench/sample.json", 20261010),
     "b": Sample("bench/sample-b.json", 20261013, excludes=("a",)),
 }
+SMOKE = Sample("bench/sample-smoke.json", 20261016)
+SMOKE_PER_TYPE = 3
 
 
 def choose_sample(
@@ -159,6 +163,26 @@ def sample_ids(name: str, questions: Sequence[Question], root: Path = HERE.paren
     if not path.exists():
         exclude = {i for other in sample.excludes for i in sample_ids(other, questions, root)}
         chosen = choose_sample(questions, seed=sample.seed, exclude=exclude)
+        path.write_text(json.dumps(chosen, indent=1) + "\n")
+    ids: list[str] = json.loads(path.read_text())
+    return ids
+
+
+def smoke_ids(questions: Sequence[Question], root: Path = HERE.parent) -> list[str]:
+    """Return the ids of the smoke sample, and write its file first if it does not exist.
+
+    The smoke sample draws SMOKE_PER_TYPE questions of each type from sample A with the
+    seed of SMOKE, sorted by type and id.
+    """
+    path = root / SMOKE.file
+    if not path.exists():
+        types = {question.id: question.type for question in questions}
+        sample = sample_ids("a", questions, root)
+        rng = random.Random(SMOKE.seed)
+        chosen = []
+        for kind in QUESTION_TYPES:
+            of_kind = sorted(i for i in sample if types[i] == kind)
+            chosen.extend(sorted(rng.sample(of_kind, SMOKE_PER_TYPE)))
         path.write_text(json.dumps(chosen, indent=1) + "\n")
     ids: list[str] = json.loads(path.read_text())
     return ids
@@ -526,6 +550,7 @@ class Job:
     total: int
     kept: str | None = None
     reuse: bool = False
+    smoke: bool = False
 
 
 @dataclass(frozen=True)
@@ -587,9 +612,10 @@ def run_shard(job: Job, shard: Shard) -> Done:
     With `job.kept`, each question runs over a new database named `<job.kept>-<question
     id>`, and the database keeps the memory of the question after the run. A question that
     raises deletes its database. With `job.reuse` as well, each question opens its kept
-    database, skips `capture`, and never deletes the database. The worker opens its own
-    model cache, embedder, and store, so it can run in its own process. It prints one line
-    for each question.
+    database, skips `capture`, and never deletes the database. With `job.smoke`, the
+    questions run over one `MemoryStore` with a fixed clock, in the process. The worker
+    opens its own model cache, embedder, and store, so it can run in its own process. It
+    prints one line for each question.
     """
     from bench.models import Offline, Remote
 
@@ -609,7 +635,20 @@ def run_shard(job: Job, shard: Shard) -> Done:
         )
 
     try:
-        if job.kept is not None:
+        if job.smoke:
+            store = MemoryStore(embedder=embedder, clock=lambda: FIXED_TIME)
+
+            def empty(namespace: Sequence[str]) -> None:
+                for record in store.list(namespace, limit=100_000):
+                    store.delete(record.namespace, record.key)
+
+            for question in shard.questions:
+                in_process: dict[str, Store] = dict.fromkeys(RANKINGS, store)
+                result = run_question(
+                    question, models, in_process, empty, shard.run_id, job.arms, job.config
+                )
+                finish(question, result)
+        elif job.kept is not None:
             for question in shard.questions:
                 name = f"{job.kept}-{question.id}"
                 delete: Delete = "never" if job.reuse else "on_error"
@@ -627,10 +666,10 @@ def run_shard(job: Job, shard: Shard) -> Done:
                 finish(question, result)
         else:
             name = f"hotmemory-bench-{shard.run_id}"
-            with local_store(job.url, name, embedder) as (stores, empty):
+            with local_store(job.url, name, embedder) as (stores, emptied):
                 for question in shard.questions:
                     result = run_question(
-                        question, models, stores, empty, shard.run_id, job.arms, job.config
+                        question, models, stores, emptied, shard.run_id, job.arms, job.config
                     )
                     finish(question, result)
     finally:
@@ -653,6 +692,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "--limit", type=int, default=None, help="the first N questions of the sample"
     )
     parser.add_argument("--sample", choices=tuple(SAMPLES), default="a", help="the sample to run")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="run the 18 questions of the smoke sample on MemoryStore, in the process",
+    )
     parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="fused")
     parser.add_argument("--memory-ranking", choices=RANKINGS, default="fused")
     parser.add_argument("--recall-k", type=int, default=RECALL_K, help="k of the memory recall")
@@ -702,6 +746,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error("workers must be at least 1")
     if args.keep and args.reuse:
         parser.error("pass --keep or --reuse, not both")
+    if args.smoke and (args.keep or args.reuse or args.workers != 1 or args.sample != "a"):
+        parser.error("--smoke runs alone: no --keep, --reuse, --workers, or --sample")
     if (args.keep or args.reuse) and arms != ("memory",):
         parser.error(f"--{'keep' if args.keep else 'reuse'} needs --arms memory")
     try:
@@ -717,9 +763,14 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         )
     except ValueError as error:
         parser.error(str(error))
+    if args.smoke:
+        config = replace(config, retrieval_ranking="vector", memory_ranking="vector")
 
     all_questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
-    sample = sample_ids(args.sample, list(all_questions.values()))
+    if args.smoke:
+        sample = smoke_ids(list(all_questions.values()))
+    else:
+        sample = sample_ids(args.sample, list(all_questions.values()))
     questions = [all_questions[question_id] for question_id in sample][: args.limit]
 
     tokens = embed.TiktokenTokens(encoding="o200k_base")
@@ -758,7 +809,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     clock_start = time.perf_counter()
     shards = shards_of(questions, args.workers, run_id)
-    job = Job(args.url, arms, config, args.replay, len(questions), kept, args.reuse)
+    job = Job(args.url, arms, config, args.replay, len(questions), kept, args.reuse, args.smoke)
     if len(shards) == 1:
         done = [run_shard(job, shards[0])]
     else:
@@ -778,13 +829,23 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "data_file": DATA_FILE,
             "data_revision": DATA_REVISION,
             "data_sha256": DATA_SHA256,
-            "sample": {
-                "name": args.sample,
-                "file": SAMPLES[args.sample].file,
-                "per_type": PER_TYPE,
-                "seed": SAMPLES[args.sample].seed,
-                "excludes": list(SAMPLES[args.sample].excludes),
-            },
+            "sample": (
+                {
+                    "name": "smoke",
+                    "file": SMOKE.file,
+                    "per_type": SMOKE_PER_TYPE,
+                    "seed": SMOKE.seed,
+                    "from": SAMPLES["a"].file,
+                }
+                if args.smoke
+                else {
+                    "name": args.sample,
+                    "file": SAMPLES[args.sample].file,
+                    "per_type": PER_TYPE,
+                    "seed": SAMPLES[args.sample].seed,
+                    "excludes": list(SAMPLES[args.sample].excludes),
+                }
+            ),
             "reader": {
                 "model": READER,
                 "temperature": 0,
@@ -803,8 +864,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "max_tokens": EXTRACTOR_MAX_TOKENS,
             },
             "embedder": {"model": embed.MODEL, "dimensions": embed.DIMENSIONS},
-            "driver": "hotdata",
-            "location": "local",
+            "driver": "memory" if args.smoke else "hotdata",
+            "location": "in-process" if args.smoke else "local",
             "retrieval": {"ranking": config.retrieval_ranking, "sessions": RETRIEVED},
             "memory": {
                 "ranking": config.memory_ranking,
@@ -853,7 +914,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "questions": rows,
     }
     RESULTS_DIR.mkdir(exist_ok=True)
-    name = f"e2e-sample-{args.sample}" + (f"-{args.tag}" if args.tag else "")
+    name = "e2e-smoke" if args.smoke else f"e2e-sample-{args.sample}"
+    name += f"-{args.tag}" if args.tag else ""
     name += f"-first{args.limit}" if args.limit is not None else ""
     path = RESULTS_DIR / f"{name}.json"
     path.write_text(json.dumps(result_file, indent=1) + "\n")

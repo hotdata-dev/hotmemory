@@ -13,6 +13,7 @@ from bench import prompts
 from bench.data import QUESTION_TYPES, Question, load
 from bench.e2e import (
     SAMPLES,
+    SMOKE,
     Config,
     capture_session,
     choose_sample,
@@ -28,6 +29,7 @@ from bench.e2e import (
     run_question,
     sample_ids,
     shards_of,
+    smoke_ids,
     summarize,
 )
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Offline, Reply
@@ -110,6 +112,32 @@ def test_sample_b_leaves_out_sample_a(questions: dict[str, Question], tmp_path: 
     assert not set(a) & set(b)
     assert json.loads((tmp_path / SAMPLES["b"].file).read_text()) == b
     assert sample_ids("b", pool[:60], root=tmp_path) == b
+
+
+def test_smoke_ids_draw_three_of_each_type_from_sample_a(
+    questions: dict[str, Question], tmp_path: Path
+) -> None:
+    base = questions["q_one"]
+    pool = [
+        replace(base, id=f"{kind}-{n}", type=kind) for kind in QUESTION_TYPES for n in range(20)
+    ]
+    (tmp_path / "bench").mkdir()
+    a = sample_ids("a", pool, root=tmp_path)
+    smoke = smoke_ids(pool, root=tmp_path)
+    types = {question.id: question.type for question in pool}
+    assert len(smoke) == len(set(smoke)) == 18
+    assert set(smoke) <= set(a)
+    assert [types[i] for i in smoke] == [kind for kind in QUESTION_TYPES for _ in range(3)]
+    assert json.loads((tmp_path / SMOKE.file).read_text()) == smoke
+    assert smoke_ids(pool[:30], root=tmp_path) == smoke
+
+
+def test_committed_smoke_sample_is_in_sample_a() -> None:
+    root = Path(__file__).resolve().parents[2]
+    smoke = json.loads((root / SMOKE.file).read_text())
+    a = json.loads((root / SAMPLES["a"].file).read_text())
+    assert len(smoke) == len(set(smoke)) == 18
+    assert set(smoke) <= set(a)
 
 
 def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
@@ -420,6 +448,8 @@ def test_library_commit_refuses_a_change_that_is_not_committed(tmp_path: Path) -
         (["--keep", "--arms", "retrieval,memory"], "--keep needs --arms memory"),
         (["--reuse", "--arms", "full"], "--reuse needs --arms memory"),
         (["--keep", "--reuse", "--arms", "memory"], "pass --keep or --reuse, not both"),
+        (["--smoke", "--workers", "4"], "--smoke runs alone"),
+        (["--smoke", "--sample", "b"], "--smoke runs alone"),
     ],
 )
 def test_keep_and_reuse_refuse_other_arms(
