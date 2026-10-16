@@ -67,7 +67,7 @@ All numbers are from `docs/benchmarks.md`. The rows of sample A were observed on
 | Phase 8, `episodes="search"` at 64,000 characters | 45 on sample A, 45 on sample B, 12,849 and 12,676 reader tokens |
 | Phase 8, `episodes="search"` at 32,000 characters | 43 on sample A, 5,715 reader tokens |
 | Phase 8 misses with `search` at 64,000 characters | 9 on each sample: 5 with no stored fact, and an evidence session in the block in 8 |
-| Phase 8 run time on sample A, 4 workers | 1,145 s for facts only, 1,507 s for `search` at 64,000 characters |
+| Phase 8 run time on sample A, 4 workers, from `duration_s` in the result files | 1,145 s for facts only, 1,507 s for `search` at 64,000 characters, 1,133 to 2,085 s over the seven runs |
 
 Four facts about the memory arm, read from `bench/e2e.py` and `src/hotmemory/contract.py`,
 shape the phases below:
@@ -121,9 +121,10 @@ Goal: a run that changes only `recall` or the reader takes minutes, not 20 minut
 smoke run checks a change in a few minutes. This phase changes `bench/` only.
 
 Phase 8 ran seven configurations on sample A. Each run captured the same memory again,
-because the episodes value and the budget act after `capture`. A run took 1,145 to
-1,507 seconds with 4 workers (observed), and most of that time was `capture`: about four
-engine round trips for each of about 2,700 sessions (read from the code, not timed).
+because the episodes value and the budget act after `capture`. A run took 1,133 to
+2,085 seconds with 4 workers (observed, `duration_s` in the result files), and most of
+that time was `capture`: about four engine round trips for each of about 2,700 sessions
+(read from the code, not timed).
 The diagnosis replays `capture` again. An internet outage stopped four runs, and each
 lost every finished question, because a run writes its result file only at the end.
 
