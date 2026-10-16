@@ -133,8 +133,8 @@ INDEXES = (
 )
 
 
-Ranking = Literal["fused", "vector"]
-"""How `search` ranks: by fusion of BM25 and both vector rankings, or by content vector only."""
+Ranking = Literal["vector", "fused"]
+"""How `search` ranks: by content vector only, or by fusion of BM25 and both vector rankings."""
 
 
 class LayoutError(RuntimeError):
@@ -149,10 +149,10 @@ class HotdataStore:
     database when it is provisioned, and every later open must name the same values.
     `clock` gives `created_at` and the time against which `forget_after` is compared.
 
-    `ranking="fused"`, the default, ranks a search by reciprocal rank fusion of BM25 over
+    `ranking="vector"`, the default, ranks a search by the content cosine distance alone,
+    as `MemoryStore` does. `ranking="fused"` ranks by reciprocal rank fusion of BM25 over
     `content`, cosine distance over the content vectors, and cosine distance over the cue
-    vectors. `ranking="vector"` ranks by the content cosine distance alone, as `MemoryStore`
-    does. In both, `Hit.distance` is the content cosine distance.
+    vectors. In both, `Hit.distance` is the content cosine distance.
     """
 
     def __init__(
@@ -164,10 +164,10 @@ class HotdataStore:
         model: str,
         dimensions: int,
         clock: Clock = utc_now,
-        ranking: Ranking = "fused",
+        ranking: Ranking = "vector",
     ) -> None:
-        if ranking not in ("fused", "vector"):
-            raise ValueError(f"ranking must be 'fused' or 'vector', got {ranking!r}")
+        if ranking not in ("vector", "fused"):
+            raise ValueError(f"ranking must be 'vector' or 'fused', got {ranking!r}")
         self.client = client
         self.database = database
         self._embedder = embedder

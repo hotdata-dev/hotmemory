@@ -335,7 +335,7 @@ sequenceDiagram
     end
     C->>M: capture(text, scope, extractor, actor, observed_at)
     M->>H: search(text, [scope], kinds fact, profile, procedure, k=10)
-    H->>API: one fused SELECT on memory_v1 and cue_v1
+    H->>API: one vector SELECT on memory_v1
     API-->>H: ranked rows
     H-->>M: hits
     Note over M: recall keeps the lines that fit in 2,000 characters
@@ -365,16 +365,24 @@ flushes, one for each table, in that order. A flush of `HotdataStore` loads its 
 the same time, so with one writer for both, the episode can land without the facts. A retry
 would then skip the extractor.
 
+With `episode` and `chunk_chars`, `capture` cuts the text at blank lines into chunks, and
+reads the current revision of each key `<episode>-<n>` with `get`. If every chunk holds the
+same content, the call ends there. Else the extractor reads the whole text once, each fact
+gets the id of every chunk in its `sources`, and one more flush writes the changed chunks
+to `episode_v1`. The search of the extractor runs as above, so it uses the ranking of the
+store, as `recall` does.
+
 ## Recall and search
 
 `recall` calls `search` with the filter `kind` in (`fact`, `profile`, `procedure`). That
-filter names no episode, so the search reads only `memory_v1` and `cue_v1`. The search
+filter names no episode, so the search reads only `memory_v1`, and `cue_v1` with
+`ranking="fused"`. The search
 embeds the query once and sends one SQL query.
 
 ```mermaid
 flowchart TD
     q["recall(query, scopes, as_of, budget, k)"] --> embed["Embed the query<br/>(one embedder call)"]
-    embed --> sql["Send one SQL query<br/>(fused or vector)"]
+    embed --> sql["Send one SQL query<br/>(vector or fused)"]
     sql --> top["The top k current records"]
     top --> asof{"as_of given?"}
     asof -- "yes" --> keep["Keep the records valid at as_of"]
@@ -392,9 +400,10 @@ flowchart TD
 
 With `episodes="cited"`, `recall` sends one `get` for each distinct source that is an
 episode id in the allowed scopes. With `episodes="search"`, it sends a second search with
-the filter `kind` = `episode`, so that search reads `episode_v1`. The episodes that
-`capture` and `load` write have no cues, so the fused ranking of that search is BM25 and
-the content vector.
+the filter `kind` = `episode`, so that search reads `episode_v1`. With chunks, each chunk
+is an episode, so that search ranks each chunk on its own. The episodes that `capture` and
+`load` write have no cues, so the fused ranking of that search is BM25 and the content
+vector.
 
 The `as_of` filter runs in the process, after the search. Thus `recall` with `as_of` can
 return fewer than k records. The search keeps k records before the filter, so a record that
@@ -414,7 +423,8 @@ Each ranking applies the same SQL condition, built from these parts:
 
 ### The fused ranking
 
-`ranking="fused"` is the default. It runs three rankings and fuses them by reciprocal rank
+`ranking="vector"` is the default, and it ranks by the content vector alone. With
+`ranking="fused"`, the search runs three rankings and fuses them by reciprocal rank
 fusion. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking that holds a row.
 Each ranking keeps its top rows to a depth of `max(100, 10 * k)`.
 
@@ -592,7 +602,7 @@ sequenceDiagram
         else a new or changed chunk
             Note over M: The episode id is known before the write:<br/>scope/key@next revision
             M->>H: search for the chunk (as capture does)
-            H->>API: fused SELECT on memory_v1 and cue_v1
+            H->>API: vector SELECT on memory_v1
             M->>X: extractor(chunk, observed_at, current records)
             X-->>M: facts
             Note over M: Add the episode id to the sources of each fact

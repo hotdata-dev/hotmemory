@@ -685,6 +685,103 @@ def test_capture_refuses_an_episode_key_that_holds_a_fact(memory: Memory) -> Non
     assert [record.key for record in memory.store.list(SCOPE)] == ["chat-0001"]
 
 
+LONG_CHAT = f"{CHAT}\n\n{LATER}"
+
+
+def test_capture_with_chunks_stores_each_chunk_and_links_every_chunk(memory: Memory) -> None:
+    calls: list[str] = []
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        calls.append(text)
+        return first_turn(text, observed_at, current)
+
+    observed = START - timedelta(days=2)
+    ids = memory.capture(
+        LONG_CHAT, SCOPE, extractor, observed_at=observed, episode="chat", chunk_chars=60
+    )
+
+    assert calls == [LONG_CHAT]
+    chunks = [memory.store.get(SCOPE, f"chat-{n:04d}") for n in (1, 2, 3, 4)]
+    assert [chunk.content if chunk else None for chunk in chunks] == LONG_CHAT.split("\n\n")
+    assert all(chunk is not None and chunk.kind == "episode" for chunk in chunks)
+    assert all(chunk is not None and chunk.observed_at == observed for chunk in chunks)
+    assert memory.store.get(SCOPE, "chat") is None
+    assert memory.store.get(SCOPE, "chat-0005") is None
+    [fact] = [memory.store.get(SCOPE, record_id.split("/")[-1].split("@")[0]) for record_id in ids]
+    assert fact is not None
+    assert fact.sources == ("chat", *(chunk.id for chunk in chunks if chunk))
+
+
+def test_capture_with_chunks_writes_the_chunks_in_one_flush(store: Store, clock: FakeClock) -> None:
+    counting = CountingStore(store)
+    memory = Memory(cast(Store, counting), clock=clock)
+    memory.capture(LONG_CHAT, SCOPE, first_turn, episode="chat", chunk_chars=60)
+    assert counting.calls == ["writer", "writer"]
+
+
+def test_a_text_that_fits_in_one_chunk_gets_the_first_chunk_key(memory: Memory) -> None:
+    memory.capture(CHAT, SCOPE, first_turn, episode="chat", chunk_chars=2000)
+    chunk = memory.store.get(SCOPE, "chat-0001")
+    assert chunk is not None and chunk.content == CHAT
+    assert memory.store.get(SCOPE, "chat-0002") is None
+
+
+def test_a_retried_capture_with_chunks_writes_nothing_new(memory: Memory, clock: FakeClock) -> None:
+    calls: list[str] = []
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        calls.append(text)
+        return first_turn(text, observed_at, current)
+
+    memory.capture(LONG_CHAT, SCOPE, extractor, episode="chat", chunk_chars=60)
+    before = memory.store.list(SCOPE, limit=1000)
+    clock.advance()
+    assert memory.capture(LONG_CHAT, SCOPE, extractor, episode="chat", chunk_chars=60) == []
+    assert calls == [LONG_CHAT]
+    assert memory.store.list(SCOPE, limit=1000) == before
+
+
+def test_capture_of_an_edited_chunk_writes_its_next_revision_only(
+    memory: Memory, clock: FakeClock
+) -> None:
+    memory.capture(LONG_CHAT, SCOPE, first_turn, episode="chat", chunk_chars=60)
+    clock.advance()
+    edited = LONG_CHAT.replace("before noon", "at noon")
+    [fact_id] = memory.capture(edited, SCOPE, first_turn, episode="chat", chunk_chars=60)
+
+    revisions = [len(memory.store.history(SCOPE, f"chat-{n:04d}")) for n in (1, 2, 3, 4)]
+    assert revisions == [1, 2, 1, 1]
+    fact = memory.store.get(SCOPE, fact_id.split("/")[-1].split("@")[0])
+    assert fact is not None
+    first = tuple(f"team/alerts/chat-{n:04d}@1" for n in (1, 2, 3, 4))
+    assert fact.sources == ("chat", *first, "team/alerts/chat-0002@2")
+
+
+@pytest.mark.parametrize(
+    ("episode", "chunk_chars", "match"),
+    [(None, 60, "needs episode"), ("chat", 0, "1 or more"), ("a@b", 60, "must not contain")],
+)
+def test_capture_refuses_bad_chunks(
+    memory: Memory, episode: str | None, chunk_chars: int, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        memory.capture(LONG_CHAT, SCOPE, first_turn, episode=episode, chunk_chars=chunk_chars)
+    assert memory.store.list(SCOPE) == []
+
+
+def test_capture_refuses_a_chunk_key_that_holds_a_fact(memory: Memory) -> None:
+    memory.store.put(SCOPE, "chat-0002", kind="fact", content="Not an episode.")
+    with pytest.raises(ValueError, match="episode"):
+        memory.capture(LONG_CHAT, SCOPE, first_turn, episode="chat", chunk_chars=60)
+    assert [record.key for record in memory.store.list(SCOPE)] == ["chat-0002"]
+
+
+def test_recall_search_returns_the_chunks_that_match(memory: Memory) -> None:
+    memory.capture(LONG_CHAT, SCOPE, first_turn, episode="chat", chunk_chars=60)
+    records, _ = memory.recall("node group ceiling", [SCOPE], k=1, budget=4000, episodes="search")
+    assert [record.key for record in records if record.kind == "episode"] == ["chat-0004"]
+
+
 def test_recall_shows_a_source_in_its_namespace_as_key_and_revision(memory: Memory) -> None:
     sources = ("team/alerts/chat-0001@2", "team/alerts/night/chat-0002@1", "team/x@1", "wiki")
     memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)

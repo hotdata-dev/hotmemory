@@ -397,14 +397,14 @@ def test_kept_name_holds_what_decides_the_memory() -> None:
     config = Config(extractor="detail", session_episodes=True, episodes="search", budget=64000)
     name = kept_name("a", config, "b5443ac")
     assert name.startswith("hotmemory-kept-a-detail")
-    assert name.endswith("-episodes-fused-b5443ac")
+    assert name.endswith("-episodes-vector-b5443ac")
     after_capture = replace(config, episodes="cited", budget=32000, k=10)
     assert kept_name("a", after_capture, "b5443ac") == name
     for other in (
         kept_name("b", config, "b5443ac"),
         kept_name("a", config, "1234567"),
         kept_name("a", replace(config, extractor="baseline"), "b5443ac"),
-        kept_name("a", replace(config, memory_ranking="vector"), "b5443ac"),
+        kept_name("a", replace(config, memory_ranking="fused"), "b5443ac"),
         kept_name("a", Config(extractor="detail"), "b5443ac"),
         kept_name("a", Config(extractor="detail", fact_sources=False), "b5443ac"),
     ):

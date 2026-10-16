@@ -90,8 +90,8 @@ class Config:
     `recall`, and needs `session_episodes` unless it is `none`.
     """
 
-    retrieval_ranking: str = "fused"
-    memory_ranking: str = "fused"
+    retrieval_ranking: str = "vector"
+    memory_ranking: str = "vector"
     k: int = RECALL_K
     budget: int = RECALL_BUDGET
     extractor: str = "baseline"
@@ -789,8 +789,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         action="store_true",
         help="run the 18 questions of the smoke sample on MemoryStore, in each worker",
     )
-    parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="fused")
-    parser.add_argument("--memory-ranking", choices=RANKINGS, default="fused")
+    parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="vector")
+    parser.add_argument("--memory-ranking", choices=RANKINGS, default="vector")
     parser.add_argument("--recall-k", type=int, default=RECALL_K, help="k of the memory recall")
     parser.add_argument(
         "--recall-budget", type=int, default=RECALL_BUDGET, help="characters of the memory block"

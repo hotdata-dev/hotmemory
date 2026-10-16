@@ -1,8 +1,8 @@
-"""Tests of the chunking that `Memory.load` uses. They need no driver."""
+"""Tests of the chunking that `Memory.load` and `Memory.capture` use. They need no driver."""
 
 import pytest
 
-from hotmemory._chunks import chunk_document
+from hotmemory._chunks import chunk_document, chunk_text
 
 POST_MORTEM = """# 2026-08-12 Post-mortem: the pool ran out
 
@@ -104,3 +104,36 @@ def test_every_body_fits_the_size() -> None:
     text = POST_MORTEM * 5 + "\n" + "\n".join(f"| row {n} | value |" for n in range(40))
     for size in (40, 80, 200, 1000):
         assert all(len(body) <= size for body in bodies(chunk_document(text, size)))
+
+
+SESSION = """user: How do I rotate the logs?
+
+assistant: ### Step 1
+
+Stop the writer.
+
+```sh
+# rotate
+
+logrotate -f app.conf
+```
+
+user: Thanks, that worked."""
+
+
+def test_chunk_text_keeps_a_heading_as_text_with_no_prefix() -> None:
+    assert chunk_text(SESSION, 2000) == [SESSION]
+    first, *rest = chunk_text(SESSION, 60)
+    assert first == "user: How do I rotate the logs?\n\nassistant: ### Step 1"
+    assert all(not chunk.startswith("#") for chunk in rest)
+
+
+def test_chunk_text_never_cuts_at_a_blank_line_inside_a_fence() -> None:
+    chunks = chunk_text(SESSION, 60)
+    assert any("```sh\n# rotate\n\nlogrotate -f app.conf\n```" in chunk for chunk in chunks)
+    assert all(len(chunk) <= 60 for chunk in chunks)
+    assert "\n\n".join(chunks) == SESSION
+
+
+def test_chunk_text_of_blank_lines_gives_no_chunk() -> None:
+    assert chunk_text(" \n\n \n", 100) == []

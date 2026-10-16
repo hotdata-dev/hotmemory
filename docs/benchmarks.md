@@ -53,7 +53,8 @@ with one question at a time in the tables. File:
 
 `ranking="fused"` fuses BM25, the content vector, and the cue vector.
 `ranking="vector"` ranks by the content vector alone. On this data, the vector ranking
-scores higher than the fused ranking at k of 3 and more. The reason was not measured.
+scores higher than the fused ranking at k of 3 and more. The section on the ablation below
+gives the reason.
 
 The same run, by question type:
 
@@ -93,6 +94,49 @@ On the first 20 scored questions, the vector ranking of `MemoryStore` and that o
 two distances was 1.0e-6. `MemoryStore` ran in process with a fixed clock. File:
 `retrieval-memory-in-process-isolated-vector-first20.json`, compared with
 `bench/compare.py`.
+
+### The ablation of the fused ranking
+
+Phase 10 ranked each question with the fused query less one arm at a time, with
+`--ablate`. The episodes have no cues, so the cue arm is empty. The fused query is thus
+BM25 and the content vector. Observed on 2026-10-16, on the local stack, with one question at
+a time in the tables, at commit `6a0fb70` with the changes of `--ablate`. The embedder took
+every vector from the cache. File:
+`retrieval-hotdata-local-isolated-fused-vector-bm25-content-content-cue-bm25.json`.
+
+| Ranking | Arms | `recall_any@5` | `recall_all@5` | `recall_all@10` | `ndcg_any@10` | Search p50 |
+|---|---|---|---|---|---|---|
+| `fused` | BM25, content, cue | 0.9690 | 0.9045 | 0.9570 | 0.9311 | 160 ms |
+| `bm25-content` | BM25, content | 0.9690 | 0.9045 | 0.9570 | 0.9311 | 111 ms |
+| `content-cue` | content, cue | 0.9833 | 0.9475 | 0.9928 | 0.9479 | 126 ms |
+| `bm25` | BM25 | 0.9475 | 0.8234 | 0.8926 | 0.8766 | 86 ms |
+| `vector` | the content vector, by distance | 0.9833 | 0.9475 | 0.9928 | 0.9479 | 49 ms |
+
+`bm25-content` ranked the same sessions as `fused` on 419 of 419 questions.
+`content-cue` ranked the same top 10 as `vector` on 419 of 419 questions. Thus the BM25
+arm makes the whole gap between the two rankings.
+
+By question type, at `recall_all@10`:
+
+| Question type | Questions | `fused` | `vector` | `bm25` |
+|---|---|---|---|---|
+| single-session-user | 64 | 1.0000 | 1.0000 | 1.0000 |
+| single-session-assistant | 5 | 1.0000 | 1.0000 | 1.0000 |
+| single-session-preference | 30 | 0.9333 | 1.0000 | 0.7667 |
+| multi-session | 121 | 0.9256 | 0.9835 | 0.8182 |
+| knowledge-update | 72 | 1.0000 | 1.0000 | 0.9861 |
+| temporal-reasoning | 127 | 0.9449 | 0.9921 | 0.8819 |
+
+On 16 questions, `fused` lost an evidence session from the top 10 that `vector` had: 8
+multi-session, 6 temporal-reasoning, and 2 single-session-preference. BM25 ranked each lost
+session from 23 to 40. Fusion with equal weights thus pushed it below sessions that BM25
+ranked high. The run holds about 50 sessions for each question, and BM25 fetches 500 rows,
+so the filter after BM25 did not cause the loss.
+
+BM25 favors long sessions a little. In each haystack, a session has a length percentile
+from 0, the shortest, to 1, the longest. The sessions that are not evidence and that
+`fused` adds to the top 10 have a mean percentile of 0.645. Those in the top 10 of
+`vector` have 0.583, and the evidence sessions have 0.672.
 
 ## Latency
 
@@ -463,6 +507,27 @@ was not measured.
 The time in the table is `duration_s` of the result file. The whole command took 563
 seconds the first time, and 14.9 seconds on a later try. The cause of the first wait was
 not found.
+
+### The ranking end to end
+
+Phase 10 ran the memory arm on sample A with each ranking of `capture` and `recall`, with
+`search` at 64,000 characters, `--extractor detail --session-episodes`, and 4 workers.
+Observed on 2026-10-16, with `src/hotmemory` at `b5443ac`. The fused run reused the kept
+memory of phase 9. The vector run kept its own memory. Its first `--replay` stopped at a
+cache miss after 3 questions, and a `--run --resume` ran the other 51.
+
+| Ranking | Correct of 54 | Reader tokens, median | Episodes in the block, mean | Facts written | Cost | File |
+|---|---|---|---|---|---|---|
+| `fused` | 45 | 12,849 | 4.06 | 13,666 | $0 | `e2e-sample-a-p10-reuse-fused-search-64k.json` |
+| `vector` | 46 | 13,406 | 4.48 | 14,322 | $2.17 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
+
+The reader tokens, episodes, and facts of the fused row are those of its `--keep` run,
+`e2e-sample-a-p9-keep-search-64k.json`. The two rankings differ on 3 questions. `vector`
+answered `66f24dbb`, single-session-user, and `21d02d0d`, multi-session, and missed
+`0edc2aef`, single-session-preference. The ranking also changes `capture`, because the
+extractor reads the facts that the search of the store returns. Thus the two runs stored
+different facts. The vector run took 1,770.6 seconds and 1,722 model calls. In one session,
+the extractor reply reached the token limit, and that session gave no facts.
 
 ## Known limits
 

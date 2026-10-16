@@ -66,3 +66,9 @@ each one, and its failure message points to this file.
 - The block of `recall` and `profile` shows a source that is the id of a record in the
   namespace of its line as `<key>@<revision>`. Before, it showed the full id. The stored
   sources do not change.
+- `HotdataStore` ranks by content vector alone by default, as `MemoryStore` does. Before,
+  the default was `ranking="fused"`, which stays as an option. On LongMemEval-S, the BM25
+  arm of the fused ranking lowered the retrieval score.
+- `Memory.capture` takes `chunk_chars`, with `episode`. It cuts the text at blank lines
+  into chunks and stores chunk n as an episode under `<episode>-<n>`. The extractor still
+  reads the whole text, and each fact names every chunk in `sources`.

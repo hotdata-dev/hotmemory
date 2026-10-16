@@ -35,7 +35,7 @@ def test_every_command_in_the_skill_file_exits_zero(tmp_path: Path) -> None:
     shutil.copytree(SKILL, folder, ignore=shutil.ignore_patterns("__pycache__"))
     path = os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")])
     found = commands()
-    assert len(found) == 10
+    assert len(found) == 12
     printed = {}
     for command in found:
         result = subprocess.run(
@@ -58,3 +58,7 @@ def test_every_command_in_the_skill_file_exits_zero(tmp_path: Path) -> None:
     assert '"key": "chat-0001"' in records
     [cited] = [out for command, out in printed.items() if "--episodes cited" in command]
     assert "\nepisodes:\n## chat-0001@1 [observed: " in cited
+    assert '"key": "chat-0002-0001"' in records
+    assert '"key": "chat-0002-0002"' in records
+    [searched] = [out for command, out in printed.items() if "--episodes search" in command]
+    assert "\n## chat-0002-0002@1 [observed: " in searched

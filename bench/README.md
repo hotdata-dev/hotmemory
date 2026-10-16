@@ -82,8 +82,8 @@ The options are these:
 |---|---|---|
 | `--sample` | `a` or `b` | `a` |
 | `--arms` | a comma-separated list of `full`, `retrieval`, and `memory` | every arm |
-| `--retrieval-ranking` | `fused` or `vector`, the ranking of the retrieval arm | `fused` |
-| `--memory-ranking` | `fused` or `vector`, the ranking of `capture` and `recall` | `fused` |
+| `--retrieval-ranking` | `vector` or `fused`, the ranking of the retrieval arm | `vector` |
+| `--memory-ranking` | `vector` or `fused`, the ranking of `capture` and `recall` | `vector` |
 | `--recall-k` | the `k` of the memory recall | `30` |
 | `--recall-budget` | the `budget` of the memory recall, in characters | `8000` |
 | `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py` | `baseline` |

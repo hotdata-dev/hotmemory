@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from hotdata_framework import HotdataClient, ManagedDatabase
 
-from hotmemory import Filter, MemoryStore, Store
+from hotmemory import Fact, Filter, Memory, MemoryStore, Record, Store
 from hotmemory.hotdata import HotdataStore, Ranking
 
 from .conftest import DIMENSIONS, MODEL, START, FakeClock, empty, fake_embedder
@@ -142,3 +142,81 @@ def test_fused_ranking_returns_the_oracle_set(
     found = {hit.record.id for hit in drivers["fused"].search(query, prefixes, where, k=k)}
 
     assert found == expected
+
+
+def test_the_default_ranking_is_the_vector_ranking(
+    hotdata_database: tuple[HotdataClient, ManagedDatabase],
+) -> None:
+    client, database = hotdata_database
+    store = HotdataStore(
+        client, database, embedder=fake_embedder, model=MODEL, dimensions=DIMENSIONS
+    )
+    assert store._ranking == "vector"
+
+
+SESSIONS = [
+    "user: The disk on db-1 fills at night.\n\nassistant: Rotate the logs before noon.",
+    "user: The pool ran out of nodes.\n\nassistant: Raise the node group ceiling.\n\n"
+    "user: The ceiling is now 8.",
+]
+
+
+def every_turn(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+    """Return one fact for each user turn of a chat."""
+    return [
+        Fact(kind="fact", subject="chat", content=turn.removeprefix("user: "))
+        for turn in text.split("\n\n")
+        if turn.startswith("user: ")
+    ]
+
+
+@pytest.mark.parametrize("episodes", ["search", "cited"])
+def test_both_drivers_recall_the_same_block_with_chunks(
+    hotdata_database: tuple[HotdataClient, ManagedDatabase], episodes: str
+) -> None:
+    client, database = hotdata_database
+    clock = FakeClock()
+    oracle = Memory(MemoryStore(embedder=fake_embedder, clock=clock), clock=clock)
+    store = HotdataStore(
+        client, database, embedder=fake_embedder, model=MODEL, dimensions=DIMENSIONS, clock=clock
+    )
+    driver = Memory(store, clock=clock)
+    try:
+        for memory in (oracle, driver):
+            clock.now = START
+            for number, text in enumerate(SESSIONS, start=1):
+                memory.capture(text, PAY, every_turn, episode=f"chat{number}", chunk_chars=50)
+                clock.advance()
+        blocks = [
+            memory.recall("node ceiling", [PAY], k=3, budget=4000, episodes=episodes)  # type: ignore[arg-type]
+            for memory in (oracle, driver)
+        ]
+        assert blocks[1][1] == blocks[0][1]
+        assert [record.id for record in blocks[1][0]] == [record.id for record in blocks[0][0]]
+    finally:
+        empty(store)
+
+
+@pytest.mark.parametrize("ranking", ["vector", "fused"])
+def test_capture_searches_with_the_ranking_of_recall(
+    hotdata_database: tuple[HotdataClient, ManagedDatabase], ranking: Ranking
+) -> None:
+    client, database = hotdata_database
+    clock = FakeClock()
+    store = hotdata_store(client, database, clock, ranking)
+    memory = Memory(store, clock=clock)
+    seen: list[list[str]] = []
+
+    def extractor(text: str, observed_at: object, current: list[Record]) -> list[Fact]:
+        seen.append([record.id for record in current])
+        return []
+
+    try:
+        fill(store, clock)
+        text = "The disk on db-1 fills, and the queue backed up."
+        expected, _ = memory.recall(text, [("team",)])
+        memory.capture(text, ("team",), extractor)
+        assert seen == [[record.id for record in expected]]
+        assert expected
+    finally:
+        empty(store)

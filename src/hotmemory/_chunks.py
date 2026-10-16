@@ -1,4 +1,4 @@
-"""The chunking of a Markdown document for `Memory.load`."""
+"""The chunking of a Markdown document for `Memory.load`, and of a text for `Memory.capture`."""
 
 from __future__ import annotations
 
@@ -46,6 +46,18 @@ def chunk_document(text: str, chunk_chars: int) -> list[str]:
         prefix = PATH_SEPARATOR.join(parts)
         chunks.append(f"{prefix}\n\n{chunk.text}" if prefix else chunk.text)
     return chunks
+
+
+def chunk_text(text: str, chunk_chars: int) -> list[str]:
+    """Return the chunks of `text`, cut at blank lines outside fences, with no prefix.
+
+    A heading line does not start a section. A block that does not fit is cut at line
+    ends, and a line that does not fit is cut at `chunk_chars`. The blocks are packed in
+    order into bodies of at most `chunk_chars`, joined by a blank line. A text of blank
+    lines only gives no chunk.
+    """
+    lines = [_Line(line.text, 0, line.fenced) for line in _scan(text)]
+    return [chunk.text for chunk in pack(lines, chunk_chars)]
 
 
 def pack(lines: list[_Line], chunk_chars: int) -> list[Chunk]:
