@@ -420,6 +420,31 @@ session. A question of the type multi-session can need more sessions than the bl
 The type single-session-preference has the most misses with `search` at 64,000: 3 on
 sample A and 4 on sample B.
 
+### Faster evaluation
+
+Phase 9 kept the memory of a run and reused it for runs that change only `recall`.
+The section "Faster runs" of [bench/README.md](../bench/README.md) gives the options. Each run below is
+`--replay` on sample A, with `--extractor detail --session-episodes` and 4 workers, so no
+run called a model. Observed on 2026-10-16, at commit `630e3be`. The last commit that
+changed `src/hotmemory` is `b5443ac`, the same code as the phase 8 runs.
+
+| Run | Correct of 54 | Time | Rows equal to | File |
+|---|---|---|---|---|
+| `search`, 64,000, `--keep` | 45 | 762.4 s | phase 8 `search` 64,000: 54 of 54 | `e2e-sample-a-p9-keep-search-64k.json` |
+| `search`, 32,000, `--reuse` | 43 | 13.0 s | phase 8 `search` 32,000: 54 of 54 | `e2e-sample-a-p9-reuse-search-32k.json` |
+| `cited`, 64,000, `--reuse` | 44 | 15.3 s | phase 8 `cited` 64,000: 54 of 54 | `e2e-sample-a-p9-reuse-cited-64k.json` |
+| `search`, 64,000, `--reuse` | 45 | 11.1 s | the `--keep` run: 54 of 54, with the same block SHA-256 | `e2e-sample-a-p9-reuse-search-64k.json` |
+
+Two rows are equal in four values: the answer, the verdict, the block length, and the
+episodes in the block. The `--keep` run also wrote the same count of facts for each question as
+phase 8. The phase 8 runs of the same configurations took 1,133 to 2,085 seconds, and
+those times include model calls that were not in the cache. The 54 kept databases hold
+192 MB in the storage of the local engine.
+
+The diagnosis of the `--keep` run read the kept databases, and did not run `capture`. It
+took 7 seconds and called no model. For each of the 9 misses, it gave the same cause,
+marked facts, and evidence check as the phase 8 diagnosis of `search` at 64,000.
+
 ## Known limits
 
 - The end-to-end numbers come from samples of 54 questions, so one question moves an arm
