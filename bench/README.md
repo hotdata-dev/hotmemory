@@ -37,6 +37,7 @@ The options are these:
 | `--location` | `local` or `cloud` | `local` |
 | `--url` | the address of the local engine | `http://localhost:3000` |
 | `--limit` | the first N scored questions | every scored question |
+| `--ablate` | also rank with the fused query less one arm at a time: `bm25-content`, `content-cue`, and `bm25`; needs `--driver hotdata` | off |
 
 With `--location cloud`, the runner reads the connection from `HOTDATA_API_KEY`,
 `HOTDATA_WORKSPACE`, and `HOTDATA_API_URL`, so set them in `.env` first. It ignores `--url`.

@@ -37,6 +37,7 @@ RETRIES = 3
 DROPPED = "Remote end closed connection without response"
 Mode = Literal["isolated", "shared"]
 RANKINGS = ("fused", "vector")
+ABLATED = ("bm25-content", "content-cue", "bm25")
 
 
 @dataclass
@@ -160,6 +161,7 @@ def hotdata_target(
     import pyarrow as pa
     from hotdata_framework import HotdataClient
 
+    from bench.ablation import ABLATIONS, ArmStore
     from hotmemory.hotdata import EPISODE_TABLE, HotdataStore
 
     started = time.perf_counter()
@@ -176,14 +178,16 @@ def hotdata_target(
         dimensions=embed.DIMENSIONS,
         client=client,
     )
+    options: dict[str, Any] = {
+        "embedder": embedder,
+        "model": embed.MODEL,
+        "dimensions": embed.DIMENSIONS,
+    }
     stores: dict[str, Store] = {
-        name: HotdataStore(
-            client,
-            provisioned.database,
-            embedder=embedder,
-            model=embed.MODEL,
-            dimensions=embed.DIMENSIONS,
-            ranking=name,  # type: ignore[arg-type]
+        name: (
+            ArmStore(client, provisioned.database, arms=ABLATIONS[name], **options)
+            if name in ABLATIONS
+            else HotdataStore(client, provisioned.database, ranking=name, **options)  # type: ignore[arg-type]
         )
         for name in rankings
     }
@@ -215,12 +219,21 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--driver", choices=("hotdata", "memory"), default="hotdata")
     parser.add_argument("--mode", choices=("isolated", "shared"), default="isolated")
     parser.add_argument("--ranking", choices=(*RANKINGS, "both"), default="both")
+    parser.add_argument(
+        "--ablate",
+        action="store_true",
+        help="also rank with the fused query less one arm at a time",
+    )
     parser.add_argument("--location", choices=("local", "cloud"), default="local")
     parser.add_argument("--url", default="http://localhost:3000")
     parser.add_argument("--limit", type=int, default=None, help="the first N scored questions")
     args = parser.parse_args(argv)
 
     rankings = RANKINGS if args.ranking == "both" else (args.ranking,)
+    if args.ablate:
+        if args.driver == "memory":
+            parser.error("--ablate needs --driver hotdata")
+        rankings = (*rankings, *ABLATED)
     questions = [question for question in load(DATA_DIR / DATA_FILE) if question.is_scored]
     questions = questions[: args.limit]
     commit = _commit()
