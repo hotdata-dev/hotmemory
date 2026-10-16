@@ -93,7 +93,7 @@ The options are these:
 | `--workers` | the number of processes that run the questions | `1` |
 | `--keep` | keep the memory of each question in a local database of its own; needs `--arms memory` | off |
 | `--reuse` | recall from the kept memory, and skip `capture`; needs `--arms memory` | off |
-| `--smoke` | run the 18 questions of the smoke sample on `MemoryStore`, in the process | off |
+| `--smoke` | run the 18 questions of the smoke sample on `MemoryStore`, one store in each worker | off |
 | `--resume` | run only the questions that the rows file of an earlier run does not hold | off |
 | `--tag` | a suffix for the name of the result file | none |
 | `--limit` | the first N questions of the sample | every question |
@@ -159,12 +159,13 @@ uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms me
 ```
 
 It runs the 18 questions of `bench/sample-smoke.json`, 3 of each type drawn from sample A
-with the seed `20261016`, over one `MemoryStore` in the process. It decides no gain: 18
+with the seed `20261016`. Each worker runs its questions over a `MemoryStore` of its own,
+in its own process, and empties the memory of each question after it. It decides no gain: 18
 questions can be off by about 23 points, and `MemoryStore` ranks by vector only. Because
 the ranking differs, `capture` shows the extractor another list of known facts than a run
 on the local engine. So the first smoke run of a configuration pays for its extraction,
-and a later one replays it from the cache. `--smoke` refuses `--keep`, `--reuse`,
-`--workers`, and `--sample`.
+and a later one replays it from the cache. Pass `--workers 4` to make the first run
+faster. `--smoke` refuses `--keep`, `--reuse`, and `--sample`.
 
 Each run writes the file `bench/results/<name>.rows.jsonl` as it goes, where `<name>` is
 the name of its result file. The first line holds the arms, the configuration, the sample,

@@ -453,7 +453,7 @@ def test_library_commit_refuses_a_change_that_is_not_committed(tmp_path: Path) -
         (["--keep", "--arms", "retrieval,memory"], "--keep needs --arms memory"),
         (["--reuse", "--arms", "full"], "--reuse needs --arms memory"),
         (["--keep", "--reuse", "--arms", "memory"], "pass --keep or --reuse, not both"),
-        (["--smoke", "--workers", "4"], "--smoke runs alone"),
+        (["--smoke", "--keep"], "--smoke runs alone"),
         (["--smoke", "--sample", "b"], "--smoke runs alone"),
     ],
 )

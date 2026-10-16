@@ -9,11 +9,11 @@ does not hold:
     uv run --group bench --env-file .env python -m bench.e2e --replay --arms memory
     uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms memory
 
-With `--smoke`, it runs the 18 questions of `bench/sample-smoke.json` on `MemoryStore`, in
-the process. With `--keep`, it keeps the memory of each question, and `--reuse` recalls from
-it with no `capture`. It appends the row of each finished question to a rows file, and
-`--resume` skips those rows. At the end, it writes one JSON file into `bench/results/` with
-the configuration and the results.
+With `--smoke`, it runs the 18 questions of `bench/sample-smoke.json` on `MemoryStore`, one
+store in each worker. With `--keep`, it keeps the memory of each question, and `--reuse`
+recalls from it with no `capture`. It appends the row of each finished question to a rows
+file, and `--resume` skips those rows. At the end, it writes one JSON file into
+`bench/results/` with the configuration and the results.
 """
 
 from __future__ import annotations
@@ -648,7 +648,7 @@ def run_shard(job: Job, shard: Shard) -> Done:
     id>`, and the database keeps the memory of the question after the run. A question that
     raises deletes its database. With `job.reuse` as well, each question opens its kept
     database, skips `capture`, and never deletes the database. With `job.smoke`, the
-    questions run over one `MemoryStore` with a fixed clock, in the process. The worker
+    questions run over one `MemoryStore` of the worker, with a fixed clock. The worker
     opens its own model cache, embedder, and store, so it can run in its own process. It
     prints one line for each question, and appends the row of each finished question to
     `job.rows_file`. A question that raises is listed in `failed`, its namespaces are
@@ -787,7 +787,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="run the 18 questions of the smoke sample on MemoryStore, in the process",
+        help="run the 18 questions of the smoke sample on MemoryStore, in each worker",
     )
     parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="fused")
     parser.add_argument("--memory-ranking", choices=RANKINGS, default="fused")
@@ -843,8 +843,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error("workers must be at least 1")
     if args.keep and args.reuse:
         parser.error("pass --keep or --reuse, not both")
-    if args.smoke and (args.keep or args.reuse or args.workers != 1 or args.sample != "a"):
-        parser.error("--smoke runs alone: no --keep, --reuse, --workers, or --sample")
+    if args.smoke and (args.keep or args.reuse or args.sample != "a"):
+        parser.error("--smoke runs alone: no --keep, --reuse, or --sample")
     if (args.keep or args.reuse) and arms != ("memory",):
         parser.error(f"--{'keep' if args.keep else 'reuse'} needs --arms memory")
     try:

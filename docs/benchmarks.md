@@ -455,8 +455,11 @@ lists of known facts than in the runs on the local engine. Observed on
 |---|---|---|---|---|---|
 | First, `--run` | 16 | 2,080.0 s | $1.07 | 842 | `e2e-smoke-p9-first.json` |
 | Again, `--replay` | 16 | 12.7 s | $0 | 0 | `e2e-smoke-p9-cached.json` |
+| Again, `--replay --workers 4` | 16 | 3.8 s | $0 | 0 | `e2e-smoke-p9-cached-w4.json` |
 
-The replay gave the same answer, verdict, and block SHA-256 for each of the 18 questions.
+Each replay gave the same answer, verdict, and block SHA-256 for each of the 18 questions.
+With 4 workers, each worker holds a `MemoryStore` of its own. A first run with 4 workers
+was not measured.
 The time in the table is `duration_s` of the result file. The whole command took 563
 seconds the first time, and 14.9 seconds on a later try. The cause of the first wait was
 not found.
