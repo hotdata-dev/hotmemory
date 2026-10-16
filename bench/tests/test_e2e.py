@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -10,16 +13,28 @@ from bench import prompts
 from bench.data import QUESTION_TYPES, Question, load
 from bench.e2e import (
     SAMPLES,
+    SMOKE,
     Config,
+    Job,
+    Shard,
+    append_row,
     capture_session,
     choose_sample,
     episode_key,
     estimate,
+    existing_databases,
     extractor,
     fact_source,
+    kept_name,
+    library_commit,
+    local_store,
+    main,
+    read_rows,
     run_question,
+    run_shard,
     sample_ids,
     shards_of,
+    smoke_ids,
     summarize,
 )
 from bench.models import EXTRACTOR, JUDGE, READER, CachedModels, Offline, Reply
@@ -102,6 +117,32 @@ def test_sample_b_leaves_out_sample_a(questions: dict[str, Question], tmp_path: 
     assert not set(a) & set(b)
     assert json.loads((tmp_path / SAMPLES["b"].file).read_text()) == b
     assert sample_ids("b", pool[:60], root=tmp_path) == b
+
+
+def test_smoke_ids_draw_three_of_each_type_from_sample_a(
+    questions: dict[str, Question], tmp_path: Path
+) -> None:
+    base = questions["q_one"]
+    pool = [
+        replace(base, id=f"{kind}-{n}", type=kind) for kind in QUESTION_TYPES for n in range(20)
+    ]
+    (tmp_path / "bench").mkdir()
+    a = sample_ids("a", pool, root=tmp_path)
+    smoke = smoke_ids(pool, root=tmp_path)
+    types = {question.id: question.type for question in pool}
+    assert len(smoke) == len(set(smoke)) == 18
+    assert set(smoke) <= set(a)
+    assert [types[i] for i in smoke] == [kind for kind in QUESTION_TYPES for _ in range(3)]
+    assert json.loads((tmp_path / SMOKE.file).read_text()) == smoke
+    assert smoke_ids(pool[:30], root=tmp_path) == smoke
+
+
+def test_committed_smoke_sample_is_in_sample_a() -> None:
+    root = Path(__file__).resolve().parents[2]
+    smoke = json.loads((root / SMOKE.file).read_text())
+    a = json.loads((root / SAMPLES["a"].file).read_text())
+    assert len(smoke) == len(set(smoke)) == 18
+    assert set(smoke) <= set(a)
 
 
 def test_run_question_on_every_arm(questions: dict[str, Question]) -> None:
@@ -350,3 +391,189 @@ def test_capture_session_replays_the_same_extractor_prompts(
             capture_session(memory, ("bench", run, question.id), session, models, config, [])
         seen.append([p for m, p in models.prompts if m == EXTRACTOR])
     assert seen[0] == seen[1]
+
+
+def test_kept_name_holds_what_decides_the_memory() -> None:
+    config = Config(extractor="detail", session_episodes=True, episodes="search", budget=64000)
+    name = kept_name("a", config, "b5443ac")
+    assert name.startswith("hotmemory-kept-a-detail")
+    assert name.endswith("-episodes-fused-b5443ac")
+    after_capture = replace(config, episodes="cited", budget=32000, k=10)
+    assert kept_name("a", after_capture, "b5443ac") == name
+    for other in (
+        kept_name("b", config, "b5443ac"),
+        kept_name("a", config, "1234567"),
+        kept_name("a", replace(config, extractor="baseline"), "b5443ac"),
+        kept_name("a", replace(config, memory_ranking="vector"), "b5443ac"),
+        kept_name("a", Config(extractor="detail"), "b5443ac"),
+        kept_name("a", Config(extractor="detail", fact_sources=False), "b5443ac"),
+    ):
+        assert other != name
+
+
+def test_kept_name_changes_with_the_extractor_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config(extractor="detail")
+    name = kept_name("a", config, "b5443ac")
+    variant = prompts.VARIANTS["detail"]
+    changed = prompts.Variant(variant.prompt + " ", variant.model)
+    monkeypatch.setitem(prompts.VARIANTS, "detail", changed)
+    assert kept_name("a", config, "b5443ac") != name
+
+
+def test_library_commit_refuses_a_change_that_is_not_committed(tmp_path: Path) -> None:
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return done.stdout.strip()
+
+    git("init", "-q")
+    code = tmp_path / "src" / "hotmemory" / "a.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("x = 1\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "code")
+    first = git("rev-parse", "--short", "HEAD")
+    (tmp_path / "other.txt").write_text("y\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "other")
+    assert library_commit(tmp_path) == first
+    code.write_text("x = 2\n")
+    with pytest.raises(RuntimeError, match="not committed"):
+        library_commit(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("argv", "error"),
+    [
+        (["--keep", "--arms", "retrieval,memory"], "--keep needs --arms memory"),
+        (["--reuse", "--arms", "full"], "--reuse needs --arms memory"),
+        (["--keep", "--reuse", "--arms", "memory"], "pass --keep or --reuse, not both"),
+        (["--smoke", "--keep"], "--smoke runs alone"),
+        (["--smoke", "--sample", "b"], "--smoke runs alone"),
+    ],
+)
+def test_keep_and_reuse_refuse_other_arms(
+    argv: list[str], error: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        main(argv)
+    assert error in capsys.readouterr().err
+
+
+def test_run_question_without_capture_recalls_the_kept_memory(
+    questions: dict[str, Question],
+) -> None:
+    question = questions["q_one"]
+    store = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    stores = {"fused": store, "vector": store}
+    config = Config(budget=100_000, session_episodes=True, episodes="search")
+    captured = FakeModels()
+    first = run_question(question, captured, stores, lambda _: None, "kept", ("memory",), config)[
+        "memory"
+    ]
+    reused = FakeModels()
+    second = run_question(
+        question, reused, stores, lambda _: None, "kept", ("memory",), config, capture=False
+    )["memory"]
+    assert [model for model, _ in reused.prompts] == [READER, JUDGE]
+    assert reused.prompts[0] == next(p for p in captured.prompts if p[0] == READER)
+    assert second.block_sha256 == first.block_sha256 is not None
+    assert (second.context_chars, second.episodes) == (first.context_chars, first.episodes)
+    assert first.extracted and first.at_limit == 0
+    assert second.extracted is None and second.at_limit is None
+
+
+def _embed(texts: Sequence[str]) -> list[list[float]]:
+    return [[1.0] + [0.0] * 1535 for _ in texts]
+
+
+@pytest.mark.hotdata
+def test_local_store_deletes_the_database_as_asked() -> None:
+    url = os.environ.get("HOTMEMORY_TEST_URL")
+    if not url:
+        pytest.skip("HOTMEMORY_TEST_URL is not set")
+    base = f"hotmemory-test-kept-{uuid.uuid4().hex[:8]}"
+    names = {case: f"{base}-{case}" for case in ("always", "error", "kept", "never")}
+    with local_store(url, names["always"], _embed):
+        pass
+    with pytest.raises(ValueError), local_store(url, names["error"], _embed, "on_error"):
+        raise ValueError("stop")
+    with local_store(url, names["kept"], _embed, "on_error"):
+        pass
+    with pytest.raises(ValueError), local_store(url, names["never"], _embed, "never"):
+        raise ValueError("stop")
+    try:
+        assert existing_databases(url, names.values()) == [names["kept"], names["never"]]
+    finally:
+        from hotdata_framework import HotdataClient
+
+        client = HotdataClient("local", "local", host=url)
+        for database in client.list_managed_databases():
+            if database.description in (names["kept"], names["never"]):
+                client.delete_managed_database(database)
+        client.close()
+
+
+def test_rows_file_keeps_the_rows_and_drops_a_cut_line(tmp_path: Path) -> None:
+    path = tmp_path / "run.rows.jsonl"
+    path.write_text(json.dumps({"header": {"arms": ["memory"]}}) + "\n")
+    append_row(path, {"id": "q1"})
+    append_row(path, {"id": "q2"})
+    with path.open("a") as file:
+        file.write('{"id": "q3", "ar')
+    assert read_rows(path) == ({"arms": ["memory"]}, [{"id": "q1"}, {"id": "q2"}])
+
+
+class FailingModels(FakeModels):
+    """FakeModels whose reader raises for one question, like a lost connection."""
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self.question = question
+        self.spent = 0.0
+        self.calls = 0
+
+    def __call__(
+        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None = None
+    ) -> Reply:
+        if model == READER and self.question in prompt:
+            raise ConnectionError("Connection error.")
+        return super().__call__(model, prompt, max_tokens, schema)
+
+    def close(self) -> None:
+        pass
+
+
+class ClosingEmbedder:
+    misses = 0
+
+    def __call__(self, texts: Sequence[str]) -> list[list[float]]:
+        return fake_embedder(texts)
+
+    def close(self) -> None:
+        pass
+
+
+def test_run_shard_fails_one_question_and_keeps_the_rest(
+    questions: dict[str, Question], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bench.e2e as e2e
+    from bench import embed
+
+    first, second = questions["q_one"], questions["q_three"]
+    models = FailingModels(first.question)
+    monkeypatch.setattr(e2e, "CachedModels", lambda backend, path: models)
+    monkeypatch.setattr(embed, "openai_embedder", ClosingEmbedder)
+    rows_file = tmp_path / "run.rows.jsonl"
+    rows_file.write_text(json.dumps({"header": {}}) + "\n")
+    config = Config(session_episodes=True, episodes="search")
+    job = Job("", ("memory",), config, True, 2, smoke=True, rows_file=rows_file)
+    done = run_shard(job, Shard([first, second], "r1"))
+    assert [row["id"] for row in done.rows] == [second.id]
+    assert done.failed == [f"{first.id}: ConnectionError: Connection error."]
+    assert read_rows(rows_file)[1] == done.rows

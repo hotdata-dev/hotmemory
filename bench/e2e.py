@@ -7,26 +7,33 @@ does not hold:
     uv run --group bench --env-file .env python -m bench.e2e
     uv run --group bench --env-file .env python -m bench.e2e --run
     uv run --group bench --env-file .env python -m bench.e2e --replay --arms memory
+    uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms memory
 
-It writes one JSON file into `bench/results/` with the configuration and the results.
+With `--smoke`, it runs the 18 questions of `bench/sample-smoke.json` on `MemoryStore`, one
+store in each worker. With `--keep`, it keeps the memory of each question, and `--reuse`
+recalls from it with no `capture`. It appends the row of each finished question to a rows
+file, and `--resume` skips those rows. At the end, it writes one JSON file into
+`bench/results/` with the configuration and the results.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import multiprocessing
 import random
+import subprocess
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from bench import embed, prompts
 from bench.data import (
@@ -49,10 +56,11 @@ from bench.models import (
     READER,
     READER_MAX_TOKENS,
     CachedModels,
+    CacheMiss,
     Reply,
 )
-from bench.retrieval import RANKINGS, RESULTS_DIR, _commit
-from hotmemory import Embedder, Fact, Filter, Memory, Record, Store
+from bench.retrieval import FIXED_TIME, RANKINGS, RESULTS_DIR, _commit
+from hotmemory import Embedder, Fact, Filter, Memory, MemoryStore, Record, Store
 from hotmemory.contract import Episodes
 
 HERE = Path(__file__).resolve().parent
@@ -62,6 +70,7 @@ RETRIEVED = 10
 RECALL_K = 30
 RECALL_BUDGET = 8000
 EPISODES = ("none", "cited", "search")
+KEPT_RUN = "kept"
 COST_LIMIT = 50.0
 EXTRACT_OVERHEAD = 700
 ACTOR = "longmemeval-extractor"
@@ -126,6 +135,8 @@ SAMPLES = {
     "a": Sample("bench/sample.json", 20261010),
     "b": Sample("bench/sample-b.json", 20261013, excludes=("a",)),
 }
+SMOKE = Sample("bench/sample-smoke.json", 20261016)
+SMOKE_PER_TYPE = 3
 
 
 def choose_sample(
@@ -157,6 +168,26 @@ def sample_ids(name: str, questions: Sequence[Question], root: Path = HERE.paren
     if not path.exists():
         exclude = {i for other in sample.excludes for i in sample_ids(other, questions, root)}
         chosen = choose_sample(questions, seed=sample.seed, exclude=exclude)
+        path.write_text(json.dumps(chosen, indent=1) + "\n")
+    ids: list[str] = json.loads(path.read_text())
+    return ids
+
+
+def smoke_ids(questions: Sequence[Question], root: Path = HERE.parent) -> list[str]:
+    """Return the ids of the smoke sample, and write its file first if it does not exist.
+
+    The smoke sample draws SMOKE_PER_TYPE questions of each type from sample A with the
+    seed of SMOKE, sorted by type and id.
+    """
+    path = root / SMOKE.file
+    if not path.exists():
+        types = {question.id: question.type for question in questions}
+        sample = sample_ids("a", questions, root)
+        rng = random.Random(SMOKE.seed)
+        chosen = []
+        for kind in QUESTION_TYPES:
+            of_kind = sorted(i for i in sample if types[i] == kind)
+            chosen.extend(sorted(rng.sample(of_kind, SMOKE_PER_TYPE)))
         path.write_text(json.dumps(chosen, indent=1) + "\n")
     ids: list[str] = json.loads(path.read_text())
     return ids
@@ -225,9 +256,10 @@ class Arm:
     context_chars: int
     answer: Reply
     verdict: Reply
-    extracted: int = 0
-    at_limit: int = 0
+    extracted: int | None = 0
+    at_limit: int | None = 0
     episodes: tuple[str, ...] = ()
+    block_sha256: str | None = None
 
     @property
     def correct(self) -> bool:
@@ -239,14 +271,15 @@ def answer(
     question: Question,
     prompt: str,
     context_chars: int,
-    extracted: int = 0,
-    at_limit: int = 0,
+    extracted: int | None = 0,
+    at_limit: int | None = 0,
     episodes: tuple[str, ...] = (),
+    block_sha256: str | None = None,
 ) -> Arm:
     """Read `prompt` with READER, judge the answer with JUDGE, and return the arm."""
     reply = models(READER, prompt, READER_MAX_TOKENS)
     verdict = models(JUDGE, prompts.judge(question, reply.text), JUDGE_MAX_TOKENS)
-    return Arm(context_chars, reply, verdict, extracted, at_limit, episodes)
+    return Arm(context_chars, reply, verdict, extracted, at_limit, episodes, block_sha256)
 
 
 def run_question(
@@ -257,10 +290,13 @@ def run_question(
     run_id: str,
     arms: Sequence[str] = ARMS,
     config: Config = BASELINE,
+    capture: bool = True,
 ) -> dict[str, Arm]:
     """Run each arm on `question`, and empty its namespaces after.
 
-    `stores` maps each ranking to a store, and every store holds the same records.
+    `stores` maps each ranking to a store, and every store holds the same records. Without
+    `capture`, the memory arm recalls from the records that its namespace holds already,
+    and its count of facts written and of sessions at the limit is None.
     """
     result: dict[str, Arm] = {}
     if "full" in arms:
@@ -279,10 +315,14 @@ def run_question(
     if "memory" in arms:
         namespace = ("bench", "lme_s", run_id, "memory", question.id)
         memory = Memory(stores[config.memory_ranking])
-        written = 0
+        written: int | None = None
         at_limit: list[str] = []
-        for session in question.sessions:
-            written += len(capture_session(memory, namespace, session, models, config, at_limit))
+        if capture:
+            written = 0
+            for session in question.sessions:
+                written += len(
+                    capture_session(memory, namespace, session, models, config, at_limit)
+                )
         records, block = memory.recall(
             question.question,
             [namespace],
@@ -295,7 +335,14 @@ def run_question(
         shown = tuple(record.key for record in records if record.kind == "episode")
         prompt = prompts.read_facts(question, block)
         result["memory"] = answer(
-            models, question, prompt, len(block), written, len(at_limit), shown
+            models,
+            question,
+            prompt,
+            len(block),
+            written,
+            len(at_limit) if capture else None,
+            shown,
+            hashlib.sha256(block.encode()).hexdigest(),
         )
     return result
 
@@ -379,14 +426,19 @@ def summarize(rows: Sequence[dict[str, Any]], arm: str) -> dict[str, Any]:
     }
 
 
+Delete = Literal["always", "on_error", "never"]
+
+
 @contextmanager
 def local_store(
-    url: str, run_id: str, embedder: Embedder | None = None
+    url: str, name: str, embedder: Embedder | None = None, delete: Delete = "always"
 ) -> Iterator[tuple[dict[str, Store], Callable[[Sequence[str]], None]]]:
     """Yield a HotdataStore for each ranking, and a call that empties a namespace.
 
-    The stores share one new local database, and the database is deleted after. Without
-    `embedder`, the stores embed with `embed.openai_embedder()`.
+    The stores share the local database named `name`, which `provision` opens or creates.
+    `delete` says when the database is deleted after the block: `always`, `on_error` when
+    the block raises, or `never`. Without `embedder`, the stores embed with
+    `embed.openai_embedder()`.
     """
     import pyarrow as pa
     from hotdata_framework import HotdataClient
@@ -396,7 +448,7 @@ def local_store(
     client = HotdataClient("local", "local", host=url)
     embedder = embedder or embed.openai_embedder()
     store = HotdataStore.provision(
-        f"hotmemory-bench-{run_id}",
+        name,
         embedder=embedder,
         model=embed.MODEL,
         dimensions=embed.DIMENSIONS,
@@ -413,21 +465,83 @@ def local_store(
                 store._load_all([(table, rows, "delete"), (CUE_TABLE, rows, "delete")])
 
     stores: dict[str, Store] = {
-        name: HotdataStore(
+        ranking: HotdataStore(
             client,
             store.database,
             embedder=embedder,
             model=embed.MODEL,
             dimensions=embed.DIMENSIONS,
-            ranking=name,  # type: ignore[arg-type]
+            ranking=ranking,  # type: ignore[arg-type]
         )
-        for name in RANKINGS
+        for ranking in RANKINGS
     }
+    failed = True
     try:
         yield stores, empty
+        failed = False
     finally:
-        client.delete_managed_database(store.database)
+        if delete == "always" or (delete == "on_error" and failed):
+            client.delete_managed_database(store.database)
         client.close()
+
+
+def existing_databases(url: str, names: Collection[str]) -> list[str]:
+    """Return the names in `names` that a local database has, sorted."""
+    from hotdata_framework import HotdataClient
+
+    client = HotdataClient("local", "local", host=url)
+    try:
+        found = {database.description for database in client.list_managed_databases()}
+    finally:
+        client.close()
+    return sorted(name for name in found & set(names) if name is not None)
+
+
+def library_commit(root: Path = HERE.parent) -> str:
+    """Return the last commit that changed `src/hotmemory`.
+
+    Raises RuntimeError if `src/hotmemory` holds a change that is not committed, because
+    then no commit names the code that wrote the memory.
+    """
+    changed = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src/hotmemory"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=True,
+    )
+    if changed.stdout.strip():
+        raise RuntimeError("src/hotmemory has changes that are not committed")
+    last = subprocess.run(
+        ["git", "log", "-1", "--format=%h", "--", "src/hotmemory"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=True,
+    )
+    return last.stdout.strip()
+
+
+def kept_name(sample: str, config: Config, commit: str) -> str:
+    """Return the name of the kept memory of `sample` under `config` and the library `commit`.
+
+    The name holds what decides the memory that `capture` writes: the sample, the extractor
+    variant with 6 hex digits of the SHA-256 of its model and prompt, how the facts cite
+    their session (`episodes`, `sources`, or `plain`), the memory ranking, and the commit.
+    The database of one question appends `-<question id>`.
+    """
+    variant = config.variant
+    digest = hashlib.sha256(f"{variant.model}\n{variant.prompt}".encode()).hexdigest()[:6]
+    if config.session_episodes:
+        cites = "episodes"
+    elif config.fact_sources:
+        cites = "sources"
+    else:
+        cites = "plain"
+    return (
+        f"hotmemory-kept-{sample}-{config.extractor}{digest}-{cites}-"
+        f"{config.memory_ranking}-{commit}"
+    )
 
 
 @dataclass(frozen=True)
@@ -439,6 +553,10 @@ class Job:
     config: Config
     replay: bool
     total: int
+    kept: str | None = None
+    reuse: bool = False
+    smoke: bool = False
+    rows_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -451,12 +569,41 @@ class Shard:
 
 @dataclass(frozen=True)
 class Done:
-    """The rows of one shard, and what its model calls cost."""
+    """The rows of one shard, the questions that failed, and what its model calls cost."""
 
     rows: list[dict[str, Any]]
     spent: float
     calls: int
     embedder_misses: int
+    failed: list[str]
+
+
+def append_row(path: Path, row: dict[str, Any]) -> None:
+    """Append `row` to the file at `path` as one JSON line, under a lock on the file."""
+    with path.open("a") as file:
+        fcntl.flock(file, fcntl.LOCK_EX)
+        try:
+            file.write(json.dumps(row) + "\n")
+            file.flush()
+        finally:
+            fcntl.flock(file, fcntl.LOCK_UN)
+
+
+def read_rows(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Return the header and the rows of a rows file that `main` wrote.
+
+    The first line is the header, and each later line is the row of one finished question.
+    A last line that is not complete JSON is left out.
+    """
+    lines = path.read_text().splitlines()
+    header: dict[str, Any] = json.loads(lines[0])["header"]
+    rows = []
+    for line in lines[1:]:
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return header, rows
 
 
 def shards_of(questions: Sequence[Question], workers: int, run_id: str) -> list[Shard]:
@@ -484,6 +631,7 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
                 "facts_written": found.extracted,
                 "sessions_at_limit": found.at_limit,
                 "episodes_in_block": list(found.episodes),
+                "block_sha256": found.block_sha256,
                 "reader_input_tokens": found.answer.input_tokens,
                 "answer": found.answer.text,
                 "verdict": found.verdict.text,
@@ -496,33 +644,134 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
 def run_shard(job: Job, shard: Shard) -> Done:
     """Run the questions of `shard` in order, over a new local database of its own.
 
-    The worker opens its own model cache, embedder, and store, so it can run in its own
-    process. It prints one line for each question.
+    With `job.kept`, each question runs over a new database named `<job.kept>-<question
+    id>`, and the database keeps the memory of the question after the run. A question that
+    raises deletes its database. With `job.reuse` as well, each question opens its kept
+    database, skips `capture`, and never deletes the database. With `job.smoke`, the
+    questions run over one `MemoryStore` of the worker, with a fixed clock. The worker
+    opens its own model cache, embedder, and store, so it can run in its own process. It
+    prints one line for each question, and appends the row of each finished question to
+    `job.rows_file`. A question that raises is listed in `failed`, its namespaces are
+    emptied, and the next question runs. CacheMiss stops the shard.
     """
     from bench.models import Offline, Remote
 
     models = CachedModels(Offline() if job.replay else Remote(), CACHE_DIR / "replies.sqlite")
     embedder = embed.openai_embedder()
     rows: list[dict[str, Any]] = []
+    failed: list[str] = []
+
+    def finish(question: Question, result: dict[str, Arm]) -> None:
+        rows.append(row_of(question, result))
+        if job.rows_file is not None:
+            append_row(job.rows_file, rows[-1])
+        marks = " ".join(
+            f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
+        )
+        print(
+            f"{shard.run_id} {len(rows)}/{len(shard.questions)} of {job.total} "
+            f"{question.id} {marks} spent ${models.spent:.2f}",
+            flush=True,
+        )
+
+    def fail(question: Question, error: Exception) -> None:
+        failed.append(f"{question.id}: {type(error).__name__}: {error}")
+        print(f"{shard.run_id} {question.id} failed: {failed[-1]}", flush=True)
+
     try:
-        with local_store(job.url, shard.run_id, embedder) as (stores, empty):
+        if job.smoke:
+            store = MemoryStore(embedder=embedder, clock=lambda: FIXED_TIME)
+
+            def empty(namespace: Sequence[str]) -> None:
+                for record in store.list(namespace, limit=100_000):
+                    store.delete(record.namespace, record.key)
+
+            in_process: dict[str, Store] = dict.fromkeys(RANKINGS, store)
             for question in shard.questions:
-                result = run_question(
-                    question, models, stores, empty, shard.run_id, job.arms, job.config
-                )
-                rows.append(row_of(question, result))
-                marks = " ".join(
-                    f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
-                )
-                print(
-                    f"{shard.run_id} {len(rows)}/{len(shard.questions)} of {job.total} "
-                    f"{question.id} {marks} spent ${models.spent:.2f}",
-                    flush=True,
-                )
+                try:
+                    result = run_question(
+                        question, models, in_process, empty, shard.run_id, job.arms, job.config
+                    )
+                except CacheMiss:
+                    raise
+                except Exception as error:
+                    fail(question, error)
+                    clean(empty, shard.run_id, question)
+                    continue
+                finish(question, result)
+        elif job.kept is not None:
+            delete: Delete = "never" if job.reuse else "on_error"
+            for question in shard.questions:
+                name = f"{job.kept}-{question.id}"
+                try:
+                    with local_store(job.url, name, embedder, delete) as (stores, _):
+                        result = run_question(
+                            question,
+                            models,
+                            stores,
+                            _keep,
+                            KEPT_RUN,
+                            job.arms,
+                            job.config,
+                            capture=not job.reuse,
+                        )
+                except CacheMiss:
+                    raise
+                except Exception as error:
+                    fail(question, error)
+                    continue
+                finish(question, result)
+        else:
+            name = f"hotmemory-bench-{shard.run_id}"
+            with local_store(job.url, name, embedder) as (stores, emptied):
+                for question in shard.questions:
+                    try:
+                        result = run_question(
+                            question, models, stores, emptied, shard.run_id, job.arms, job.config
+                        )
+                    except CacheMiss:
+                        raise
+                    except Exception as error:
+                        fail(question, error)
+                        clean(emptied, shard.run_id, question)
+                        continue
+                    finish(question, result)
     finally:
         models.close()
         embedder.close()
-    return Done(rows, models.spent, models.calls, embedder.misses)
+    return Done(rows, models.spent, models.calls, embedder.misses, failed)
+
+
+def clean(empty: Callable[[Sequence[str]], None], run_id: str, question: Question) -> None:
+    """Empty the namespaces of the arms of `question` after it failed.
+
+    Raises RuntimeError with the text of the error if a call fails, so that the error
+    crosses a process pool.
+    """
+    try:
+        for arm in ("retrieval", "memory"):
+            empty(("bench", "lme_s", run_id, arm, question.id))
+    except Exception as error:
+        raise RuntimeError(
+            f"could not empty the namespaces of {question.id}: {type(error).__name__}: {error}"
+        ) from None
+
+
+def _delete_databases(url: str, names: Collection[str]) -> None:
+    """Delete each local database whose name is in `names`."""
+    from hotdata_framework import HotdataClient
+
+    client = HotdataClient("local", "local", host=url)
+    try:
+        for database in client.list_managed_databases():
+            if database.description in names:
+                client.delete_managed_database(database)
+    finally:
+        client.close()
+
+
+def _keep(namespace: Sequence[str]) -> None:
+    """Do nothing: a kept run leaves the namespace of each question in its database."""
 
 
 def main(argv: Sequence[str] | None = None) -> Path | None:
@@ -535,6 +784,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "--limit", type=int, default=None, help="the first N questions of the sample"
     )
     parser.add_argument("--sample", choices=tuple(SAMPLES), default="a", help="the sample to run")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="run the 18 questions of the smoke sample on MemoryStore, in each worker",
+    )
     parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="fused")
     parser.add_argument("--memory-ranking", choices=RANKINGS, default="fused")
     parser.add_argument("--recall-k", type=int, default=RECALL_K, help="k of the memory recall")
@@ -564,6 +818,21 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         default=1,
         help="processes that run the questions, each over a database of its own",
     )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="keep the memory of each question in a local database of its own",
+    )
+    parser.add_argument(
+        "--reuse",
+        action="store_true",
+        help="recall from the memory that a run with --keep kept, and skip capture",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip the questions that the rows file of an earlier run of this command holds",
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
@@ -572,6 +841,12 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error(f"arms must be among {', '.join(ARMS)}")
     if args.workers < 1:
         parser.error("workers must be at least 1")
+    if args.keep and args.reuse:
+        parser.error("pass --keep or --reuse, not both")
+    if args.smoke and (args.keep or args.reuse or args.sample != "a"):
+        parser.error("--smoke runs alone: no --keep, --reuse, or --sample")
+    if (args.keep or args.reuse) and arms != ("memory",):
+        parser.error(f"--{'keep' if args.keep else 'reuse'} needs --arms memory")
     try:
         config = Config(
             retrieval_ranking=args.retrieval_ranking,
@@ -585,9 +860,14 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         )
     except ValueError as error:
         parser.error(str(error))
+    if args.smoke:
+        config = replace(config, retrieval_ranking="vector", memory_ranking="vector")
 
     all_questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
-    sample = sample_ids(args.sample, list(all_questions.values()))
+    if args.smoke:
+        sample = smoke_ids(list(all_questions.values()))
+    else:
+        sample = sample_ids(args.sample, list(all_questions.values()))
     questions = [all_questions[question_id] for question_id in sample][: args.limit]
 
     tokens = embed.TiktokenTokens(encoding="o200k_base")
@@ -606,21 +886,95 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         print("no model was called; pass --run to run, or --replay to run from the cache")
         return None
 
+    kept = None
+    if args.keep or args.reuse:
+        try:
+            kept = kept_name(args.sample, config, library_commit())
+        except RuntimeError as error:
+            parser.error(str(error))
+
+    name = "e2e-smoke" if args.smoke else f"e2e-sample-{args.sample}"
+    name += f"-{args.tag}" if args.tag else ""
+    name += f"-first{args.limit}" if args.limit is not None else ""
+    path = RESULTS_DIR / f"{name}.json"
+    rows_file = RESULTS_DIR / f"{name}.rows.jsonl"
+    header = {
+        "arms": list(arms),
+        "config": asdict(config),
+        "sample": "smoke" if args.smoke else args.sample,
+        "limit": args.limit,
+        "kept": kept,
+        "reuse": args.reuse,
+    }
+    earlier: list[dict[str, Any]] = []
+    if args.resume:
+        if not rows_file.exists():
+            parser.error(f"--resume found no rows file {rows_file}")
+        found_header, earlier = read_rows(rows_file)
+        if found_header != header:
+            parser.error(f"the rows file {rows_file} is of another run: {found_header}")
+    elif rows_file.exists():
+        parser.error(f"the rows file {rows_file} exists: pass --resume, or delete it")
+    finished = {row["id"] for row in earlier}
+    left = [question for question in questions if question.id not in finished]
+    if args.resume:
+        print(f"resuming: {len(finished)} questions finished, {len(left)} left")
+
+    if kept is not None:
+        names = [f"{kept}-{question.id}" for question in questions]
+        found = existing_databases(args.url, names)
+        if args.reuse:
+            missing = sorted(set(names) - set(found))
+            if missing:
+                parser.error(
+                    f"{len(missing)} kept databases do not exist, for example {missing[0]}"
+                )
+        else:
+            done_names = {f"{kept}-{question_id}" for question_id in finished}
+            partial = [found_name for found_name in found if found_name not in done_names]
+            if partial and not args.resume:
+                parser.error(f"{len(found)} kept databases exist already, for example {found[0]}")
+            if partial:
+                _delete_databases(args.url, partial)
+                print(f"deleted {len(partial)} kept databases of questions that did not finish")
+        print(f"{'keeping' if args.keep else 'reusing'} the memory as {kept}-<question id>")
+
     commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     clock_start = time.perf_counter()
-    shards = shards_of(questions, args.workers, run_id)
-    job = Job(args.url, arms, config, args.replay, len(questions))
-    if len(shards) == 1:
-        done = [run_shard(job, shards[0])]
+    RESULTS_DIR.mkdir(exist_ok=True)
+    if not args.resume:
+        rows_file.write_text(json.dumps({"header": header}) + "\n")
+    shards = shards_of(left, args.workers, run_id) if left else []
+    job = Job(
+        args.url,
+        arms,
+        config,
+        args.replay,
+        len(left),
+        kept,
+        args.reuse,
+        args.smoke,
+        rows_file,
+    )
+    if len(shards) <= 1:
+        done = [run_shard(job, shard) for shard in shards]
     else:
         context = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(len(shards), mp_context=context) as pool:
             done = list(pool.map(run_shard, [job] * len(shards), shards))
-    by_id = {row["id"]: row for found in done for row in found.rows}
-    rows = [by_id[question.id] for question in questions]
     spent = sum(found.spent for found in done)
+    failed = [failure for found in done for failure in found.failed]
+    if failed:
+        print(f"{len(failed)} questions failed; spent ${spent:.2f}")
+        for failure in failed:
+            print(f"  {failure}")
+        print(f"the finished rows are in {rows_file}; run the command again with --resume")
+        return None
+    by_id = {row["id"]: row for row in earlier}
+    by_id |= {row["id"]: row for found in done for row in found.rows}
+    rows = [by_id[question.id] for question in questions]
     calls = sum(found.calls for found in done)
     misses = sum(found.embedder_misses for found in done)
 
@@ -631,13 +985,23 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "data_file": DATA_FILE,
             "data_revision": DATA_REVISION,
             "data_sha256": DATA_SHA256,
-            "sample": {
-                "name": args.sample,
-                "file": SAMPLES[args.sample].file,
-                "per_type": PER_TYPE,
-                "seed": SAMPLES[args.sample].seed,
-                "excludes": list(SAMPLES[args.sample].excludes),
-            },
+            "sample": (
+                {
+                    "name": "smoke",
+                    "file": SMOKE.file,
+                    "per_type": SMOKE_PER_TYPE,
+                    "seed": SMOKE.seed,
+                    "from": SAMPLES["a"].file,
+                }
+                if args.smoke
+                else {
+                    "name": args.sample,
+                    "file": SAMPLES[args.sample].file,
+                    "per_type": PER_TYPE,
+                    "seed": SAMPLES[args.sample].seed,
+                    "excludes": list(SAMPLES[args.sample].excludes),
+                }
+            ),
             "reader": {
                 "model": READER,
                 "temperature": 0,
@@ -656,8 +1020,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "max_tokens": EXTRACTOR_MAX_TOKENS,
             },
             "embedder": {"model": embed.MODEL, "dimensions": embed.DIMENSIONS},
-            "driver": "hotdata",
-            "location": "local",
+            "driver": "memory" if args.smoke else "hotdata",
+            "location": "in-process" if args.smoke else "local",
             "retrieval": {"ranking": config.retrieval_ranking, "sessions": RETRIEVED},
             "memory": {
                 "ranking": config.memory_ranking,
@@ -667,6 +1031,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "fact_sources": config.fact_sources,
                 "session_episodes": config.session_episodes,
                 "episodes": config.episodes,
+                "kept": kept,
+                "reused": args.reuse,
             },
             "arms": {
                 "full": "every session of the question",
@@ -686,8 +1052,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "replay": args.replay,
             "workers": len(shards),
             "spent_usd": round(spent, 2),
+            "resumed_questions": len(finished),
             "model_calls": calls,
-            "sessions_at_limit": sum(
+            "sessions_at_limit": None
+            if args.reuse
+            else sum(
                 row["arms"]["memory"]["sessions_at_limit"]
                 for row in rows
                 if "memory" in row["arms"]
@@ -701,11 +1070,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "summary": summaries,
         "questions": rows,
     }
-    RESULTS_DIR.mkdir(exist_ok=True)
-    name = f"e2e-sample-{args.sample}" + (f"-{args.tag}" if args.tag else "")
-    name += f"-first{args.limit}" if args.limit is not None else ""
-    path = RESULTS_DIR / f"{name}.json"
     path.write_text(json.dumps(result_file, indent=1) + "\n")
+    rows_file.unlink()
     for arm in arms:
         found = summaries[arm]["all"]
         print(f"{arm}: {found['correct']}/{found['questions']} = {found['accuracy']:.3f}")

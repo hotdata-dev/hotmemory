@@ -91,11 +91,16 @@ The options are these:
 | `--episodes` | `none`, `cited`, or `search`, the `episodes` of the memory recall; a value other than `none` needs `--session-episodes` | `none` |
 | `--replay` | call no model, and stop at the first reply that the cache does not hold | off |
 | `--workers` | the number of processes that run the questions | `1` |
+| `--keep` | keep the memory of each question in a local database of its own; needs `--arms memory` | off |
+| `--reuse` | recall from the kept memory, and skip `capture`; needs `--arms memory` | off |
+| `--smoke` | run the 18 questions of the smoke sample on `MemoryStore`, one store in each worker | off |
+| `--resume` | run only the questions that the rows file of an earlier run does not hold | off |
 | `--tag` | a suffix for the name of the result file | none |
 | `--limit` | the first N questions of the sample | every question |
 
-Each worker gets the questions in turn, and runs them over a new local database of its
-own. Each table then holds one question at a time, as in a run with one worker. BM25 ranks
+Each worker gets the questions in turn. Without `--keep` or `--reuse`, it runs them over a
+new local database of its own, and empties the namespaces of each question after it. Each
+table then holds one question at a time, as in a run with one worker. BM25 ranks
 over the whole table before the scope filter, so the rows of a second question in a table
 can change the ranking. An extractor variant names a prompt and a model. Each fact carries
 the source `session:<hash>`, where the hash is the first 12 hex digits of the SHA-256 of
@@ -110,8 +115,68 @@ With `--session-episodes`, `capture` stores each session as an episode under the
 `session:<hash>` source. The block shows the source as `session-<hash>@1`. The source
 holds no run id, so a second run with another `--episodes` or `--recall-budget` replays
 `capture` from the cache. The result file lists the episode keys of each block in
-`episodes_in_block`. The result file is `bench/results/e2e-sample-<a or b>[-<tag>].json`,
-and it records each option.
+`episodes_in_block`, and the SHA-256 of each block in `block_sha256`. The result file is
+`bench/results/e2e-sample-<a or b>[-<tag>].json`, or `bench/results/e2e-smoke[-<tag>].json`
+for a smoke run, and it records each option.
+
+## Faster runs
+
+The episodes value, the budget, and `k` act in `recall`, after `capture`. So a run that
+changes only these values, or the reader, can use the memory of an earlier run. The
+memory arm captures the memory once with `--keep`, and a later run with `--reuse` skips
+`capture`:
+
+```sh
+uv run --group bench --env-file .env python -m bench.e2e --run --arms memory --extractor detail --session-episodes --episodes search --recall-budget 64000 --workers 4 --keep
+uv run --group bench --env-file .env python -m bench.e2e --run --arms memory --extractor detail --session-episodes --episodes cited --recall-budget 32000 --workers 4 --reuse
+```
+
+With `--keep`, each question runs over a new local database of its own, and the database
+stays after the run. One database holds one question, because BM25 ranks the whole table
+before the namespace filter, and the memory of a second question changes the block. The
+name of the database is `hotmemory-kept-<sample>-<extractor><digest>-<cites>-<ranking>-<commit>-<question id>`:
+
+| Part | What it holds |
+|---|---|
+| `<extractor><digest>` | The variant name, and 6 hex digits of the SHA-256 of its model and prompt. |
+| `<cites>` | `episodes` with `--session-episodes`, `sources` with fact sources, or `plain`. |
+| `<ranking>` | The `--memory-ranking`. |
+| `<commit>` | The last commit that changed `src/hotmemory`. |
+
+The runner refuses `--keep` if `src/hotmemory` holds a change that is not committed, or if
+a kept database of the run exists. If a question fails, its database is deleted. With
+`--reuse`, the runner computes the same names, and refuses to run if a database does not
+exist. It never deletes a kept database. A reused row has `null` for `facts_written` and
+`sessions_at_limit`, because `capture` did not run. The result file records the name in
+`memory.kept`. The cost estimate of a run with `--reuse` still counts the extraction, so it
+is too high. If a commit changes `src/hotmemory`, no later run can use the kept databases.
+Delete them by hand.
+
+A smoke run checks that a change runs and that the block looks right:
+
+```sh
+uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms memory --extractor detail --session-episodes --episodes search --recall-budget 64000
+```
+
+It runs the 18 questions of `bench/sample-smoke.json`, 3 of each type drawn from sample A
+with the seed `20261016`. Each worker runs its questions over a `MemoryStore` of its own,
+in its own process, and empties the memory of each question after it. It decides no gain: 18
+questions can be off by about 23 points, and `MemoryStore` ranks by vector only. Because
+the ranking differs, `capture` shows the extractor another list of known facts than a run
+on the local engine. So the first smoke run of a configuration pays for its extraction,
+and a later one replays it from the cache. Pass `--workers 4` to make the first run
+faster. `--smoke` refuses `--keep`, `--reuse`, and `--sample`.
+
+Each run writes the file `bench/results/<name>.rows.jsonl` as it goes, where `<name>` is
+the name of its result file. The first line holds the arms, the configuration, the sample,
+the limit, and the kept name. Each later line holds the row of one finished question. If a
+call to a model or to the engine fails, the question fails, and the next question runs. If
+the runner then cannot empty the namespaces of that question, the worker stops. A
+`CacheMiss` of `--replay` still stops the run. If a question failed, or the run stopped,
+the runner writes no result file. Run the same command again with `--resume`: it skips the
+questions that the rows file holds. It refuses a rows file of another configuration, and a
+run without `--resume` refuses to start over a rows file. When every question has
+finished, the runner writes the result file and deletes the rows file.
 
 ## The checks of the results
 
@@ -131,7 +196,9 @@ uv run --group bench --env-file .env python -m bench.diagnose --result bench/res
 
 The command runs `capture` again with the ranking, the `k`, the `budget`, and the extractor
 variant that the result file records. The replay calls no model, and it stops at the first
-reply that the cache does not hold. GPT-4o marks the stored facts that hold each answer.
+reply that the cache does not hold. If the result file names kept databases, from a run
+with `--keep` or `--reuse`, the command reads the memory of each question from its kept
+database and does not run `capture`. GPT-4o marks the stored facts that hold each answer.
 Each miss then gets one of four causes:
 
 | Cause | Meaning |

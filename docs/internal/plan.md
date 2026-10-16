@@ -131,10 +131,13 @@ lost every finished question, because a run writes its result file only at the e
 Tasks:
 
 1. Keep the memory of a run. With `--keep`, the runner does not empty the namespaces, and
-   it keeps the database of each worker. The name of the database states what decides
+   it keeps one database for each question. The name of the database states what decides
    the memory: the sample, the extractor variant, the episode setting, the fact sources,
-   the ranking, the worker count, and the last commit that changed `src/hotmemory`. The
-   runner records the name in the result file.
+   the ranking, the last commit that changed `src/hotmemory`, and the question id. The
+   runner records the name in the result file. One database holds one question, because
+   BM25 ranks the whole table before the namespace filter applies. In a shared table, the
+   memory of other questions changes the block and the known facts of `capture`. The
+   owner agreed to this layout on 2026-10-16.
 2. Reuse the memory. With `--reuse`, the runner opens the kept databases, skips
    `capture`, and runs `recall`, the reader, and the judge. It refuses to run if a
    database with the expected name does not exist.

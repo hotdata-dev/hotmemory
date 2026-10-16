@@ -9,6 +9,9 @@ a second model call tells whether the block holds every needed fact ("all presen
 some of them ("some present"). If the run recalled episodes, each miss also records whether
 the block held an evidence session as an episode, from the episode keys of the result file.
 
+If the result file names kept databases (a run with `--keep` or `--reuse`), this reads the
+memory of each question from its kept database and does not run `capture`.
+
     uv run --group bench --env-file .env python -m bench.diagnose --result <file>
 """
 
@@ -26,11 +29,13 @@ from typing import Any
 from bench.data import DATA_DIR, DATA_FILE, QUESTION_TYPES, Question, load
 from bench.e2e import (
     BASELINE,
+    KEPT_RUN,
     RECALL_BUDGET,
     RECALL_K,
     Config,
     capture_session,
     episode_key,
+    existing_databases,
     fact_source,
     local_store,
 )
@@ -187,53 +192,37 @@ def main(argv: Sequence[str] | None = None) -> Path:
     questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
     replay = CachedModels(Offline(), CACHE_DIR / "replies.sqlite")
     marker = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
+    kept: str | None = result["config"].get("memory", {}).get("kept")
     rows: list[dict[str, Any]] = []
-    run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
-    with local_store(args.url, run_id) as (stores, empty):
-        memory = Memory(stores[config.memory_ranking])
-        for count, question_id in enumerate(missed, start=1):
-            question = questions[question_id]
-            namespace = ("bench", "lme_s", run_id, question.id)
-            sessions = {fact_source(session.id): session.id for session in question.sessions}
-            sessions |= {episode_key(session.id): session.id for session in question.sessions}
-            for session in question.sessions:
-                capture_session(memory, namespace, session, replay, config, [])
-            store = stores[config.memory_ranking]
-            facts = store.list(namespace, Filter(kind=RECALLED_KINDS), limit=10_000)
-            marked = _mark(marker, question.question, question.answer, facts)
-            holding = {facts[n - 1].id for n in marked}
-            ranks: dict[str, int | None] = {}
-            for name in RANKINGS:
-                ranked = _search(stores[name], question.question, namespace, len(facts))
-                found = [n for n, r in enumerate(ranked, start=1) if r.id in holding]
-                ranks[name] = found[0] if found else None
-            top = _search(store, question.question, namespace, config.k)
-            block = block_ids(top, question.as_of, config.k, config.budget)
-            cause = verdict(holding, ranks[config.memory_ranking], block, config.k)
-            present = None
-            if cause == RECALLED:
-                shown = [fact.content for fact in facts if fact.id in holding & block]
-                whole = _complete(marker, question.question, question.answer, shown)
-                present = "all" if whole else "some"
-            rows.append(
-                {
-                    "id": question.id,
-                    "type": question.type,
-                    "facts": len(facts),
-                    "holding": [facts[n - 1].content for n in marked],
-                    "holding_sessions": [session_of_fact(facts[n - 1], sessions) for n in marked],
-                    "best_rank": ranks,
-                    "cause": cause,
-                    "present": present,
-                    "evidence_in_block": (
-                        None
-                        if config.episodes == "none"
-                        else evidence_in_block(question, in_block[question.id])
-                    ),
-                }
-            )
-            empty(namespace)
-            print(f"{count}/{len(missed)} {question.id} {group(rows[-1])} {ranks}", flush=True)
+
+    def diagnosed(question: Question, stores: dict[str, Store], namespace: tuple[str, ...]) -> None:
+        rows.append(diagnose(question, stores, namespace, config, marker, in_block[question.id]))
+        print(
+            f"{len(rows)}/{len(missed)} {question.id} {group(rows[-1])} {rows[-1]['best_rank']}",
+            flush=True,
+        )
+
+    if kept is not None:
+        names = [f"{kept}-{question_id}" for question_id in missed]
+        absent = sorted(set(names) - set(existing_databases(args.url, names)))
+        if absent:
+            parser.error(f"{len(absent)} kept databases do not exist, for example {absent[0]}")
+        for question_id in missed:
+            name = f"{kept}-{question_id}"
+            with local_store(args.url, name, delete="never") as (stores, _):
+                namespace: tuple[str, ...] = ("bench", "lme_s", KEPT_RUN, "memory", question_id)
+                diagnosed(questions[question_id], stores, namespace)
+    else:
+        run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
+        with local_store(args.url, f"hotmemory-bench-{run_id}") as (stores, empty):
+            memory = Memory(stores[config.memory_ranking])
+            for question_id in missed:
+                question = questions[question_id]
+                namespace = ("bench", "lme_s", run_id, question.id)
+                for session in question.sessions:
+                    capture_session(memory, namespace, session, replay, config, [])
+                diagnosed(question, stores, namespace)
+                empty(namespace)
     replay.close()
     marker.close()
     causes = Counter(row["cause"] for row in rows)
@@ -249,6 +238,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 "session_episodes": config.session_episodes,
                 "episodes": config.episodes,
             },
+            "kept": kept,
             "marker": JUDGE,
             "hotmemory_commit": commit,
             "spent_usd": round(marker.spent, 4),
@@ -263,6 +253,52 @@ def main(argv: Sequence[str] | None = None) -> Path:
     print(table(rows))
     print(f"spent ${marker.spent:.4f}; wrote {path}")
     return path
+
+
+def diagnose(
+    question: Question,
+    stores: dict[str, Store],
+    namespace: tuple[str, ...],
+    config: Config,
+    marker: CachedModels,
+    shown: Sequence[str],
+) -> dict[str, Any]:
+    """Return the diagnosis of one miss, from the memory that `namespace` holds.
+
+    `shown` holds the episode keys that the block of the run held.
+    """
+    sessions = {fact_source(session.id): session.id for session in question.sessions}
+    sessions |= {episode_key(session.id): session.id for session in question.sessions}
+    store = stores[config.memory_ranking]
+    facts = store.list(namespace, Filter(kind=RECALLED_KINDS), limit=10_000)
+    marked = _mark(marker, question.question, question.answer, facts)
+    holding = {facts[n - 1].id for n in marked}
+    ranks: dict[str, int | None] = {}
+    for name in RANKINGS:
+        ranked = _search(stores[name], question.question, namespace, len(facts))
+        found = [n for n, r in enumerate(ranked, start=1) if r.id in holding]
+        ranks[name] = found[0] if found else None
+    top = _search(store, question.question, namespace, config.k)
+    block = block_ids(top, question.as_of, config.k, config.budget)
+    cause = verdict(holding, ranks[config.memory_ranking], block, config.k)
+    present = None
+    if cause == RECALLED:
+        listed = [fact.content for fact in facts if fact.id in holding & block]
+        whole = _complete(marker, question.question, question.answer, listed)
+        present = "all" if whole else "some"
+    return {
+        "id": question.id,
+        "type": question.type,
+        "facts": len(facts),
+        "holding": [facts[n - 1].content for n in marked],
+        "holding_sessions": [session_of_fact(facts[n - 1], sessions) for n in marked],
+        "best_rank": ranks,
+        "cause": cause,
+        "present": present,
+        "evidence_in_block": (
+            None if config.episodes == "none" else evidence_in_block(question, shown)
+        ),
+    }
 
 
 def session_of_fact(fact: Record, sessions: dict[str, str]) -> str | None:
