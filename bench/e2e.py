@@ -16,6 +16,7 @@ the process. It writes one JSON file into `bench/results/` with the configuratio
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import multiprocessing
@@ -26,7 +27,7 @@ import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -52,6 +53,7 @@ from bench.models import (
     READER,
     READER_MAX_TOKENS,
     CachedModels,
+    CacheMiss,
     Reply,
 )
 from bench.retrieval import FIXED_TIME, RANKINGS, RESULTS_DIR, _commit
@@ -551,6 +553,7 @@ class Job:
     kept: str | None = None
     reuse: bool = False
     smoke: bool = False
+    rows_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -563,12 +566,41 @@ class Shard:
 
 @dataclass(frozen=True)
 class Done:
-    """The rows of one shard, and what its model calls cost."""
+    """The rows of one shard, the questions that failed, and what its model calls cost."""
 
     rows: list[dict[str, Any]]
     spent: float
     calls: int
     embedder_misses: int
+    failed: list[str]
+
+
+def append_row(path: Path, row: dict[str, Any]) -> None:
+    """Append `row` to the file at `path` as one JSON line, under a lock on the file."""
+    with path.open("a") as file:
+        fcntl.flock(file, fcntl.LOCK_EX)
+        try:
+            file.write(json.dumps(row) + "\n")
+            file.flush()
+        finally:
+            fcntl.flock(file, fcntl.LOCK_UN)
+
+
+def read_rows(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Return the header and the rows of a rows file that `main` wrote.
+
+    The first line is the header, and each later line is the row of one finished question.
+    A last line that is not complete JSON is left out.
+    """
+    lines = path.read_text().splitlines()
+    header: dict[str, Any] = json.loads(lines[0])["header"]
+    rows = []
+    for line in lines[1:]:
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return header, rows
 
 
 def shards_of(questions: Sequence[Question], workers: int, run_id: str) -> list[Shard]:
@@ -615,16 +647,21 @@ def run_shard(job: Job, shard: Shard) -> Done:
     database, skips `capture`, and never deletes the database. With `job.smoke`, the
     questions run over one `MemoryStore` with a fixed clock, in the process. The worker
     opens its own model cache, embedder, and store, so it can run in its own process. It
-    prints one line for each question.
+    prints one line for each question, and appends the row of each finished question to
+    `job.rows_file`. A question that raises is listed in `failed`, its namespaces are
+    emptied, and the next question runs. CacheMiss stops the shard.
     """
     from bench.models import Offline, Remote
 
     models = CachedModels(Offline() if job.replay else Remote(), CACHE_DIR / "replies.sqlite")
     embedder = embed.openai_embedder()
     rows: list[dict[str, Any]] = []
+    failed: list[str] = []
 
     def finish(question: Question, result: dict[str, Arm]) -> None:
         rows.append(row_of(question, result))
+        if job.rows_file is not None:
+            append_row(job.rows_file, rows[-1])
         marks = " ".join(
             f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
         )
@@ -634,6 +671,10 @@ def run_shard(job: Job, shard: Shard) -> Done:
             flush=True,
         )
 
+    def fail(question: Question, error: Exception) -> None:
+        failed.append(f"{question.id}: {type(error).__name__}: {error}")
+        print(f"{shard.run_id} {question.id} failed: {failed[-1]}", flush=True)
+
     try:
         if job.smoke:
             store = MemoryStore(embedder=embedder, clock=lambda: FIXED_TIME)
@@ -642,40 +683,88 @@ def run_shard(job: Job, shard: Shard) -> Done:
                 for record in store.list(namespace, limit=100_000):
                     store.delete(record.namespace, record.key)
 
+            in_process: dict[str, Store] = dict.fromkeys(RANKINGS, store)
             for question in shard.questions:
-                in_process: dict[str, Store] = dict.fromkeys(RANKINGS, store)
-                result = run_question(
-                    question, models, in_process, empty, shard.run_id, job.arms, job.config
-                )
+                try:
+                    result = run_question(
+                        question, models, in_process, empty, shard.run_id, job.arms, job.config
+                    )
+                except CacheMiss:
+                    raise
+                except Exception as error:
+                    fail(question, error)
+                    clean(empty, shard.run_id, question)
+                    continue
                 finish(question, result)
         elif job.kept is not None:
+            delete: Delete = "never" if job.reuse else "on_error"
             for question in shard.questions:
                 name = f"{job.kept}-{question.id}"
-                delete: Delete = "never" if job.reuse else "on_error"
-                with local_store(job.url, name, embedder, delete) as (stores, _):
-                    result = run_question(
-                        question,
-                        models,
-                        stores,
-                        _keep,
-                        KEPT_RUN,
-                        job.arms,
-                        job.config,
-                        capture=not job.reuse,
-                    )
+                try:
+                    with local_store(job.url, name, embedder, delete) as (stores, _):
+                        result = run_question(
+                            question,
+                            models,
+                            stores,
+                            _keep,
+                            KEPT_RUN,
+                            job.arms,
+                            job.config,
+                            capture=not job.reuse,
+                        )
+                except CacheMiss:
+                    raise
+                except Exception as error:
+                    fail(question, error)
+                    continue
                 finish(question, result)
         else:
             name = f"hotmemory-bench-{shard.run_id}"
             with local_store(job.url, name, embedder) as (stores, emptied):
                 for question in shard.questions:
-                    result = run_question(
-                        question, models, stores, emptied, shard.run_id, job.arms, job.config
-                    )
+                    try:
+                        result = run_question(
+                            question, models, stores, emptied, shard.run_id, job.arms, job.config
+                        )
+                    except CacheMiss:
+                        raise
+                    except Exception as error:
+                        fail(question, error)
+                        clean(emptied, shard.run_id, question)
+                        continue
                     finish(question, result)
     finally:
         models.close()
         embedder.close()
-    return Done(rows, models.spent, models.calls, embedder.misses)
+    return Done(rows, models.spent, models.calls, embedder.misses, failed)
+
+
+def clean(empty: Callable[[Sequence[str]], None], run_id: str, question: Question) -> None:
+    """Empty the namespaces of the arms of `question` after it failed.
+
+    Raises RuntimeError with the text of the error if a call fails, so that the error
+    crosses a process pool.
+    """
+    try:
+        for arm in ("retrieval", "memory"):
+            empty(("bench", "lme_s", run_id, arm, question.id))
+    except Exception as error:
+        raise RuntimeError(
+            f"could not empty the namespaces of {question.id}: {type(error).__name__}: {error}"
+        ) from None
+
+
+def _delete_databases(url: str, names: Collection[str]) -> None:
+    """Delete each local database whose name is in `names`."""
+    from hotdata_framework import HotdataClient
+
+    client = HotdataClient("local", "local", host=url)
+    try:
+        for database in client.list_managed_databases():
+            if database.description in names:
+                client.delete_managed_database(database)
+    finally:
+        client.close()
 
 
 def _keep(namespace: Sequence[str]) -> None:
@@ -736,6 +825,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         action="store_true",
         help="recall from the memory that a run with --keep kept, and skip capture",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip the questions that the rows file of an earlier run of this command holds",
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
@@ -795,30 +889,89 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             kept = kept_name(args.sample, config, library_commit())
         except RuntimeError as error:
             parser.error(str(error))
+
+    name = "e2e-smoke" if args.smoke else f"e2e-sample-{args.sample}"
+    name += f"-{args.tag}" if args.tag else ""
+    name += f"-first{args.limit}" if args.limit is not None else ""
+    path = RESULTS_DIR / f"{name}.json"
+    rows_file = RESULTS_DIR / f"{name}.rows.jsonl"
+    header = {
+        "arms": list(arms),
+        "config": asdict(config),
+        "sample": "smoke" if args.smoke else args.sample,
+        "limit": args.limit,
+        "kept": kept,
+        "reuse": args.reuse,
+    }
+    earlier: list[dict[str, Any]] = []
+    if args.resume:
+        if not rows_file.exists():
+            parser.error(f"--resume found no rows file {rows_file}")
+        found_header, earlier = read_rows(rows_file)
+        if found_header != header:
+            parser.error(f"the rows file {rows_file} is of another run: {found_header}")
+    elif rows_file.exists():
+        parser.error(f"the rows file {rows_file} exists: pass --resume, or delete it")
+    finished = {row["id"] for row in earlier}
+    left = [question for question in questions if question.id not in finished]
+    if args.resume:
+        print(f"resuming: {len(finished)} questions finished, {len(left)} left")
+
+    if kept is not None:
         names = [f"{kept}-{question.id}" for question in questions]
         found = existing_databases(args.url, names)
-        if args.keep and found:
-            parser.error(f"{len(found)} kept databases exist already, for example {found[0]}")
-        missing = sorted(set(names) - set(found))
-        if args.reuse and missing:
-            parser.error(f"{len(missing)} kept databases do not exist, for example {missing[0]}")
+        if args.reuse:
+            missing = sorted(set(names) - set(found))
+            if missing:
+                parser.error(
+                    f"{len(missing)} kept databases do not exist, for example {missing[0]}"
+                )
+        else:
+            done_names = {f"{kept}-{question_id}" for question_id in finished}
+            partial = [found_name for found_name in found if found_name not in done_names]
+            if partial and not args.resume:
+                parser.error(f"{len(found)} kept databases exist already, for example {found[0]}")
+            if partial:
+                _delete_databases(args.url, partial)
+                print(f"deleted {len(partial)} kept databases of questions that did not finish")
         print(f"{'keeping' if args.keep else 'reusing'} the memory as {kept}-<question id>")
 
     commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     clock_start = time.perf_counter()
-    shards = shards_of(questions, args.workers, run_id)
-    job = Job(args.url, arms, config, args.replay, len(questions), kept, args.reuse, args.smoke)
-    if len(shards) == 1:
-        done = [run_shard(job, shards[0])]
+    RESULTS_DIR.mkdir(exist_ok=True)
+    if not args.resume:
+        rows_file.write_text(json.dumps({"header": header}) + "\n")
+    shards = shards_of(left, args.workers, run_id) if left else []
+    job = Job(
+        args.url,
+        arms,
+        config,
+        args.replay,
+        len(left),
+        kept,
+        args.reuse,
+        args.smoke,
+        rows_file,
+    )
+    if len(shards) <= 1:
+        done = [run_shard(job, shard) for shard in shards]
     else:
         context = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(len(shards), mp_context=context) as pool:
             done = list(pool.map(run_shard, [job] * len(shards), shards))
-    by_id = {row["id"]: row for found in done for row in found.rows}
-    rows = [by_id[question.id] for question in questions]
     spent = sum(found.spent for found in done)
+    failed = [failure for found in done for failure in found.failed]
+    if failed:
+        print(f"{len(failed)} questions failed; spent ${spent:.2f}")
+        for failure in failed:
+            print(f"  {failure}")
+        print(f"the finished rows are in {rows_file}; run the command again with --resume")
+        return None
+    by_id = {row["id"]: row for row in earlier}
+    by_id |= {row["id"]: row for found in done for row in found.rows}
+    rows = [by_id[question.id] for question in questions]
     calls = sum(found.calls for found in done)
     misses = sum(found.embedder_misses for found in done)
 
@@ -896,6 +1049,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "replay": args.replay,
             "workers": len(shards),
             "spent_usd": round(spent, 2),
+            "resumed_questions": len(finished),
             "model_calls": calls,
             "sessions_at_limit": None
             if args.reuse
@@ -913,12 +1067,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "summary": summaries,
         "questions": rows,
     }
-    RESULTS_DIR.mkdir(exist_ok=True)
-    name = "e2e-smoke" if args.smoke else f"e2e-sample-{args.sample}"
-    name += f"-{args.tag}" if args.tag else ""
-    name += f"-first{args.limit}" if args.limit is not None else ""
-    path = RESULTS_DIR / f"{name}.json"
     path.write_text(json.dumps(result_file, indent=1) + "\n")
+    rows_file.unlink()
     for arm in arms:
         found = summaries[arm]["all"]
         print(f"{arm}: {found['correct']}/{found['questions']} = {found['accuracy']:.3f}")

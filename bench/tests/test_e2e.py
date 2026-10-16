@@ -15,6 +15,9 @@ from bench.e2e import (
     SAMPLES,
     SMOKE,
     Config,
+    Job,
+    Shard,
+    append_row,
     capture_session,
     choose_sample,
     episode_key,
@@ -26,7 +29,9 @@ from bench.e2e import (
     library_commit,
     local_store,
     main,
+    read_rows,
     run_question,
+    run_shard,
     sample_ids,
     shards_of,
     smoke_ids,
@@ -512,3 +517,63 @@ def test_local_store_deletes_the_database_as_asked() -> None:
             if database.description in (names["kept"], names["never"]):
                 client.delete_managed_database(database)
         client.close()
+
+
+def test_rows_file_keeps_the_rows_and_drops_a_cut_line(tmp_path: Path) -> None:
+    path = tmp_path / "run.rows.jsonl"
+    path.write_text(json.dumps({"header": {"arms": ["memory"]}}) + "\n")
+    append_row(path, {"id": "q1"})
+    append_row(path, {"id": "q2"})
+    with path.open("a") as file:
+        file.write('{"id": "q3", "ar')
+    assert read_rows(path) == ({"arms": ["memory"]}, [{"id": "q1"}, {"id": "q2"}])
+
+
+class FailingModels(FakeModels):
+    """FakeModels whose reader raises for one question, like a lost connection."""
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self.question = question
+        self.spent = 0.0
+        self.calls = 0
+
+    def __call__(
+        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None = None
+    ) -> Reply:
+        if model == READER and self.question in prompt:
+            raise ConnectionError("Connection error.")
+        return super().__call__(model, prompt, max_tokens, schema)
+
+    def close(self) -> None:
+        pass
+
+
+class ClosingEmbedder:
+    misses = 0
+
+    def __call__(self, texts: Sequence[str]) -> list[list[float]]:
+        return fake_embedder(texts)
+
+    def close(self) -> None:
+        pass
+
+
+def test_run_shard_fails_one_question_and_keeps_the_rest(
+    questions: dict[str, Question], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bench.e2e as e2e
+    from bench import embed
+
+    first, second = questions["q_one"], questions["q_three"]
+    models = FailingModels(first.question)
+    monkeypatch.setattr(e2e, "CachedModels", lambda backend, path: models)
+    monkeypatch.setattr(embed, "openai_embedder", ClosingEmbedder)
+    rows_file = tmp_path / "run.rows.jsonl"
+    rows_file.write_text(json.dumps({"header": {}}) + "\n")
+    config = Config(session_episodes=True, episodes="search")
+    job = Job("", ("memory",), config, True, 2, smoke=True, rows_file=rows_file)
+    done = run_shard(job, Shard([first, second], "r1"))
+    assert [row["id"] for row in done.rows] == [second.id]
+    assert done.failed == [f"{first.id}: ConnectionError: Connection error."]
+    assert read_rows(rows_file)[1] == done.rows
