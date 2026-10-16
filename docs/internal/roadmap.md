@@ -34,8 +34,8 @@ later phases moved to 12 to 15.
 | 6. The accuracy loop | A second sample of 54 questions, and the memory arm configured from the command line. The diagnosis split for each question type, and the baselines of both samples. | closed 2026-10-14, PR #18 |
 | 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | closed 2026-10-14, PR #21 |
 | 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | closed 2026-10-15, PR #24 |
-| 9. Faster evaluation | The runner keeps the memory of a run and reuses it for runs that change only `recall` or the reader. A smoke run of 18 questions on `MemoryStore`. A run keeps its finished questions when it stops. No library change. | open, issue #25 |
-| 10. The ranking, and episode chunks | An ablation of the fused ranking, and a default ranking chosen by the benchmark. `capture` stores a session as chunks, so the block holds the chunks that match and not whole sessions, for fewer reader tokens. | proposed, issue #26 |
+| 9. Faster evaluation | The runner keeps the memory of a run and reuses it for runs that change only `recall` or the reader. A smoke run of 18 questions on `MemoryStore`. A run keeps its finished questions when it stops. No library change. | closed 2026-10-16, PR #28 |
+| 10. The ranking, and episode chunks | An ablation of the fused ranking, and a default ranking chosen by the benchmark. `capture` stores a session as chunks, so the block holds the chunks that match and not whole sessions, for fewer reader tokens. | open, issue #26 |
 | 11. A large memory store | The time of a write and a search at 10,000, 100,000, and 1,000,000 memories, by scope size, locally and in the cloud. The vector rankings on the vector index once the engine fixes the filtered search, with tests that every record is found through both indexes. Retrieval on LongMemEval-M. Then a comparison with other memory layers in one harness. | proposed |
 | 12. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
 | 13. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
@@ -158,3 +158,16 @@ A closed phase keeps its row above with the date it closed and the pull request.
   again for about 20 minutes, which led to phase 9. Whole sessions cost the tokens, which
   led to the chunks of phase 10. An internet outage stopped four runs, and the local
   engine refused one search with a stale BM25 index, which a second try did not show.
+- Phase 9 closed on 2026-10-16 with PR #28, which closed issue #25. With `--keep`, the
+  runner keeps the memory of each question in a local database of its own, and a run with
+  `--reuse` recalls from it with no `capture`. On sample A, each reused run took 11 to 15
+  seconds and equaled its phase 8 run on all 54 rows. The phase 8 runs took 1,133 to
+  2,085 seconds. The smoke run of 18 questions on `MemoryStore` took 12.7 seconds from
+  the cache. Its first run cost $1.07 and took 2,080 seconds in one process, and it now
+  takes `--workers`. A run keeps its finished questions in a rows file, and `--resume`
+  completes it. It changed the plan for later phases in three ways. One database holds one
+  question, because BM25 ranks the whole table before the namespace filter. The same
+  order can cost a `recall` over a narrow scope in a shared table, so phase 11 measures
+  it. A commit that changes `src/hotmemory` makes the kept memory unusable, so a phase
+  that changes the library captures once again for each configuration. `MemoryStore`
+  ranks by vector only, so the first smoke run of a configuration pays for extraction.
