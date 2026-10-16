@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -15,8 +18,13 @@ from bench.e2e import (
     choose_sample,
     episode_key,
     estimate,
+    existing_databases,
     extractor,
     fact_source,
+    kept_name,
+    library_commit,
+    local_store,
+    main,
     run_question,
     sample_ids,
     shards_of,
@@ -350,3 +358,93 @@ def test_capture_session_replays_the_same_extractor_prompts(
             capture_session(memory, ("bench", run, question.id), session, models, config, [])
         seen.append([p for m, p in models.prompts if m == EXTRACTOR])
     assert seen[0] == seen[1]
+
+
+def test_kept_name_holds_what_decides_the_memory() -> None:
+    config = Config(extractor="detail", session_episodes=True, episodes="search", budget=64000)
+    name = kept_name("a", config, "b5443ac")
+    assert name.startswith("hotmemory-kept-a-detail")
+    assert name.endswith("-episodes-fused-b5443ac")
+    after_capture = replace(config, episodes="cited", budget=32000, k=10)
+    assert kept_name("a", after_capture, "b5443ac") == name
+    for other in (
+        kept_name("b", config, "b5443ac"),
+        kept_name("a", config, "1234567"),
+        kept_name("a", replace(config, extractor="baseline"), "b5443ac"),
+        kept_name("a", replace(config, memory_ranking="vector"), "b5443ac"),
+        kept_name("a", Config(extractor="detail"), "b5443ac"),
+        kept_name("a", Config(extractor="detail", fact_sources=False), "b5443ac"),
+    ):
+        assert other != name
+
+
+def test_kept_name_changes_with_the_extractor_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config(extractor="detail")
+    name = kept_name("a", config, "b5443ac")
+    variant = prompts.VARIANTS["detail"]
+    changed = prompts.Variant(variant.prompt + " ", variant.model)
+    monkeypatch.setitem(prompts.VARIANTS, "detail", changed)
+    assert kept_name("a", config, "b5443ac") != name
+
+
+def test_library_commit_refuses_a_change_that_is_not_committed(tmp_path: Path) -> None:
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return done.stdout.strip()
+
+    git("init", "-q")
+    code = tmp_path / "src" / "hotmemory" / "a.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("x = 1\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "code")
+    first = git("rev-parse", "--short", "HEAD")
+    (tmp_path / "other.txt").write_text("y\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "other")
+    assert library_commit(tmp_path) == first
+    code.write_text("x = 2\n")
+    with pytest.raises(RuntimeError, match="not committed"):
+        library_commit(tmp_path)
+
+
+def test_keep_needs_the_memory_arm_only(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--keep", "--arms", "retrieval,memory"])
+    assert "--keep needs --arms memory" in capsys.readouterr().err
+
+
+def _embed(texts: Sequence[str]) -> list[list[float]]:
+    return [[1.0] + [0.0] * 1535 for _ in texts]
+
+
+@pytest.mark.hotdata
+def test_local_store_keeps_the_database_only_on_success() -> None:
+    url = os.environ.get("HOTMEMORY_TEST_URL")
+    if not url:
+        pytest.skip("HOTMEMORY_TEST_URL is not set")
+    kept = f"hotmemory-test-kept-{uuid.uuid4().hex[:8]}"
+    failed = f"{kept}-failed"
+    temporary = f"{kept}-temporary"
+    with local_store(url, kept, _embed, keep=True):
+        pass
+    with pytest.raises(ValueError), local_store(url, failed, _embed, keep=True):
+        raise ValueError("stop")
+    with local_store(url, temporary, _embed):
+        pass
+    try:
+        assert existing_databases(url, [kept, failed, temporary]) == [kept]
+    finally:
+        from hotdata_framework import HotdataClient
+
+        client = HotdataClient("local", "local", host=url)
+        for database in client.list_managed_databases():
+            if database.description == kept:
+                client.delete_managed_database(database)
+        client.close()

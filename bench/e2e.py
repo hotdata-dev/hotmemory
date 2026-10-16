@@ -18,6 +18,7 @@ import hashlib
 import json
 import multiprocessing
 import random
+import subprocess
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
@@ -62,6 +63,7 @@ RETRIEVED = 10
 RECALL_K = 30
 RECALL_BUDGET = 8000
 EPISODES = ("none", "cited", "search")
+KEPT_RUN = "kept"
 COST_LIMIT = 50.0
 EXTRACT_OVERHEAD = 700
 ACTOR = "longmemeval-extractor"
@@ -381,12 +383,13 @@ def summarize(rows: Sequence[dict[str, Any]], arm: str) -> dict[str, Any]:
 
 @contextmanager
 def local_store(
-    url: str, run_id: str, embedder: Embedder | None = None
+    url: str, name: str, embedder: Embedder | None = None, keep: bool = False
 ) -> Iterator[tuple[dict[str, Store], Callable[[Sequence[str]], None]]]:
     """Yield a HotdataStore for each ranking, and a call that empties a namespace.
 
-    The stores share one new local database, and the database is deleted after. Without
-    `embedder`, the stores embed with `embed.openai_embedder()`.
+    The stores share the local database named `name`, which `provision` opens or creates.
+    The database is deleted after, unless `keep` is true and the block exits without an
+    error. Without `embedder`, the stores embed with `embed.openai_embedder()`.
     """
     import pyarrow as pa
     from hotdata_framework import HotdataClient
@@ -396,7 +399,7 @@ def local_store(
     client = HotdataClient("local", "local", host=url)
     embedder = embedder or embed.openai_embedder()
     store = HotdataStore.provision(
-        f"hotmemory-bench-{run_id}",
+        name,
         embedder=embedder,
         model=embed.MODEL,
         dimensions=embed.DIMENSIONS,
@@ -413,21 +416,83 @@ def local_store(
                 store._load_all([(table, rows, "delete"), (CUE_TABLE, rows, "delete")])
 
     stores: dict[str, Store] = {
-        name: HotdataStore(
+        ranking: HotdataStore(
             client,
             store.database,
             embedder=embedder,
             model=embed.MODEL,
             dimensions=embed.DIMENSIONS,
-            ranking=name,  # type: ignore[arg-type]
+            ranking=ranking,  # type: ignore[arg-type]
         )
-        for name in RANKINGS
+        for ranking in RANKINGS
     }
+    kept = False
     try:
         yield stores, empty
+        kept = keep
     finally:
-        client.delete_managed_database(store.database)
+        if not kept:
+            client.delete_managed_database(store.database)
         client.close()
+
+
+def existing_databases(url: str, names: Collection[str]) -> list[str]:
+    """Return the names in `names` that a local database has, sorted."""
+    from hotdata_framework import HotdataClient
+
+    client = HotdataClient("local", "local", host=url)
+    try:
+        found = {database.description for database in client.list_managed_databases()}
+    finally:
+        client.close()
+    return sorted(name for name in found & set(names) if name is not None)
+
+
+def library_commit(root: Path = HERE.parent) -> str:
+    """Return the last commit that changed `src/hotmemory`.
+
+    Raises RuntimeError if `src/hotmemory` holds a change that is not committed, because
+    then no commit names the code that wrote the memory.
+    """
+    changed = subprocess.run(
+        ["git", "status", "--porcelain", "--", "src/hotmemory"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=True,
+    )
+    if changed.stdout.strip():
+        raise RuntimeError("src/hotmemory has changes that are not committed")
+    last = subprocess.run(
+        ["git", "log", "-1", "--format=%h", "--", "src/hotmemory"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=True,
+    )
+    return last.stdout.strip()
+
+
+def kept_name(sample: str, config: Config, commit: str) -> str:
+    """Return the name of the kept memory of `sample` under `config` and the library `commit`.
+
+    The name holds what decides the memory that `capture` writes: the sample, the extractor
+    variant with 6 hex digits of the SHA-256 of its model and prompt, how the facts cite
+    their session (`episodes`, `sources`, or `plain`), the memory ranking, and the commit.
+    The database of one question appends `-<question id>`.
+    """
+    variant = config.variant
+    digest = hashlib.sha256(f"{variant.model}\n{variant.prompt}".encode()).hexdigest()[:6]
+    if config.session_episodes:
+        cites = "episodes"
+    elif config.fact_sources:
+        cites = "sources"
+    else:
+        cites = "plain"
+    return (
+        f"hotmemory-kept-{sample}-{config.extractor}{digest}-{cites}-"
+        f"{config.memory_ranking}-{commit}"
+    )
 
 
 @dataclass(frozen=True)
@@ -439,6 +504,7 @@ class Job:
     config: Config
     replay: bool
     total: int
+    kept: str | None = None
 
 
 @dataclass(frozen=True)
@@ -496,33 +562,53 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
 def run_shard(job: Job, shard: Shard) -> Done:
     """Run the questions of `shard` in order, over a new local database of its own.
 
-    The worker opens its own model cache, embedder, and store, so it can run in its own
-    process. It prints one line for each question.
+    With `job.kept`, each question runs over a new database named `<job.kept>-<question
+    id>`, and the database keeps the memory of the question after the run. A question that
+    raises deletes its database. The worker opens its own model cache, embedder, and
+    store, so it can run in its own process. It prints one line for each question.
     """
     from bench.models import Offline, Remote
 
     models = CachedModels(Offline() if job.replay else Remote(), CACHE_DIR / "replies.sqlite")
     embedder = embed.openai_embedder()
     rows: list[dict[str, Any]] = []
+
+    def finish(question: Question, result: dict[str, Arm]) -> None:
+        rows.append(row_of(question, result))
+        marks = " ".join(
+            f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
+        )
+        print(
+            f"{shard.run_id} {len(rows)}/{len(shard.questions)} of {job.total} "
+            f"{question.id} {marks} spent ${models.spent:.2f}",
+            flush=True,
+        )
+
     try:
-        with local_store(job.url, shard.run_id, embedder) as (stores, empty):
+        if job.kept is not None:
             for question in shard.questions:
-                result = run_question(
-                    question, models, stores, empty, shard.run_id, job.arms, job.config
-                )
-                rows.append(row_of(question, result))
-                marks = " ".join(
-                    f"{arm}={'yes' if found.correct else 'no'}" for arm, found in result.items()
-                )
-                print(
-                    f"{shard.run_id} {len(rows)}/{len(shard.questions)} of {job.total} "
-                    f"{question.id} {marks} spent ${models.spent:.2f}",
-                    flush=True,
-                )
+                name = f"{job.kept}-{question.id}"
+                with local_store(job.url, name, embedder, keep=True) as (stores, _):
+                    result = run_question(
+                        question, models, stores, _keep, KEPT_RUN, job.arms, job.config
+                    )
+                finish(question, result)
+        else:
+            name = f"hotmemory-bench-{shard.run_id}"
+            with local_store(job.url, name, embedder) as (stores, empty):
+                for question in shard.questions:
+                    result = run_question(
+                        question, models, stores, empty, shard.run_id, job.arms, job.config
+                    )
+                    finish(question, result)
     finally:
         models.close()
         embedder.close()
     return Done(rows, models.spent, models.calls, embedder.misses)
+
+
+def _keep(namespace: Sequence[str]) -> None:
+    """Do nothing: a kept run leaves the namespace of each question in its database."""
 
 
 def main(argv: Sequence[str] | None = None) -> Path | None:
@@ -564,6 +650,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         default=1,
         help="processes that run the questions, each over a database of its own",
     )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="keep the memory of each question in a local database of its own",
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
@@ -572,6 +663,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error(f"arms must be among {', '.join(ARMS)}")
     if args.workers < 1:
         parser.error("workers must be at least 1")
+    if args.keep and arms != ("memory",):
+        parser.error("--keep needs --arms memory")
     try:
         config = Config(
             retrieval_ranking=args.retrieval_ranking,
@@ -606,12 +699,23 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         print("no model was called; pass --run to run, or --replay to run from the cache")
         return None
 
+    kept = None
+    if args.keep:
+        try:
+            kept = kept_name(args.sample, config, library_commit())
+        except RuntimeError as error:
+            parser.error(str(error))
+        found = existing_databases(args.url, [f"{kept}-{question.id}" for question in questions])
+        if found:
+            parser.error(f"{len(found)} kept databases exist already, for example {found[0]}")
+        print(f"keeping the memory as {kept}-<question id>")
+
     commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
     clock_start = time.perf_counter()
     shards = shards_of(questions, args.workers, run_id)
-    job = Job(args.url, arms, config, args.replay, len(questions))
+    job = Job(args.url, arms, config, args.replay, len(questions), kept)
     if len(shards) == 1:
         done = [run_shard(job, shards[0])]
     else:
@@ -667,6 +771,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "fact_sources": config.fact_sources,
                 "session_episodes": config.session_episodes,
                 "episodes": config.episodes,
+                "kept": kept,
             },
             "arms": {
                 "full": "every session of the question",
