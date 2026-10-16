@@ -422,10 +422,10 @@ sample A and 4 on sample B.
 
 ### Faster evaluation
 
-Phase 9 kept the memory of a run and reused it for runs that change only `recall`.
-The section "Faster runs" of [bench/README.md](../bench/README.md) gives the options. Each run below is
-`--replay` on sample A, with `--extractor detail --session-episodes` and 4 workers, so no
-run called a model. Observed on 2026-10-16, at commit `630e3be`. The last commit that
+Phase 9 kept the memory of a run and reused it for runs that change only `recall`. The
+section "Faster runs" of [bench/README.md](../bench/README.md) gives the options. Each run
+below is `--replay` on sample A, with `--extractor detail --session-episodes` and 4
+workers, so no run called a model. Observed on 2026-10-16, at commit `630e3be`. The last commit that
 changed `src/hotmemory` is `b5443ac`, the same code as the phase 8 runs.
 
 | Run | Correct of 54 | Time | Rows equal to | File |
