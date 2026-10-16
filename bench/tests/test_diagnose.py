@@ -5,9 +5,11 @@ from typing import Any
 
 import pytest
 
-from bench.data import Question
+from bench.data import Question, load
 from bench.diagnose import (
+    RECALLED,
     block_ids,
+    diagnose,
     evidence_in_block,
     group,
     memory_config,
@@ -15,9 +17,11 @@ from bench.diagnose import (
     table,
     verdict,
 )
-from bench.e2e import BASELINE, episode_key, fact_source
-from bench.models import READER, CachedModels, CacheMiss, Offline, Reply
-from hotmemory import Record
+from bench.e2e import BASELINE, KEPT_RUN, Config, episode_key, fact_source, run_question
+from bench.models import JUDGE, READER, CachedModels, CacheMiss, Offline, Reply
+from bench.tests.test_e2e import FIXTURE, FakeModels
+from hotmemory import MemoryStore, Record
+from tests.conftest import FakeClock, fake_embedder
 
 AS_OF = datetime(2023, 5, 30, 23, 59, 59, tzinfo=UTC)
 
@@ -141,3 +145,40 @@ def test_offline_replays_the_cache_and_stops_at_a_miss(tmp_path: Path) -> None:
     with pytest.raises(CacheMiss):
         replay(READER, "q", 10)
     assert (replay.calls, replay.spent) == (0, 0.0)
+
+
+class FakeMarker:
+    """Marks the facts that hold `word`, and says that every needed value is present."""
+
+    def __init__(self, word: str) -> None:
+        self.word = word
+        self.calls = 0
+
+    def __call__(
+        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None = None
+    ) -> Reply:
+        assert model == JUDGE
+        self.calls += 1
+        if "Facts:\n1. " not in prompt:
+            return Reply('{"complete": true}', 10, 3)
+        lines = prompt.split("Facts:\n", 1)[1].splitlines()
+        marked = [n for n, line in enumerate(lines, 1) if self.word in line]
+        return Reply(f'{{"facts": {marked}}}', 10, 3)
+
+
+def test_diagnose_reads_the_memory_of_the_namespace() -> None:
+    question = next(q for q in load(FIXTURE, expected_sha256=None) if q.id == "q_one")
+    store = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    stores = {"fused": store, "vector": store}
+    config = Config(budget=100_000, session_episodes=True, episodes="search")
+    result = run_question(
+        question, FakeModels(), stores, lambda _: None, KEPT_RUN, ("memory",), config
+    )
+    namespace = ("bench", "lme_s", KEPT_RUN, "memory", question.id)
+    marker = FakeMarker("bike")
+    shown = result["memory"].episodes
+    row = diagnose(question, stores, namespace, config, marker, shown)  # type: ignore[arg-type]
+    assert len(row["holding"]) == 3 and row["facts"] > 3
+    assert set(row["holding_sessions"]) == {"answer_a_1", "answer_a_2", "answer_a_late"}
+    assert row["cause"] == RECALLED and row["present"] == "all"
+    assert row["evidence_in_block"] is True
