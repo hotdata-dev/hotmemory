@@ -423,8 +423,8 @@ Each ranking applies the same SQL condition, built from these parts:
 
 ### The fused ranking
 
-`ranking="vector"` is the default, and it ranks by the content vector alone. With
-`ranking="fused"`, the search runs three rankings and fuses them by reciprocal rank
+`ranking="fused"` is an option. The default, `ranking="vector"`, ranks by the content
+vector alone. With `ranking="fused"`, the search runs three rankings and fuses them by reciprocal rank
 fusion. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking that holds a row.
 Each ranking keeps its top rows to a depth of `max(100, 10 * k)`.
 

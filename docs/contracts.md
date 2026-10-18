@@ -255,7 +255,8 @@ If the engine refuses a load with `409 RESOURCE_LOCKED`, the driver tries it aga
 8 attempts in all. The wait starts at 0.25 seconds and doubles to at most 4 seconds. After
 the last attempt, the driver raises the error.
 
-A `search` with query text runs one SQL query over both record tables and `cue_v1`. If
+A `search` with query text runs one SQL query over both record tables, and over `cue_v1`
+with `ranking="fused"`. If
 the filter sets `kind`, the query reads only the record tables of the kinds that it names.
 A filter without `episode` reads only `memory_v1`.
 
@@ -420,8 +421,8 @@ session that is not Markdown. A blank line separates two turns of such a text.
 
 The extractor reads the whole text once, as it does without `chunk_chars`. The extractor
 does not say which chunk a fact came from. Thus each fact gets the id of every chunk added
-to its `sources`, in chunk order. The block shows those ids as one range, so a fact line
-stays short. The extractor also gets the records that `recall` returns for the text, and a
+to its `sources`, in chunk order. While the chunks share a revision, the block shows those
+ids as one range, so a fact line stays short. The extractor also gets the records that `recall` returns for the text, and a
 longer line leaves room for fewer of them. The facts
 are written first, and then one flush writes the chunks. If every chunk is current with
 the same content, `capture` calls no extractor, writes nothing, and returns no id. If a

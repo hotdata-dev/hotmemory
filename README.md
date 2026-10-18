@@ -22,7 +22,7 @@ The library has two layers:
   text is optional, and it takes an extractor callable that the caller supplies. `load`
   cuts a Markdown document into chunks, stores each chunk as an episode, and extracts
   facts that name their episode as a source. `capture` with an `episode` key stores its
-  text as an episode in the same way. `profile` returns facts, profiles, and procedures,
+  text as an episode in the same way, or as chunks with `chunk_chars`. `profile` returns facts, profiles, and procedures,
   never episodes. `recall` returns them too, and adds episodes after the facts only when
   the caller asks for them.
 

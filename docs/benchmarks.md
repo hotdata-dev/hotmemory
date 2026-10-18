@@ -189,7 +189,7 @@ sample.
 | Reader | `gpt-4o-2024-08-06`, temperature 0, up to 800 output tokens, the chain-of-thought prompt of the reference code |
 | Judge | `gpt-4o-2024-08-06`, temperature 0, the prompt of the reference code for each question type |
 | Extractor of the memory arm | `gpt-4o-mini-2024-07-18`, with the `baseline` prompt in `bench/prompts.py`, except in the section on extractor variants |
-| Driver | `HotdataStore` with the fused ranking, on the local stack |
+| Driver | `HotdataStore` on the local stack, with the fused ranking up to phase 9. Each phase 10 section names its ranking. |
 
 The arms:
 
@@ -519,7 +519,7 @@ cache miss after 3 questions, and a `--run --resume` ran the other 51.
 | Ranking | Correct of 54 | Reader tokens, median | Episodes in the block, mean | Facts written | Cost | File |
 |---|---|---|---|---|---|---|
 | `fused` | 45 | 12,849 | 4.06 | 13,666 | $0 | `e2e-sample-a-p10-reuse-fused-search-64k.json` |
-| `vector` | 46 | 13,406 | 4.48 | 14,322 | $2.17 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
+| `vector` | 46 | 13,405 | 4.48 | 14,322 | $2.17 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
 
 The reader tokens, episodes, and facts of the fused row are those of its `--keep` run,
 `e2e-sample-a-p9-keep-search-64k.json`. The two rankings differ on 3 questions. `vector`
@@ -536,28 +536,28 @@ with each chunk size at three budgets, on sample A, with the vector ranking,
 `--extractor detail`, and 4 workers. Each chunk size was one run with `--keep` at 8,000
 characters, and each larger budget was a run with `--reuse`. Observed on 2026-10-18,
 with `src/hotmemory` at `12339f8`. The reader tokens are the median over the 54
-questions, and the chunks are the mean count of chunks in the block.
+questions, rounded down, and the chunks are the mean count of chunks in the block.
 
 | Chunk size | Budget | Correct of 54 | Reader tokens | Chunks in the block | Cost | File |
 |---|---|---|---|---|---|---|
-| 1,000 | 8,000 | 41 | 2,471 | 3.1 | $0.55 | `e2e-sample-a-p10-keep-chunks1000-8k.json` |
+| 1,000 | 8,000 | 41 | 2,470 | 3.1 | $0.55 | `e2e-sample-a-p10-keep-chunks1000-8k.json` |
 | 1,000 | 16,000 | 48 | 4,336 | 12.4 | $0.81 | `e2e-sample-a-p10-reuse-chunks1000-16k.json` |
-| 1,000 | 32,000 | 49 | 7,832 | 29.9 | $1.27 | `e2e-sample-a-p10-reuse-chunks1000-32k.json` |
+| 1,000 | 32,000 | 49 | 7,831 | 29.9 | $1.27 | `e2e-sample-a-p10-reuse-chunks1000-32k.json` |
 | 2,000 | 8,000 | 36 | 2,327 | 1.4 | $0.56 | `e2e-sample-a-p10-keep-chunks2000-8k.json` |
 | 2,000 | 16,000 | 46 | 4,171 | 6.2 | $0.78 | `e2e-sample-a-p10-reuse-chunks2000-16k.json` |
-| 2,000 | 32,000 | 48 | 7,717 | 15.7 | $1.26 | `e2e-sample-a-p10-reuse-chunks2000-32k.json` |
+| 2,000 | 32,000 | 48 | 7,716 | 15.7 | $1.26 | `e2e-sample-a-p10-reuse-chunks2000-32k.json` |
 | 4,000 | 8,000 | 31 | 1,878 | 0.2 | $0.49 | `e2e-sample-a-p10-keep-chunks4000-8k.json` |
-| 4,000 | 16,000 | 44 | 3,780 | 2.6 | $0.73 | `e2e-sample-a-p10-reuse-chunks4000-16k.json` |
+| 4,000 | 16,000 | 44 | 3,779 | 2.6 | $0.73 | `e2e-sample-a-p10-reuse-chunks4000-16k.json` |
 | 4,000 | 32,000 | 46 | 7,509 | 7.4 | $1.21 | `e2e-sample-a-p10-reuse-chunks4000-32k.json` |
 
 The runs of phase 8 with whole sessions as episodes, for comparison:
 
 | Run | Correct of 54 | Reader tokens | File |
 |---|---|---|---|
-| `search`, 16,000 | 34 | 1,739 | `e2e-sample-a-p8-search-16k.json` |
-| `search`, 32,000 | 43 | 5,716 | `e2e-sample-a-p8-search-32k.json` |
+| `search`, 16,000 | 34 | 1,738 | `e2e-sample-a-p8-search-16k.json` |
+| `search`, 32,000 | 43 | 5,715 | `e2e-sample-a-p8-search-32k.json` |
 | `search`, 64,000 | 45 | 12,849 | `e2e-sample-a-p8-search-64k.json` |
-| `search`, 64,000, vector ranking, phase 10 | 46 | 13,406 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
+| `search`, 64,000, vector ranking, phase 10 | 46 | 13,405 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
 
 Chunks of 1,000 characters at 16,000 scored 48 with 4,336 reader tokens. The best whole-session
 run scored 45 with 12,849 tokens. At 8,000 characters, the facts take most of the budget,
@@ -566,8 +566,10 @@ block held 29.9 chunks on average, so `k`, 30, and not the budget, limited the e
 
 The block of `recall` shows a run of chunk sources as one range, as
 [docs/contracts.md](contracts.md) gives. A fact line is still a little longer than with one
-episode, so the list of known facts that the extractor reads can hold one fact less. Thus
-part of each keep run missed the cache of the earlier vector run and paid for extraction.
+episode, so the list of known facts that the extractor reads can hold one fact less. The
+keep runs of chunks of 1,000 and 4,000 made 108 model calls each, the 54 reader calls and
+the 54 judge calls, so every extractor reply came from the cache. The keep run of chunks of
+2,000 made 168 calls, so 60 extractor prompts missed the cache.
 The smoke run with chunks of 2,000 at 64,000 scored 16 of 18, as in phase 9, for $0.71,
 `e2e-smoke-p10-smoke-chunks2000.json`.
 
@@ -583,7 +585,7 @@ Observed on 2026-10-18, with `src/hotmemory` at `12339f8`.
 | A | chunks of 1,000, 16,000 | 48 | 4,336 | $0 | `e2e-sample-a-p10-keep-chunks1000-16k.json` |
 | A | phase 8, `search`, 64,000 | 45 | 12,849 | | `e2e-sample-a-p8-search-64k.json` |
 | B | chunks of 1,000, 16,000 | 46 | 4,360 | $2.05 | `e2e-sample-b-p10-keep-chunks1000-16k.json` |
-| B | phase 8, `search`, 64,000 | 45 | 12,677 | | `e2e-sample-b-p8-search-64k.json` |
+| B | phase 8, `search`, 64,000 | 45 | 12,676 | | `e2e-sample-b-p8-search-64k.json` |
 
 The diagnosis read the kept memory of each run. The phase 8 rows are those of the
 diagnoses of `search` at 64,000.

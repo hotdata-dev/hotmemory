@@ -102,9 +102,9 @@ The options are these:
 
 Each worker gets the questions in turn. Without `--keep` or `--reuse`, it runs them over a
 new local database of its own, and empties the namespaces of each question after it. Each
-table then holds one question at a time, as in a run with one worker. BM25 ranks
-over the whole table before the scope filter, so the rows of a second question in a table
-can change the ranking. An extractor variant names a prompt and a model. Each fact carries
+table then holds one question at a time, as in a run with one worker. With
+`--memory-ranking fused`, BM25 ranks over the whole table before the scope filter, so the
+rows of a second question in a table can change the ranking. An extractor variant names a prompt and a model. Each fact carries
 the source `session:<hash>`, where the hash is the first 12 hex digits of the SHA-256 of
 the session id. The block shows the sources to the reader, and the id of an evidence
 session holds `answer`, so the source does not show the id. If an extractor reply reaches
@@ -114,7 +114,9 @@ so a replay skips the same session. The result file counts these sessions in
 
 With `--session-episodes`, `capture` stores each session as an episode under the key
 `session-<hash>`, with the same hash. Each fact then cites that episode, and carries no
-`session:<hash>` source. The block shows the source as `session-<hash>@1`. The source
+`session:<hash>` source. The block shows the source as `session-<hash>@1`. With `--chunk-chars` as well, `capture`
+stores the session as chunks under `session-<hash>-<n>`, each fact cites every chunk, and
+the block shows the sources as one range, `session-<hash>-0001…<last>@1`. The source
 holds no run id, so a second run with another `--episodes` or `--recall-budget` replays
 `capture` from the cache. The result file lists the episode keys of each block in
 `episodes_in_block`, and the SHA-256 of each block in `block_sha256`. The result file is
@@ -134,14 +136,15 @@ uv run --group bench --env-file .env python -m bench.e2e --run --arms memory --e
 ```
 
 With `--keep`, each question runs over a new local database of its own, and the database
-stays after the run. One database holds one question, because BM25 ranks the whole table
-before the namespace filter, and the memory of a second question changes the block. The
+stays after the run. One database holds one question. With `--memory-ranking fused`, BM25
+ranks the whole table before the namespace filter, so the memory of a second question
+would change the block. The
 name of the database is `hotmemory-kept-<sample>-<extractor><digest>-<cites>-<ranking>-<commit>-<question id>`:
 
 | Part | What it holds |
 |---|---|
 | `<extractor><digest>` | The variant name, and 6 hex digits of the SHA-256 of its model and prompt. |
-| `<cites>` | `episodes` with `--session-episodes`, `sources` with fact sources, or `plain`. |
+| `<cites>` | `episodes` with `--session-episodes`, `chunks<size>` with `--chunk-chars` as well, `sources` with fact sources, or `plain`. |
 | `<ranking>` | The `--memory-ranking`. |
 | `<commit>` | The last commit that changed `src/hotmemory`. |
 
@@ -163,10 +166,11 @@ uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms me
 It runs the 18 questions of `bench/sample-smoke.json`, 3 of each type drawn from sample A
 with the seed `20261016`. Each worker runs its questions over a `MemoryStore` of its own,
 in its own process, and empties the memory of each question after it. It decides no gain: 18
-questions can be off by about 23 points, and `MemoryStore` ranks by vector only. Because
-the ranking differs, `capture` shows the extractor another list of known facts than a run
-on the local engine. So the first smoke run of a configuration pays for its extraction,
-and a later one replays it from the cache. Pass `--workers 4` to make the first run
+questions can be off by about 23 points. `MemoryStore` ranks by vector only, as
+`HotdataStore` does by default. With `--memory-ranking fused`, the ranking differs, so
+`capture` shows the extractor another list of known facts than a run on the local engine.
+The first smoke run of a configuration pays for the extraction that the cache does not
+hold, and a later one replays it from the cache. Pass `--workers 4` to make the first run
 faster. `--smoke` refuses `--keep`, `--reuse`, and `--sample`.
 
 Each run writes the file `bench/results/<name>.rows.jsonl` as it goes, where `<name>` is

@@ -53,7 +53,7 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   `tests/conftest.py`.
 - `tests/test_contract.py` runs `Memory` over every driver through the same `store`
   fixture. It pins the rendered blocks of `recall` and `profile` as exact strings.
-  `tests/test_chunks.py` tests the chunking of `load` without a driver.
+  `tests/test_chunks.py` tests the chunking of `load` and `capture` without a driver.
 - The in-memory driver is the reference for the Hotdata driver. `tests/test_oracle.py`
   builds the same records in both drivers and compares the results of `search`. The
   ranking by content vector alone must return the same records in the same order, with

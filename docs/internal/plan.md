@@ -148,9 +148,12 @@ Tasks:
    and stop for the owner's agreement. The ranking: the vector ranking, or a rebuilt
    fusion that ranks BM25 inside the scope or fuses two arms with no weights. The chunks,
    as a starting point: `capture` with `episode` takes `chunk_chars`, cuts the text at
-   blank lines as `load` does, and stores chunk n under `<episode>-<n>`. The extractor
-   still reads the whole text, so its prompt and its cache do not change. The proposal
-   names which chunks a fact cites, and how `"cited"` uses them.
+   blank lines outside fences, without the headings and prefixes of `load`, and stores
+   chunk n under `<episode>-<n>`. The extractor still reads the whole text once. Each fact
+   cites every chunk, and the block shows a run of chunk sources as one range. A fact line
+   is still a little longer, so the known facts that the extractor reads can change, and
+   part of the extraction can miss the cache. The proposal names which chunks a fact
+   cites, and how `"cited"` uses them.
 4. Build the agreed change for both drivers, with `CHANGELOG.md`, `docs/contracts.md`,
    `docs/guarantees.md`, and the skill commands. If the default ranking changes, the
    oracle test and the benchmark runner follow.
