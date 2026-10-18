@@ -33,6 +33,7 @@ from bench.e2e import (
     run_question,
     run_shard,
     sample_ids,
+    session_key,
     shards_of,
     smoke_ids,
     summarize,
@@ -393,9 +394,45 @@ def test_capture_session_replays_the_same_extractor_prompts(
     assert seen[0] == seen[1]
 
 
+def test_capture_session_with_chunks_stores_chunks_and_the_same_prompts(
+    questions: dict[str, Question],
+) -> None:
+    question = questions["q_one"]
+    seen: dict[int | None, list[str]] = {}
+    for chunk_chars in (None, 40):
+        models = FakeModels()
+        memory = Memory(MemoryStore(embedder=fake_embedder, clock=FakeClock()))
+        config = Config(session_episodes=True, chunk_chars=chunk_chars)
+        namespace = ("bench", "r", question.id)
+        for session in question.sessions:
+            capture_session(memory, namespace, session, models, config, [])
+        seen[chunk_chars] = [p for m, p in models.prompts if m == EXTRACTOR]
+        keys = {record.key for record in memory.store.list(namespace, limit=1000)}
+        first = episode_key(question.sessions[0].id)
+        assert (f"{first}-0001" in keys) == (chunk_chars is not None)
+        assert (first in keys) == (chunk_chars is None)
+    assert seen[40] == seen[None]
+
+
+def test_session_key_drops_a_chunk_suffix() -> None:
+    key = episode_key("answer_a_1")
+    assert session_key(f"{key}-0002") == key
+    assert session_key(key) == key
+    assert session_key("doc-0002") == "doc-0002"
+
+
+@pytest.mark.parametrize("chunk_chars", [0, 2000])
+def test_chunk_chars_needs_session_episodes(chunk_chars: int) -> None:
+    with pytest.raises(ValueError, match="chunk_chars"):
+        Config(chunk_chars=chunk_chars, session_episodes=chunk_chars == 0)
+
+
 def test_kept_name_holds_what_decides_the_memory() -> None:
     config = Config(extractor="detail", session_episodes=True, episodes="search", budget=64000)
     name = kept_name("a", config, "b5443ac")
+    assert kept_name("a", replace(config, chunk_chars=2000), "b5443ac").endswith(
+        "-chunks2000-vector-b5443ac"
+    )
     assert name.startswith("hotmemory-kept-a-detail")
     assert name.endswith("-episodes-vector-b5443ac")
     after_capture = replace(config, episodes="cited", budget=32000, k=10)
@@ -407,6 +444,7 @@ def test_kept_name_holds_what_decides_the_memory() -> None:
         kept_name("a", replace(config, memory_ranking="fused"), "b5443ac"),
         kept_name("a", Config(extractor="detail"), "b5443ac"),
         kept_name("a", Config(extractor="detail", fact_sources=False), "b5443ac"),
+        kept_name("a", replace(config, chunk_chars=2000), "b5443ac"),
     ):
         assert other != name
 

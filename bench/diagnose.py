@@ -38,6 +38,7 @@ from bench.e2e import (
     existing_databases,
     fact_source,
     local_store,
+    session_key,
 )
 from bench.embed import CACHE_DIR
 from bench.models import JUDGE, CachedModels, Offline, Remote
@@ -132,12 +133,17 @@ def memory_config(result: dict[str, Any]) -> Config:
         fact_sources=found.get("fact_sources", False),
         session_episodes=found.get("session_episodes", False),
         episodes=found.get("episodes", "none"),
+        chunk_chars=found.get("chunk_chars"),
     )
 
 
 def evidence_in_block(question: Question, shown: Sequence[str]) -> bool:
-    """Return True if an episode key in `shown` is that of an evidence session of `question`."""
-    return any(episode_key(session_id) in shown for session_id in question.answer_session_ids)
+    """Return True if an episode key in `shown` is that of an evidence session of `question`.
+
+    A chunk key counts as the key of its session.
+    """
+    keys = {session_key(key) for key in shown}
+    return any(episode_key(session_id) in keys for session_id in question.answer_session_ids)
 
 
 def table(rows: Sequence[dict[str, Any]]) -> str:
@@ -305,10 +311,10 @@ def session_of_fact(fact: Record, sessions: dict[str, str]) -> str | None:
     """Return the session id of `fact` from its sources, or None if no source names one.
 
     `sessions` maps the results of `fact_source` and of `episode_key` to the session id. A
-    source that is an episode id matches by its key.
+    source that is an episode id matches by its key, and a chunk by the key of its session.
     """
     for source in fact.sources:
-        key = source.rpartition("/")[2].rpartition("@")[0]
+        key = session_key(source.rpartition("/")[2].rpartition("@")[0])
         for name in (source, key):
             if name in sessions:
                 return sessions[name]

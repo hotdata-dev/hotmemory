@@ -89,6 +89,7 @@ The options are these:
 | `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py` | `baseline` |
 | `--no-fact-sources` | write the facts with no session source, as phases 5 and 6 did | off |
 | `--session-episodes` | capture each session as an episode, with the facts citing it | off |
+| `--chunk-chars` | store each session as chunks of at most this many characters, with each fact citing every chunk; needs `--session-episodes` | off |
 | `--episodes` | `none`, `cited`, or `search`, the `episodes` of the memory recall; a value other than `none` needs `--session-episodes` | `none` |
 | `--replay` | call no model, and stop at the first reply that the cache does not hold | off |
 | `--workers` | the number of processes that run the questions | `1` |

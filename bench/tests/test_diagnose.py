@@ -87,6 +87,8 @@ def test_session_of_fact_reads_the_source() -> None:
     keys = {episode_key("answer_a_1"): "answer_a_1"}
     cited = replace(fact("k"), sources=(f"bench/q/{episode_key('answer_a_1')}@1",))
     assert session_of_fact(cited, keys) == "answer_a_1"
+    chunk = replace(fact("k"), sources=(f"bench/q/{episode_key('answer_a_1')}-0002@1",))
+    assert session_of_fact(chunk, keys) == "answer_a_1"
 
 
 def test_evidence_in_block_matches_the_episode_keys() -> None:
@@ -101,6 +103,7 @@ def test_evidence_in_block_matches_the_episode_keys() -> None:
     )
     assert evidence_in_block(question, [episode_key("answer_a_1")])
     assert not evidence_in_block(question, [episode_key("other")])
+    assert evidence_in_block(question, [f"{episode_key('answer_a_1')}-0003"])
     assert not evidence_in_block(question, [])
 
 

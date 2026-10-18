@@ -24,6 +24,7 @@ import hashlib
 import json
 import multiprocessing
 import random
+import re
 import subprocess
 import time
 import uuid
@@ -86,8 +87,9 @@ class Config:
     `budget` characters, and extracts with the variant `extractor` of `prompts.VARIANTS`.
     With `fact_sources`, each fact carries the source of its session from `fact_source`.
     With `session_episodes`, `capture` stores each session as an episode under the key
-    from `episode_key`, and the facts carry no session source. `episodes` is the value of
-    `recall`, and needs `session_episodes` unless it is `none`.
+    from `episode_key`, and the facts carry no session source. With `chunk_chars` as well,
+    `capture` stores each session as chunks of at most that many characters. `episodes` is
+    the value of `recall`, and needs `session_episodes` unless it is `none`.
     """
 
     retrieval_ranking: str = "vector"
@@ -98,6 +100,7 @@ class Config:
     fact_sources: bool = True
     session_episodes: bool = False
     episodes: str = "none"
+    chunk_chars: int | None = None
 
     def __post_init__(self) -> None:
         for ranking in (self.retrieval_ranking, self.memory_ranking):
@@ -111,6 +114,8 @@ class Config:
             raise ValueError(f"episodes must be one of {', '.join(EPISODES)}")
         if self.episodes != "none" and not self.session_episodes:
             raise ValueError("episodes needs session_episodes")
+        if self.chunk_chars is not None and (self.chunk_chars < 1 or not self.session_episodes):
+            raise ValueError("chunk_chars must be at least 1, and needs session_episodes")
 
     @property
     def variant(self) -> prompts.Variant:
@@ -202,9 +207,17 @@ def fact_source(session_id: str) -> str:
     return "session:" + _session_hash(session_id)
 
 
+CHUNK_SUFFIX = re.compile(r"(?<=^session-[0-9a-f]{12})-[0-9]{4}$")
+
+
 def episode_key(session_id: str) -> str:
     """Return the key of the episode of a session: `session-` and the hash of `fact_source`."""
     return "session-" + _session_hash(session_id)
+
+
+def session_key(key: str) -> str:
+    """Return the episode key of the session of `key`: `key` without a chunk suffix `-<n>`."""
+    return CHUNK_SUFFIX.sub("", key)
 
 
 def _session_hash(session_id: str) -> str:
@@ -358,7 +371,8 @@ def capture_session(
     """Run `capture` on one session as the memory arm does, and return the fact ids.
 
     With `config.session_episodes`, the session is stored as an episode under
-    `episode_key`. Else, with `config.fact_sources`, each fact carries `fact_source`.
+    `episode_key`, or as chunks of `config.chunk_chars` under keys that start with it.
+    Else, with `config.fact_sources`, each fact carries `fact_source`.
     """
     if config.session_episodes:
         source, episode = "", episode_key(session.id)
@@ -371,6 +385,7 @@ def capture_session(
         actor=ACTOR,
         observed_at=session.date,
         episode=episode,
+        chunk_chars=config.chunk_chars if episode is not None else None,
     )
 
 
@@ -527,13 +542,14 @@ def kept_name(sample: str, config: Config, commit: str) -> str:
 
     The name holds what decides the memory that `capture` writes: the sample, the extractor
     variant with 6 hex digits of the SHA-256 of its model and prompt, how the facts cite
-    their session (`episodes`, `sources`, or `plain`), the memory ranking, and the commit.
+    their session (`episodes`, `chunks<size>`, `sources`, or `plain`), the memory ranking,
+    and the commit.
     The database of one question appends `-<question id>`.
     """
     variant = config.variant
     digest = hashlib.sha256(f"{variant.model}\n{variant.prompt}".encode()).hexdigest()[:6]
     if config.session_episodes:
-        cites = "episodes"
+        cites = "episodes" if config.chunk_chars is None else f"chunks{config.chunk_chars}"
     elif config.fact_sources:
         cites = "sources"
     else:
@@ -807,6 +823,12 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         help="capture each session as an episode, and write the facts with no session source",
     )
     parser.add_argument(
+        "--chunk-chars",
+        type=int,
+        default=None,
+        help="with --session-episodes: store each session as chunks of this many characters",
+    )
+    parser.add_argument(
         "--episodes", choices=EPISODES, default="none", help="the episodes value of recall"
     )
     parser.add_argument(
@@ -857,6 +879,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             fact_sources=not args.no_fact_sources,
             session_episodes=args.session_episodes,
             episodes=args.episodes,
+            chunk_chars=args.chunk_chars,
         )
     except ValueError as error:
         parser.error(str(error))
@@ -1042,7 +1065,12 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 ),
                 "memory": (
                     f"capture on each session in date order with the {config.extractor} "
-                    f"extractor, then recall with the {config.memory_ranking} ranking, k "
+                    + (
+                        f"extractor, in chunks of {config.chunk_chars} characters, then recall"
+                        if config.chunk_chars is not None
+                        else "extractor, then recall"
+                    )
+                    + f" with the {config.memory_ranking} ranking, k "
                     f"{config.k}, budget {config.budget} characters, episodes "
                     f"{config.episodes}, as_of the end of the question day"
                 ),
