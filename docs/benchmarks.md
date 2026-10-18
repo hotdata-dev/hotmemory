@@ -529,6 +529,48 @@ extractor reads the facts that the search of the store returns. Thus the two run
 different facts. The vector run took 1,770.6 seconds and 1,722 model calls. In one session,
 the extractor reply reached the token limit, and that session gave no facts.
 
+### Episode chunks
+
+Phase 10 stored each session as chunks with `capture`, `chunk_chars`, and ran `search`
+with each chunk size at three budgets, on sample A, with the vector ranking,
+`--extractor detail`, and 4 workers. Each chunk size was one run with `--keep` at 8,000
+characters, and each larger budget was a run with `--reuse`. Observed on 2026-10-18,
+with `src/hotmemory` at `12339f8`. The reader tokens are the median over the 54
+questions, and the chunks are the mean count of chunks in the block.
+
+| Chunk size | Budget | Correct of 54 | Reader tokens | Chunks in the block | Cost | File |
+|---|---|---|---|---|---|---|
+| 1,000 | 8,000 | 41 | 2,471 | 3.1 | $0.55 | `e2e-sample-a-p10-keep-chunks1000-8k.json` |
+| 1,000 | 16,000 | 48 | 4,336 | 12.4 | $0.81 | `e2e-sample-a-p10-reuse-chunks1000-16k.json` |
+| 1,000 | 32,000 | 49 | 7,832 | 29.9 | $1.27 | `e2e-sample-a-p10-reuse-chunks1000-32k.json` |
+| 2,000 | 8,000 | 36 | 2,327 | 1.4 | $0.56 | `e2e-sample-a-p10-keep-chunks2000-8k.json` |
+| 2,000 | 16,000 | 46 | 4,171 | 6.2 | $0.78 | `e2e-sample-a-p10-reuse-chunks2000-16k.json` |
+| 2,000 | 32,000 | 48 | 7,717 | 15.7 | $1.26 | `e2e-sample-a-p10-reuse-chunks2000-32k.json` |
+| 4,000 | 8,000 | 31 | 1,878 | 0.2 | $0.49 | `e2e-sample-a-p10-keep-chunks4000-8k.json` |
+| 4,000 | 16,000 | 44 | 3,780 | 2.6 | $0.73 | `e2e-sample-a-p10-reuse-chunks4000-16k.json` |
+| 4,000 | 32,000 | 46 | 7,509 | 7.4 | $1.21 | `e2e-sample-a-p10-reuse-chunks4000-32k.json` |
+
+The runs of phase 8 with whole sessions as episodes, for comparison:
+
+| Run | Correct of 54 | Reader tokens | File |
+|---|---|---|---|
+| `search`, 16,000 | 34 | 1,739 | `e2e-sample-a-p8-search-16k.json` |
+| `search`, 32,000 | 43 | 5,716 | `e2e-sample-a-p8-search-32k.json` |
+| `search`, 64,000 | 45 | 12,849 | `e2e-sample-a-p8-search-64k.json` |
+| `search`, 64,000, vector ranking, phase 10 | 46 | 13,406 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
+
+Chunks of 1,000 characters at 16,000 scored 48 with 4,336 reader tokens. The best whole-session
+run scored 45 with 12,849 tokens. At 8,000 characters, the facts take most of the budget,
+because they fill it before the episodes. At 32,000 characters with chunks of 1,000, the
+block held 29.9 chunks on average, so `k`, 30, and not the budget, limited the episodes.
+
+The block of `recall` shows a run of chunk sources as one range, as
+[docs/contracts.md](contracts.md) gives. A fact line is still a little longer than with one
+episode, so the list of known facts that the extractor reads can hold one fact less. Thus
+part of each keep run missed the cache of the earlier vector run and paid for extraction.
+The smoke run with chunks of 2,000 at 64,000 scored 16 of 18, as in phase 9, for $0.71,
+`e2e-smoke-p10-smoke-chunks2000.json`.
+
 ## Known limits
 
 - The end-to-end numbers come from samples of 54 questions, so one question moves an arm
