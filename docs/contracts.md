@@ -327,7 +327,10 @@ Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unkno
 null `valid_until` as `now`, and a record with no sources as `none`. A source that is the
 id of a record in the same namespace shows as `<key>@<revision>`, without the namespace.
 For example, a fact under `team/alerts` with the source `team/alerts/notes-0001@1` shows
-`[sources: notes-0001@1]`. Any other source shows in full. The block holds whole
+`[sources: notes-0001@1]`. A run of such sources next to each other shows as one range
+if their keys are `<prefix>-<n>` with one prefix, n in four digits counts up by 1, and
+the revision is the same. For example, `notes-0001@1, notes-0002@1, notes-0003@1` shows as
+`notes-0001…0003@1`. Any other source shows in full. The block holds whole
 lines only, joined by newlines. It stops before the first line that does not fit
 in the budget. The list holds the records of the block. The budget counts the characters of
 the block in this line format, and its default is 2,000. A consumer that renders the
@@ -415,9 +418,11 @@ session that is not Markdown. A blank line separates two turns of such a text.
    from 1 in four digits. Thus a text that fits in one chunk is stored under
    `<episode>-0001`.
 
-The extractor reads the whole text once, as it does without `chunk_chars`. Its call and
-its facts do not change. The extractor does not say which chunk a fact came from. Thus
-each fact gets the id of every chunk added to its `sources`, in chunk order. The facts
+The extractor reads the whole text once, as it does without `chunk_chars`. The extractor
+does not say which chunk a fact came from. Thus each fact gets the id of every chunk added
+to its `sources`, in chunk order. The block shows those ids as one range, so a fact line
+stays short. The extractor also gets the records that `recall` returns for the text, and a
+longer line leaves room for fewer of them. The facts
 are written first, and then one flush writes the chunks. If every chunk is current with
 the same content, `capture` calls no extractor, writes nothing, and returns no id. If a
 chunk changed, `capture` calls the extractor again, and it writes the next revision of

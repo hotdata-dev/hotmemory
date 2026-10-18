@@ -41,6 +41,8 @@ FORGET_SCAN = 10_000
 PROFILE_LIMIT = 100
 COUNT_LIMIT = 1000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
+_CHUNK_ID = re.compile(r"^(.+)-([0-9]{4})@([0-9]+)$")
+RANGE_MARK = "\u2026"
 RECALLED_KINDS: tuple[Kind, ...] = ("fact", "profile", "procedure")
 EPISODES_LINE = "episodes:"
 Episodes: TypeAlias = Literal["cited", "search"]
@@ -88,10 +90,12 @@ def render_line(record: Record) -> str:
     The line is `- <content> [sources: a, b] [valid: <from> to <until>]`. Each run of
     whitespace in the content becomes one space. A null `valid_from` shows as `unknown`,
     a null `valid_until` as `now`, and no sources as `none`. A source that is the id of a
-    record in the namespace of `record` shows as `<key>@<revision>`.
+    record in the namespace of `record` shows as `<key>@<revision>`. A run of two or more
+    such sources, next to each other, with keys `<prefix>-<n>` of one prefix, n in four
+    digits counting up by 1, and one revision, shows as `<prefix>-<first>…<last>@<revision>`.
     """
     content = " ".join(record.content.split())
-    sources = ", ".join(_shown_source(source, record.namespace) for source in record.sources)
+    sources = ", ".join(_shown_sources(record.sources, record.namespace))
     sources = sources or "none"
     start = _time(record.valid_from, "unknown")
     end = _time(record.valid_until, "now")
@@ -593,6 +597,35 @@ def _slot(record_id: str) -> tuple[tuple[str, ...], str]:
     namespace, key = check_namespace(labels[:-1]), labels[-1]
     check_key(key)
     return namespace, key
+
+
+def _shown_sources(sources: Sequence[str], namespace: tuple[str, ...]) -> list[str]:
+    """Return `sources` as the block shows them, with each run of chunks shown as a range."""
+    result: list[str] = []
+    run: list[tuple[str, int, str]] = []
+
+    def close() -> None:
+        if len(run) > 1:
+            prefix, first, revision = run[0]
+            result.append(f"{prefix}-{first:04d}{RANGE_MARK}{run[-1][1]:04d}@{revision}")
+        elif run:
+            prefix, number, revision = run[0]
+            result.append(f"{prefix}-{number:04d}@{revision}")
+        run.clear()
+
+    for source in sources:
+        text = _shown_source(source, namespace)
+        found = _CHUNK_ID.match(text) if text != source else None
+        if found is None:
+            close()
+            result.append(text)
+            continue
+        prefix, number, revision = found.group(1), int(found.group(2)), found.group(3)
+        if run and (run[-1][0], run[-1][1] + 1, run[-1][2]) != (prefix, number, revision):
+            close()
+        run.append((prefix, number, revision))
+    close()
+    return result
 
 
 def _shown_source(source: str, namespace: tuple[str, ...]) -> str:

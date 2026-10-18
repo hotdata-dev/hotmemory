@@ -782,6 +782,50 @@ def test_recall_search_returns_the_chunks_that_match(memory: Memory) -> None:
     assert [record.key for record in records if record.kind == "episode"] == ["chat-0004"]
 
 
+@pytest.mark.parametrize(
+    ("sources", "shown"),
+    [
+        (
+            ("chat", "team/alerts/s1-0001@1", "team/alerts/s1-0002@1", "team/alerts/s1-0003@1"),
+            "chat, s1-0001\u20260003@1",
+        ),
+        (
+            ("team/alerts/s1-0001@1", "team/alerts/s1-0002@1", "team/alerts/s1-0002@2"),
+            "s1-0001\u20260002@1, s1-0002@2",
+        ),
+        (
+            ("team/alerts/s1-0001@1", "team/alerts/s1-0003@1", "team/alerts/s1-0004@1"),
+            "s1-0001@1, s1-0003\u20260004@1",
+        ),
+        (
+            ("team/alerts/s1-0002@1", "team/alerts/s1-0001@1"),
+            "s1-0002@1, s1-0001@1",
+        ),
+        (
+            ("team/alerts/s1-0001@1", "team/alerts/s1-0002@1", "team/alerts/s2-0001@1"),
+            "s1-0001\u20260002@1, s2-0001@1",
+        ),
+        (("team/alerts/doc-0003@1",), "doc-0003@1"),
+        (("team/alerts/s1-0001@1", "team/night/s1-0002@1"), "s1-0001@1, team/night/s1-0002@1"),
+        (("team/alerts/s1-01@1", "team/alerts/s1-02@1"), "s1-01@1, s1-02@1"),
+    ],
+)
+def test_recall_shows_a_run_of_chunks_as_a_range(
+    memory: Memory, sources: tuple[str, ...], shown: str
+) -> None:
+    memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)
+    _, block = memory.recall("disk", [SCOPE])
+    assert block == f"- The disk fills. [sources: {shown}] [valid: unknown to now]"
+
+
+def test_a_fact_captured_in_chunks_shows_its_chunks_as_one_range(memory: Memory) -> None:
+    memory.capture(LONG_CHAT, SCOPE, first_turn, episode="talk", chunk_chars=60)
+    _, block = memory.recall("disk fills at night", [SCOPE])
+    assert block == (
+        "- The disk fills at night. [sources: chat, talk-0001\u20260004@1] [valid: unknown to now]"
+    )
+
+
 def test_recall_shows_a_source_in_its_namespace_as_key_and_revision(memory: Memory) -> None:
     sources = ("team/alerts/chat-0001@2", "team/alerts/night/chat-0002@1", "team/x@1", "wiki")
     memory.remember([Fact(kind="fact", content="The disk fills.", sources=sources)], SCOPE)
@@ -830,7 +874,7 @@ def test_recall_cited_names_each_episode_once(memory: Memory, clock: FakeClock) 
         "chat-0002",
         "chat-0003",
     ]
-    assert "[sources: chat, chat-0002@1, chat-0003@1]" in block
+    assert "[sources: chat, chat-0002\u20260003@1]" in block
 
 
 def test_recall_cited_skips_an_episode_outside_the_scopes(memory: Memory) -> None:

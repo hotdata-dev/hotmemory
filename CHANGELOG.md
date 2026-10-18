@@ -72,3 +72,6 @@ each one, and its failure message points to this file.
 - `Memory.capture` takes `chunk_chars`, with `episode`. It cuts the text at blank lines
   into chunks and stores chunk n as an episode under `<episode>-<n>`. The extractor still
   reads the whole text, and each fact names every chunk in `sources`.
+- The block of `recall` and `profile` shows a run of sources `<prefix>-<n>@<revision>`,
+  with n counting up by 1 and one revision, as `<prefix>-<first>…<last>@<revision>`. The
+  stored sources do not change.
