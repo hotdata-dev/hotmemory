@@ -571,6 +571,38 @@ part of each keep run missed the cache of the earlier vector run and paid for ex
 The smoke run with chunks of 2,000 at 64,000 scored 16 of 18, as in phase 9, for $0.71,
 `e2e-smoke-p10-smoke-chunks2000.json`.
 
+### The best chunk configuration on both samples
+
+Phase 10 ran chunks of 1,000 characters at 16,000 on sample B, with `--keep`. It also
+kept the memory of sample A again at 16,000 for the diagnosis. That run called no model,
+and its 54 blocks had the same SHA-256 and verdict as the `--reuse` run of the table above.
+Observed on 2026-10-18, with `src/hotmemory` at `12339f8`.
+
+| Sample | Run | Correct of 54 | Reader tokens | Cost | File |
+|---|---|---|---|---|---|
+| A | chunks of 1,000, 16,000 | 48 | 4,336 | $0 | `e2e-sample-a-p10-keep-chunks1000-16k.json` |
+| A | phase 8, `search`, 64,000 | 45 | 12,849 | | `e2e-sample-a-p8-search-64k.json` |
+| B | chunks of 1,000, 16,000 | 46 | 4,360 | $2.05 | `e2e-sample-b-p10-keep-chunks1000-16k.json` |
+| B | phase 8, `search`, 64,000 | 45 | 12,677 | | `e2e-sample-b-p8-search-64k.json` |
+
+The diagnosis read the kept memory of each run. The phase 8 rows are those of the
+diagnoses of `search` at 64,000.
+
+| Run | Missed | Not extracted | Extracted, ranked below k | Recalled, all present | Recalled, some present | Evidence chunk or episode in block |
+|---|---|---|---|---|---|---|
+| A, chunks of 1,000, 16,000 | 6 | 2 | 0 | 2 | 2 | 6 |
+| A, phase 8, `search`, 64,000 | 9 | 5 | 0 | 2 | 2 | 8 |
+| B, chunks of 1,000, 16,000 | 8 | 2 | 1 | 2 | 3 | 7 |
+| B, phase 8, `search`, 64,000 | 9 | 5 | 0 | 1 | 3 | 8 |
+
+Files: the result files above with `-diagnosis` before `.json`. With chunks, a chunk of an
+evidence session counts as that session in the last column. The diagnoses cost $0.08 on
+sample A and $0.10 on sample B.
+
+The retrieval score with the vector ranking, rerun on the 419 questions at the same commit,
+gave the same sessions in the same order as the vector ranking of the ablation, on 419 of
+419 questions: `recall_all@10` 0.9928. File: `retrieval-hotdata-local-isolated-vector.json`.
+
 ## Known limits
 
 - The end-to-end numbers come from samples of 54 questions, so one question moves an arm
