@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal, TypeAlias
 
-from hotmemory._chunks import chunk_document
+from hotmemory._chunks import chunk_document, chunk_text
 from hotmemory._rules import (
     check_prefix,
     is_duplicate,
@@ -41,6 +41,8 @@ FORGET_SCAN = 10_000
 PROFILE_LIMIT = 100
 COUNT_LIMIT = 1000
 _NOT_IN_KEY = re.compile(r"[^A-Za-z0-9_-]")
+_CHUNK_ID = re.compile(r"^(.+)-([0-9]{4})@([0-9]+)$")
+RANGE_MARK = "\u2026"
 RECALLED_KINDS: tuple[Kind, ...] = ("fact", "profile", "procedure")
 EPISODES_LINE = "episodes:"
 Episodes: TypeAlias = Literal["cited", "search"]
@@ -88,10 +90,12 @@ def render_line(record: Record) -> str:
     The line is `- <content> [sources: a, b] [valid: <from> to <until>]`. Each run of
     whitespace in the content becomes one space. A null `valid_from` shows as `unknown`,
     a null `valid_until` as `now`, and no sources as `none`. A source that is the id of a
-    record in the namespace of `record` shows as `<key>@<revision>`.
+    record in the namespace of `record` shows as `<key>@<revision>`. A run of two or more
+    such sources, next to each other, with keys `<prefix>-<n>` of one prefix, n in four
+    digits counting up by 1, and one revision, shows as `<prefix>-<first>…<last>@<revision>`.
     """
     content = " ".join(record.content.split())
-    sources = ", ".join(_shown_source(source, record.namespace) for source in record.sources)
+    sources = ", ".join(_shown_sources(record.sources, record.namespace))
     sources = sources or "none"
     start = _time(record.valid_from, "unknown")
     end = _time(record.valid_until, "now")
@@ -402,6 +406,7 @@ class Memory:
         actor: str = "",
         observed_at: datetime | None = None,
         episode: str | None = None,
+        chunk_chars: int | None = None,
     ) -> list[str]:
         """Call `extractor` on `text` and remember the facts that it returns.
 
@@ -410,15 +415,28 @@ class Memory:
         `episode`, a key, `text` is also stored as an episode under that key, written after
         the facts, and each fact gets the id of the episode added to its `sources`. If that
         episode is current with the same content, the extractor is not called and nothing
-        is written. Raises ValueError if `episode` is not a valid key, holds another kind,
-        or `text` is blank. Returns the ids that `remember` returns.
+        is written. With `chunk_chars` as well, `text` is cut at blank lines into chunks of
+        at most `chunk_chars` characters, and chunk n is stored as an episode under the key
+        `<episode>-<n>`, with n from 1 in four digits. The extractor still reads the whole
+        text, and each fact gets the id of every chunk added to its `sources`, in chunk
+        order. Only the chunks that changed are written, in one flush after the facts, and
+        if none changed, the extractor is not called. Raises ValueError if `episode` or a
+        chunk key is not a valid key or holds another kind, if `text` is blank, or if
+        `chunk_chars` is given without `episode` or is below 1. Returns the ids that
+        `remember` returns.
         """
         if episode is None:
+            if chunk_chars is not None:
+                raise ValueError("chunk_chars needs episode")
             return self._extract(text, scope, extractor, actor, observed_at, ())
         check_key(episode)
         if not text.strip():
             raise ValueError("text must not be blank when capture stores an episode")
         namespace = check_namespace(scope)
+        if chunk_chars is not None:
+            return self._chunks(
+                namespace, episode, text, extractor, actor, observed_at, chunk_chars
+            )
         _, facts = self._episode(namespace, episode, text, extractor, actor, observed_at)
         return facts
 
@@ -487,6 +505,56 @@ class Memory:
             raise RuntimeError(f"episode {key!r} was written as {written!r}, not {episode!r}")
         return written, facts
 
+    def _chunks(
+        self,
+        namespace: tuple[str, ...],
+        episode: str,
+        text: str,
+        extractor: Extractor,
+        actor: str,
+        observed_at: datetime | None,
+        chunk_chars: int,
+    ) -> list[str]:
+        """Extract the facts of `text`, then store its changed chunks as episodes.
+
+        Each fact gets the id of every chunk in its `sources`. If every chunk is current
+        with the same content, nothing is called or written. Returns the ids of the facts.
+        """
+        check_count("chunk_chars", chunk_chars)
+        if chunk_chars < 1:
+            raise ValueError("chunk_chars must be 1 or more")
+        now = self._clock()
+        ids: list[str] = []
+        changed: list[tuple[str, str, str]] = []
+        for number, chunk in enumerate(chunk_text(text, chunk_chars), start=1):
+            key = f"{episode}-{number:04d}"
+            check_key(key)
+            current = self._store.get(namespace, key)
+            if current is not None and current.kind != "episode":
+                raise ValueError(f"key {key!r} holds kind {current.kind!r}, not an episode")
+            if current is not None and is_duplicate(current, chunk, now):
+                ids.append(current.id)
+                continue
+            ids.append(record_id(namespace, key, next_revision(current)))
+            changed.append((key, chunk, ids[-1]))
+        if not changed:
+            return []
+        facts = self._extract(text, namespace, extractor, actor, observed_at, tuple(ids))
+        with self._store.writer(max_rows=len(changed), interval=timedelta.max) as writer:
+            for key, chunk, _ in changed:
+                writer.put(
+                    namespace,
+                    key,
+                    kind="episode",
+                    content=chunk,
+                    actor=actor,
+                    observed_at=observed_at,
+                )
+        expected = [chunk_id for _, _, chunk_id in changed]
+        if writer.flushed != expected:
+            raise RuntimeError(f"chunks were written as {writer.flushed!r}, not {expected!r}")
+        return facts
+
     def _extract(
         self,
         text: str,
@@ -529,6 +597,35 @@ def _slot(record_id: str) -> tuple[tuple[str, ...], str]:
     namespace, key = check_namespace(labels[:-1]), labels[-1]
     check_key(key)
     return namespace, key
+
+
+def _shown_sources(sources: Sequence[str], namespace: tuple[str, ...]) -> list[str]:
+    """Return `sources` as the block shows them, with each run of chunks shown as a range."""
+    result: list[str] = []
+    run: list[tuple[str, int, str]] = []
+
+    def close() -> None:
+        if len(run) > 1:
+            prefix, first, revision = run[0]
+            result.append(f"{prefix}-{first:04d}{RANGE_MARK}{run[-1][1]:04d}@{revision}")
+        elif run:
+            prefix, number, revision = run[0]
+            result.append(f"{prefix}-{number:04d}@{revision}")
+        run.clear()
+
+    for source in sources:
+        text = _shown_source(source, namespace)
+        found = _CHUNK_ID.match(text) if text != source else None
+        if found is None:
+            close()
+            result.append(text)
+            continue
+        prefix, number, revision = found.group(1), int(found.group(2)), found.group(3)
+        if run and (run[-1][0], run[-1][1] + 1, run[-1][2]) != (prefix, number, revision):
+            close()
+        run.append((prefix, number, revision))
+    close()
+    return result
 
 
 def _shown_source(source: str, namespace: tuple[str, ...]) -> str:

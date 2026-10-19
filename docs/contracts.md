@@ -255,10 +255,19 @@ If the engine refuses a load with `409 RESOURCE_LOCKED`, the driver tries it aga
 8 attempts in all. The wait starts at 0.25 seconds and doubles to at most 4 seconds. After
 the last attempt, the driver raises the error.
 
-A `search` with query text runs one SQL query over both record tables and `cue_v1`. If
+A `search` with query text runs one SQL query over both record tables, and over `cue_v1`
+with `ranking="fused"`. If
 the filter sets `kind`, the query reads only the record tables of the kinds that it names.
-A filter without `episode` reads only `memory_v1`. With
-`ranking="fused"`, the default, the query has three parts.
+A filter without `episode` reads only `memory_v1`.
+
+With `ranking="vector"`, the default, the query ranks by the content distance alone, after
+the filters, by a scan. That order is the order of `MemoryStore`, so the two drivers return
+the same records in the same order. The default changed from `"fused"` in phase 10. On
+LongMemEval-S, the BM25 arm of the fused ranking lowered the retrieval score, and the
+vector ranking scored as high end to end. [measured 2026-10-16,
+[docs/benchmarks.md](benchmarks.md)]
+
+With `ranking="fused"`, the query has three parts.
 
 1. Three rankings: BM25 over `content` in each record table, the cosine distance of
    `content_embedding`, and the cosine distance of `cues_embedding`. BM25 reads only the
@@ -276,8 +285,7 @@ A filter without `episode` reads only `memory_v1`. With
    newer row.
 
 The fused order is not the order of the distance, so a later hit can have a smaller
-distance than an earlier one. With `ranking="vector"`, the query ranks by the content
-distance alone, after the filters, by a scan. That order is the order of `MemoryStore`.
+distance than an earlier one.
 
 Reads are fast because the table is small. A memory table holds thousands of rows, and a
 filtered scan of that is fast without an index. Measurement M5 found that the vector
@@ -301,7 +309,7 @@ The memory contract is what an agent calls. It is a class named `Memory`, built 
 | `supersede` | scope, key of the record to close, new fact, optional valid_from, actor | Closes the named record and writes the new fact as the next revision under its key, in one `put` with `close_previous`. The new `valid_from` is the argument, else that of the fact, else now. The `valid_until` of the old record becomes the `valid_from` of the new record, and the `expired_at` of the old record becomes now. If the key has no current revision, or the `valid_from` of the old record is later than that of the new record, the call refuses. The library decides nothing by itself. |
 | `forget` | scopes, and ids or a horizon | Deletes every revision of the key of each named id, or of each key whose current revision has a `forget_after` before the horizon. It finds the keys for a horizon with `list`, up to 10,000 records under each scope. A record already past its `forget_after` is hidden from `list`, so `sweep` deletes it. It checks every id before the first delete. An id that is not a valid record id, or is outside the scopes, makes the call refuse and delete nothing. It returns the deleted ids. |
 | `profile` | subject, scopes, budget in characters | Returns the current records of kind `fact`, `profile`, and `procedure` for the subject, grouped by `kind`. It returns them as a list and as one rendered block inside the budget. The block ends with the namespaces and record counts that `recall` can reach, so an agent knows what it can search for. This is the block that an agent always loads. |
-| `capture` | text, scope, extractor, actor, observed_at, optional episode | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. With `episode`, a key, it also stores the text as a record of kind `episode` under that key, and adds the id of the episode to the `sources` of each fact. `remember` writes the facts in one flush, and then one `put` writes the episode, as in `load`. If the episode is not written, a retry calls the extractor again. If the episode is current with the same content, `capture` calls no extractor, writes nothing, and returns no id. With `episode`, a blank text, a key that is not valid, or a key that holds another kind makes the call refuse before the extractor runs. The extractor is a plain callable. The library ships no model and names no model. |
+| `capture` | text, scope, extractor, actor, observed_at, optional episode, optional chunk_chars | Calls the extractor of the caller with the text, `observed_at`, and the current records that `recall` returns for the text under the scope. Then it calls `remember` on the result, and returns the ids. A fact with no `observed_at` gets the one passed to `capture`. With `episode`, a key, it also stores the text as a record of kind `episode` under that key. It adds the id of the episode to the `sources` of each fact. `remember` writes the facts in one flush, and then one `put` writes the episode, as in `load`. If the episode is not written, a retry calls the extractor again. If the episode is current with the same content, `capture` calls no extractor, writes nothing, and returns no id. With `episode`, three cases make the call refuse before the extractor runs: a blank text, a key that is not valid, and a key that holds another kind. With `episode` and `chunk_chars`, it stores the text as chunks, as the section on chunks below gives. `chunk_chars` without `episode` makes the call refuse. The extractor is a plain callable. The library ships no model and names no model. |
 | `load` | document, text, scope, extractor, actor, observed_at, chunk_chars | Cuts a Markdown document into chunks. It stores chunk n as a record of kind `episode` under the key `<document>-<n>`, with n from 1 in four digits. For each chunk, it calls the extractor as `capture` does, on the chunk with its heading prefix. Each fact gets the id of the episode of its chunk added to its `sources`. The facts of a chunk are written before its episode. A chunk whose episode is current with the same content is skipped, with no call to the extractor. Thus a second load of the same text writes nothing new. It returns the ids of the episodes and the ids of the facts that the extractor returned. The document must be a valid key. |
 
 The key of a fact has two parts joined by `-`. The first part is the subject, with each
@@ -320,15 +328,18 @@ Times are in ISO 8601 in UTC, to the second. A null `valid_from` shows as `unkno
 null `valid_until` as `now`, and a record with no sources as `none`. A source that is the
 id of a record in the same namespace shows as `<key>@<revision>`, without the namespace.
 For example, a fact under `team/alerts` with the source `team/alerts/notes-0001@1` shows
-`[sources: notes-0001@1]`. Any other source shows in full. The block holds whole
+`[sources: notes-0001@1]`. A run of such sources next to each other shows as one range
+if their keys are `<prefix>-<n>` with one prefix, n in four digits counts up by 1, and
+the revision is the same. For example, `notes-0001@1, notes-0002@1, notes-0003@1` shows as
+`notes-0001…0003@1`. Any other source shows in full. The block holds whole
 lines only, joined by newlines. It stops before the first line that does not fit
 in the budget. The list holds the records of the block. The budget counts the characters of
 the block in this line format, and its default is 2,000. A consumer that renders the
 records in its own format passes its own `budget` and `k`. Then the default does not
 cut the list first.
 
-With `episodes`, the fact lines come first, and they fit in the budget as above. Then, if
-an episode fits in what is left, a line `episodes:` follows, and then each episode in this
+With `episodes`, the fact lines come first, and they fit in the budget as above. If an
+episode fits in what is left, a line `episodes:` follows, and then each episode in this
 form:
 
 ```text
@@ -394,6 +405,36 @@ A document of blank lines gives no chunk, and `load` writes nothing. A chunk for
 extractor returns no fact still gets its episode. If the text of a chunk changes, a
 second load writes the next revision of its episode and calls the extractor again. If a
 document gets fewer chunks, the episodes of its old last chunks stay current.
+
+`capture` with `episode` and `chunk_chars` stores the text as chunks, for a thread or a
+session that is not Markdown. A blank line separates two turns of such a text.
+
+1. It cuts the text into blocks at blank lines outside fences. A heading line does not
+   start a section, and a chunk gets no prefix. Thus a heading inside a turn stays text.
+2. It cuts a block that does not fit at line ends, and a line longer than `chunk_chars`
+   at that size, as `load` does.
+3. It packs the blocks in order into chunks of at most `chunk_chars` characters, joined by
+   a blank line.
+4. It stores chunk n as a record of kind `episode` under the key `<episode>-<n>`, with n
+   from 1 in four digits. Thus a text that fits in one chunk is stored under
+   `<episode>-0001`.
+
+The extractor reads the whole text once, as it does without `chunk_chars`. The extractor
+does not say which chunk a fact came from. Thus each fact gets the id of every chunk added
+to its `sources`, in chunk order. While the chunks share a revision, the block shows those
+ids as one range, so a fact line stays short. The extractor also gets the records that `recall` returns for the text, and a
+longer line leaves room for fewer of them. The facts
+are written first, and then one flush writes the chunks. If every chunk is current with
+the same content, `capture` calls no extractor, writes nothing, and returns no id. If a
+chunk changed, `capture` calls the extractor again, and it writes the next revision of
+each changed chunk only. If a key `<episode>-<n>` is not a valid key or holds another
+kind, the call refuses before the extractor runs. If the text gets fewer chunks, the
+episodes of its old last chunks stay current.
+
+`episodes="search"` ranks each chunk on its own, so the block holds the chunks that match
+the query and not the whole text. `episodes="cited"` does not change. A fact cites every
+chunk of its text, so `"cited"` gives the chunks of each cited text in chunk order, to the
+budget.
 
 An episode is the evidence that a fact names in `sources`. `profile` leaves it out, and
 `recall` gives it only with `episodes`. A consumer also reads an episode with `get`, or

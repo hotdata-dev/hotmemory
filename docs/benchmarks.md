@@ -53,7 +53,8 @@ with one question at a time in the tables. File:
 
 `ranking="fused"` fuses BM25, the content vector, and the cue vector.
 `ranking="vector"` ranks by the content vector alone. On this data, the vector ranking
-scores higher than the fused ranking at k of 3 and more. The reason was not measured.
+scores higher than the fused ranking at k of 3 and more. The section on the ablation below
+gives the reason.
 
 The same run, by question type:
 
@@ -93,6 +94,49 @@ On the first 20 scored questions, the vector ranking of `MemoryStore` and that o
 two distances was 1.0e-6. `MemoryStore` ran in process with a fixed clock. File:
 `retrieval-memory-in-process-isolated-vector-first20.json`, compared with
 `bench/compare.py`.
+
+### The ablation of the fused ranking
+
+Phase 10 ranked each question with the fused query less one arm at a time, with
+`--ablate`. The episodes have no cues, so the cue arm is empty. The fused query is thus
+BM25 and the content vector. Observed on 2026-10-16, on the local stack, with one question at
+a time in the tables, at commit `6a0fb70` with the changes of `--ablate`. The embedder took
+every vector from the cache. File:
+`retrieval-hotdata-local-isolated-fused-vector-bm25-content-content-cue-bm25.json`.
+
+| Ranking | Arms | `recall_any@5` | `recall_all@5` | `recall_all@10` | `ndcg_any@10` | Search p50 |
+|---|---|---|---|---|---|---|
+| `fused` | BM25, content, cue | 0.9690 | 0.9045 | 0.9570 | 0.9311 | 160 ms |
+| `bm25-content` | BM25, content | 0.9690 | 0.9045 | 0.9570 | 0.9311 | 111 ms |
+| `content-cue` | content, cue | 0.9833 | 0.9475 | 0.9928 | 0.9479 | 126 ms |
+| `bm25` | BM25 | 0.9475 | 0.8234 | 0.8926 | 0.8766 | 86 ms |
+| `vector` | the content vector, by distance | 0.9833 | 0.9475 | 0.9928 | 0.9479 | 49 ms |
+
+`bm25-content` ranked the same sessions as `fused` on 419 of 419 questions.
+`content-cue` ranked the same top 10 as `vector` on 419 of 419 questions. Thus the BM25
+arm makes the whole gap between the two rankings.
+
+By question type, at `recall_all@10`:
+
+| Question type | Questions | `fused` | `vector` | `bm25` |
+|---|---|---|---|---|
+| single-session-user | 64 | 1.0000 | 1.0000 | 1.0000 |
+| single-session-assistant | 5 | 1.0000 | 1.0000 | 1.0000 |
+| single-session-preference | 30 | 0.9333 | 1.0000 | 0.7667 |
+| multi-session | 121 | 0.9256 | 0.9835 | 0.8182 |
+| knowledge-update | 72 | 1.0000 | 1.0000 | 0.9861 |
+| temporal-reasoning | 127 | 0.9449 | 0.9921 | 0.8819 |
+
+On 16 questions, `fused` lost an evidence session from the top 10 that `vector` had: 8
+multi-session, 6 temporal-reasoning, and 2 single-session-preference. BM25 ranked each lost
+session from 23 to 40. Fusion with equal weights thus pushed it below sessions that BM25
+ranked high. The run holds about 50 sessions for each question, and BM25 fetches 500 rows,
+so the filter after BM25 did not cause the loss.
+
+BM25 favors long sessions a little. In each haystack, a session has a length percentile
+from 0, the shortest, to 1, the longest. The sessions that are not evidence and that
+`fused` adds to the top 10 have a mean percentile of 0.645. Those in the top 10 of
+`vector` have 0.583, and the evidence sessions have 0.672.
 
 ## Latency
 
@@ -145,7 +189,7 @@ sample.
 | Reader | `gpt-4o-2024-08-06`, temperature 0, up to 800 output tokens, the chain-of-thought prompt of the reference code |
 | Judge | `gpt-4o-2024-08-06`, temperature 0, the prompt of the reference code for each question type |
 | Extractor of the memory arm | `gpt-4o-mini-2024-07-18`, with the `baseline` prompt in `bench/prompts.py`, except in the section on extractor variants |
-| Driver | `HotdataStore` with the fused ranking, on the local stack |
+| Driver | `HotdataStore` on the local stack, with the fused ranking up to phase 9. Each phase 10 section names its ranking. |
 
 The arms:
 
@@ -463,6 +507,103 @@ was not measured.
 The time in the table is `duration_s` of the result file. The whole command took 563
 seconds the first time, and 14.9 seconds on a later try. The cause of the first wait was
 not found.
+
+### The ranking end to end
+
+Phase 10 ran the memory arm on sample A with each ranking of `capture` and `recall`, with
+`search` at 64,000 characters, `--extractor detail --session-episodes`, and 4 workers.
+Observed on 2026-10-16, with `src/hotmemory` at `b5443ac`. The fused run reused the kept
+memory of phase 9. The vector run kept its own memory. Its first `--replay` stopped at a
+cache miss after 3 questions, and a `--run --resume` ran the other 51.
+
+| Ranking | Correct of 54 | Reader tokens, median | Episodes in the block, mean | Facts written | Cost | File |
+|---|---|---|---|---|---|---|
+| `fused` | 45 | 12,849 | 4.06 | 13,666 | $0 | `e2e-sample-a-p10-reuse-fused-search-64k.json` |
+| `vector` | 46 | 13,405 | 4.48 | 14,322 | $2.17 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
+
+The reader tokens, episodes, and facts of the fused row are those of its `--keep` run,
+`e2e-sample-a-p9-keep-search-64k.json`. The two rankings differ on 3 questions. `vector`
+answered `66f24dbb`, single-session-user, and `21d02d0d`, multi-session, and missed
+`0edc2aef`, single-session-preference. The ranking also changes `capture`, because the
+extractor reads the facts that the search of the store returns. Thus the two runs stored
+different facts. The vector run took 1,770.6 seconds and 1,722 model calls. In one session,
+the extractor reply reached the token limit, and that session gave no facts.
+
+### Episode chunks
+
+Phase 10 stored each session as chunks with `capture`, `chunk_chars`, and ran `search`
+with each chunk size at three budgets, on sample A, with the vector ranking,
+`--extractor detail`, and 4 workers. Each chunk size was one run with `--keep` at 8,000
+characters, and each larger budget was a run with `--reuse`. Observed on 2026-10-18,
+with `src/hotmemory` at `12339f8`. The reader tokens are the median over the 54
+questions, rounded down, and the chunks are the mean count of chunks in the block.
+
+| Chunk size | Budget | Correct of 54 | Reader tokens | Chunks in the block | Cost | File |
+|---|---|---|---|---|---|---|
+| 1,000 | 8,000 | 41 | 2,470 | 3.1 | $0.55 | `e2e-sample-a-p10-keep-chunks1000-8k.json` |
+| 1,000 | 16,000 | 48 | 4,336 | 12.4 | $0.81 | `e2e-sample-a-p10-reuse-chunks1000-16k.json` |
+| 1,000 | 32,000 | 49 | 7,831 | 29.9 | $1.27 | `e2e-sample-a-p10-reuse-chunks1000-32k.json` |
+| 2,000 | 8,000 | 36 | 2,327 | 1.4 | $0.56 | `e2e-sample-a-p10-keep-chunks2000-8k.json` |
+| 2,000 | 16,000 | 46 | 4,171 | 6.2 | $0.78 | `e2e-sample-a-p10-reuse-chunks2000-16k.json` |
+| 2,000 | 32,000 | 48 | 7,716 | 15.7 | $1.26 | `e2e-sample-a-p10-reuse-chunks2000-32k.json` |
+| 4,000 | 8,000 | 31 | 1,878 | 0.2 | $0.49 | `e2e-sample-a-p10-keep-chunks4000-8k.json` |
+| 4,000 | 16,000 | 44 | 3,779 | 2.6 | $0.73 | `e2e-sample-a-p10-reuse-chunks4000-16k.json` |
+| 4,000 | 32,000 | 46 | 7,509 | 7.4 | $1.21 | `e2e-sample-a-p10-reuse-chunks4000-32k.json` |
+
+The runs of phase 8 with whole sessions as episodes, for comparison:
+
+| Run | Correct of 54 | Reader tokens | File |
+|---|---|---|---|
+| `search`, 16,000 | 34 | 1,738 | `e2e-sample-a-p8-search-16k.json` |
+| `search`, 32,000 | 43 | 5,715 | `e2e-sample-a-p8-search-32k.json` |
+| `search`, 64,000 | 45 | 12,849 | `e2e-sample-a-p8-search-64k.json` |
+| `search`, 64,000, vector ranking, phase 10 | 46 | 13,405 | `e2e-sample-a-p10-keep-vector-search-64k.json` |
+
+Chunks of 1,000 characters at 16,000 scored 48 with 4,336 reader tokens. The best whole-session
+run scored 45 with 12,849 tokens. At 8,000 characters, the facts take most of the budget,
+because they fill it before the episodes. At 32,000 characters with chunks of 1,000, the
+block held 29.9 chunks on average, so `k`, 30, and not the budget, limited the episodes.
+
+The block of `recall` shows a run of chunk sources as one range, as
+[docs/contracts.md](contracts.md) gives. A fact line is still a little longer than with one
+episode, so the list of known facts that the extractor reads can hold one fact less. The
+keep runs of chunks of 1,000 and 4,000 made 108 model calls each, the 54 reader calls and
+the 54 judge calls, so every extractor reply came from the cache. The keep run of chunks of
+2,000 made 168 calls, so 60 extractor prompts missed the cache.
+The smoke run with chunks of 2,000 at 64,000 scored 16 of 18, as in phase 9, for $0.71,
+`e2e-smoke-p10-smoke-chunks2000.json`.
+
+### The best chunk configuration on both samples
+
+Phase 10 ran chunks of 1,000 characters at 16,000 on sample B, with `--keep`. It also
+kept the memory of sample A again at 16,000 for the diagnosis. That run called no model,
+and its 54 blocks had the same SHA-256 and verdict as the `--reuse` run of the table above.
+Observed on 2026-10-18, with `src/hotmemory` at `12339f8`.
+
+| Sample | Run | Correct of 54 | Reader tokens | Cost | File |
+|---|---|---|---|---|---|
+| A | chunks of 1,000, 16,000 | 48 | 4,336 | $0 | `e2e-sample-a-p10-keep-chunks1000-16k.json` |
+| A | phase 8, `search`, 64,000 | 45 | 12,849 | | `e2e-sample-a-p8-search-64k.json` |
+| B | chunks of 1,000, 16,000 | 46 | 4,360 | $2.05 | `e2e-sample-b-p10-keep-chunks1000-16k.json` |
+| B | phase 8, `search`, 64,000 | 45 | 12,676 | | `e2e-sample-b-p8-search-64k.json` |
+
+The diagnosis read the kept memory of each run. The phase 8 rows are those of the
+diagnoses of `search` at 64,000.
+
+| Run | Missed | Not extracted | Extracted, ranked below k | Recalled, all present | Recalled, some present | Evidence chunk or episode in block |
+|---|---|---|---|---|---|---|
+| A, chunks of 1,000, 16,000 | 6 | 2 | 0 | 2 | 2 | 6 |
+| A, phase 8, `search`, 64,000 | 9 | 5 | 0 | 2 | 2 | 8 |
+| B, chunks of 1,000, 16,000 | 8 | 2 | 1 | 2 | 3 | 7 |
+| B, phase 8, `search`, 64,000 | 9 | 5 | 0 | 1 | 3 | 8 |
+
+Files: the result files above with `-diagnosis` before `.json`. With chunks, a chunk of an
+evidence session counts as that session in the last column. The diagnoses cost $0.08 on
+sample A and $0.10 on sample B.
+
+The retrieval score with the vector ranking, rerun on the 419 questions at the same commit,
+gave the same sessions in the same order as the vector ranking of the ablation, on 419 of
+419 questions: `recall_all@10` 0.9928. File: `retrieval-hotdata-local-isolated-vector.json`.
 
 ## Known limits
 

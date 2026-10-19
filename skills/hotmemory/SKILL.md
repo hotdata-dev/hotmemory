@@ -104,6 +104,19 @@ python scripts/recall.py --memory-file memory.json --scope team --query "Why did
   --budget 1000 --episodes cited
 ```
 
+Add `--chunk-chars` with `--episode` to store a long text as chunks. The script cuts the
+text at blank lines into chunks of at most that many characters, and stores chunk n under
+the key `<episode>-<n>`. Each fact then names every chunk in its sources. A recall with
+`--episodes search` gives the chunks that match the query, and not the whole text.
+
+```sh
+python scripts/capture.py --memory-file memory.json --scope team/alerts --actor sentence-splitter \
+  --extractor extractors:one_fact_per_sentence --episode chat-0002 --chunk-chars 40 \
+  --text "$(printf 'The disk fills at night.\n\nThe logs rotate at noon.')"
+python scripts/recall.py --memory-file memory.json --scope team --query "When do the logs rotate?" \
+  --budget 1000 --episodes search
+```
+
 ## Load a document
 
 Store a Markdown document as episodes, one for each chunk, and run an extractor on each
