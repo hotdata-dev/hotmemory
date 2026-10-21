@@ -51,6 +51,8 @@ KS = (5, 10)
 ROOT = ("scale",)
 TIE = 1e-5
 EPISODES = Filter(kind="episode")
+FLUSH_ATTEMPTS = 3
+TRANSIENT = ("upload transfer to storage failed", "Remote end closed connection")
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,7 @@ class Run:
         self.questions = questions
         self.exact = Exact(capacity)
         self.flushes: list[dict[str, float]] = []
+        self.retries = 0
         self.reads: list[float] = []
         read = getattr(self.first, "_current", None)
         if read is not None:
@@ -199,22 +202,34 @@ class Run:
             part = rows[start : start + FLUSH]
             vectors = self.embedder([row.content for row in part])
             started = time.perf_counter()
-            with self.first.writer(max_rows=len(part) + 1, interval=timedelta.max) as writer:
-                for row in part:
-                    writer.put(
-                        row.namespace,
-                        row.key,
-                        kind="episode",
-                        content=row.content,
-                        sources=(f"session:{row.session}",),
-                        actor=ACTOR,
-                    )
+            for attempt in range(1, FLUSH_ATTEMPTS + 1):
+                try:
+                    self.write(part)
+                    break
+                except RuntimeError as error:
+                    if attempt == FLUSH_ATTEMPTS or not any(t in str(error) for t in TRANSIENT):
+                        raise
+                    self.retries += 1
+                    print(f"flush failed, try {attempt + 1}: {error}", flush=True)
             seconds = time.perf_counter() - started
             read = self.reads[-1] if self.reads else 0.0
             self.exact.add(part, vectors)
             total = len(self.exact.rows)
             self.flushes.append({"rows": len(part), "total": total, "s": seconds, "read_s": read})
             print(f"wrote {total} rows, flush {seconds:.2f} s, read {read:.2f} s", flush=True)
+
+    def write(self, part: Sequence[Row]) -> None:
+        """Put `part` in one flush. A put of a row that is already current writes nothing."""
+        with self.first.writer(max_rows=len(part) + 1, interval=timedelta.max) as writer:
+            for row in part:
+                writer.put(
+                    row.namespace,
+                    row.key,
+                    kind="episode",
+                    content=row.content,
+                    sources=(f"session:{row.session}",),
+                    actor=ACTOR,
+                )
 
     def checkpoint(self) -> dict[str, Any]:
         """Search each question in each scope by each ranking, and return the results."""
@@ -341,6 +356,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             written = size
             checkpoints.append(run.checkpoint())
             print(json.dumps(checkpoints[-1]), flush=True)
+            config["flush_retries"] = run.retries
             write_result(path, config, run.flushes, sizes, checkpoints)
     finally:
         if not args.keep:
