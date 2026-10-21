@@ -56,6 +56,9 @@ each one, and its failure message points to this file.
 - `Memory.recall` and `Memory.profile` read the records of kind `fact`, `profile`, and
   `procedure` only. They never return an episode, and the counts of `profile` leave
   episodes out.
+- `HotdataStore.provision` reads every page of the database list. Before, it read the
+  first 100 databases, and in a larger workspace it could create a second database with
+  the name.
 - `Memory.capture` takes `episode`, a key. With it, `capture` also stores the text as an
   episode under that key, after the facts, and each fact names the episode in `sources`.
   A capture of the same text under the same key writes nothing and calls no extractor.

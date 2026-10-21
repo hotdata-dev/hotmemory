@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from hotdata.api.databases_api import DatabasesApi
 from hotdata.api.indexes_api import IndexesApi
 from hotdata_framework import HotdataClient, ManagedDatabase
 from hotdata_framework.client import IndexType, ManagedLoadMode, VectorMetric
@@ -62,6 +63,7 @@ RRF_CONSTANT = 60
 MIN_DEPTH = 100
 DEPTH_PER_RESULT = 10
 LOAD_ATTEMPTS = 8
+LIST_PAGE = 100
 FIRST_BACKOFF = 0.25
 MAX_BACKOFF = 4.0
 
@@ -202,7 +204,7 @@ class HotdataStore:
         """
         _check_settings(model, dimensions)
         client = HotdataClient.from_env() if client is None else client
-        found = [db for db in client.list_managed_databases() if db.description == name]
+        found = _named(client, name)
         if len(found) > 1:
             ids = ", ".join(sorted(db.id for db in found))
             raise LayoutError(f"{len(found)} databases are named {name!r}: {ids}")
@@ -565,6 +567,20 @@ def _check_settings(model: str, dimensions: int) -> None:
         raise TypeError("dimensions must be an integer")
     if dimensions < 1:
         raise ValueError("dimensions must be 1 or more")
+
+
+def _named(client: HotdataClient, name: str) -> builtins.list[ManagedDatabase]:
+    """Return every database named exactly `name`, from every page of the listing."""
+    databases = DatabasesApi(client.api)
+    ids: builtins.list[str] = []
+    cursor: str | None = None
+    while True:
+        page = databases.list_databases(limit=LIST_PAGE, cursor=cursor, search=name)
+        ids.extend(str(summary.id) for summary in page.databases if summary.name == name)
+        if not page.has_more or not page.next_cursor:
+            break
+        cursor = page.next_cursor
+    return [client.resolve_managed_database(database_id) for database_id in ids]
 
 
 def _create(client: HotdataClient, name: str, model: str, dimensions: int) -> ManagedDatabase:

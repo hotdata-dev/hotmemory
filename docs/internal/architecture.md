@@ -225,9 +225,9 @@ database. The platform has no conditional create, and the driver does not preven
 
 `list_managed_databases` of `hotdata-framework` 0.14.1 reads only the first page of the
 list, newest first, and a page holds at most 100 databases. [read from source, not
-observed] Thus, in a workspace with more than 100 databases, `provision` can miss an
-existing database with the name and create a second one. The issue is
-hotdata-dev/sdk-python-framework#89.
+observed] The issue is hotdata-dev/sdk-python-framework#89. So `provision` does not use
+it. It pages the list of the SDK with the name as the search text, keeps each database
+whose name is exactly the name, and reads each of those by its id.
 
 ## A write
 
@@ -678,5 +678,5 @@ These claims on this page come from reading source, or were not measured:
 - Where the cloud keeps the catalog, the parquet files, and the index files.
 - Whether the sorted index on `created_at` serves `list` and `sweep`.
 - The cost of a whole document `load` in the cloud.
-- The first page of `list_managed_databases`, and a second database that `provision` can
-  create with more than 100 databases in the workspace.
+- `provision` in a workspace with more than 100 databases. An offline test proves the
+  paging against a fake listing.
