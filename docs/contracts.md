@@ -213,6 +213,9 @@ with that name, or creates it. It is safe to run again.
 - Two processes that provision the same new name at the same moment can both create a
   database, because the platform has no conditional create. The driver does not prevent
   this.
+- `provision` reads only the first page of the database list, at most 100 databases, newest
+  first. In a workspace with more than 100 databases, it can miss an existing database with
+  the name and create a second one. This was read from source and not observed.
 
 `HotdataStore.open(database_id, ...)` opens a database by its id, after the same checks.
 `client` is a `HotdataClient` from `hotdata-framework`, and defaults to

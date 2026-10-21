@@ -157,8 +157,8 @@ What phase 10 changed for this phase:
 
 - The default ranking is the vector ranking. The loss of BM25 hits in a narrow scope now
   applies only with `ranking="fused"`.
-- With chunks, a session is many episode rows: about 11 for a session of 10,800
-  characters, in chunks of 1,000. A store with chunks reaches each size sooner.
+- With chunks, a session is many episode rows: at least one row for each 1,000 characters
+  of the session, with chunks of 1,000. A store with chunks reaches each size sooner.
 - `list_managed_databases` of `hotdata-framework` 0.14.1 reads only the first 100
   databases, and `HotdataStore.provision` uses it. A run that makes many databases, or a
   workspace that holds more than 100, can make `provision` miss a database and create a

@@ -10,7 +10,7 @@ the SQL, and the loads that carry them out.
 
 Each claim has one of these sources:
 
-- The code of hotmemory at the commit that adds this page. Such a claim has no mark.
+- The code of hotmemory at commit `a0145ee`, the merge of phase 10. Such a claim has no mark.
 - A measurement in [contracts.md](../contracts.md) or [guarantees.md](../guarantees.md), marked
   [measured] with its date.
 - A look at the local stack on 2026-10-12, marked [observed, local].
@@ -223,6 +223,12 @@ name and the vector size must equal the arguments.
 Two processes that provision the same new name at the same moment can both create a
 database. The platform has no conditional create, and the driver does not prevent this.
 
+`list_managed_databases` of `hotdata-framework` 0.14.1 reads only the first page of the
+list, newest first, and a page holds at most 100 databases. [read from source, not
+observed] Thus, in a workspace with more than 100 databases, `provision` can miss an
+existing database with the name and create a second one. The issue is
+hotdata-dev/sdk-python-framework#89.
+
 ## A write
 
 Every write goes through one method, `_write_many`. A `put` sends it one draft. A writer
@@ -335,7 +341,7 @@ sequenceDiagram
     end
     C->>M: capture(text, scope, extractor, actor, observed_at)
     M->>H: search(text, [scope], kinds fact, profile, procedure, k=10)
-    H->>API: one vector SELECT on memory_v1
+    H->>API: one SELECT with the ranking of the store
     API-->>H: ranked rows
     H-->>M: hits
     Note over M: recall keeps the lines that fit in 2,000 characters
@@ -393,19 +399,25 @@ flowchart TD
     eps -- "no" --> out["Return the records and the block"]
     eps -- "cited" --> get["get each episode that the facts<br/>of the block name in sources"]
     eps -- "search" --> find["search the episodes,<br/>kind episode, top k"]
-    get --> whole["Add whole episodes while they fit<br/>in what the facts left"]
-    find --> whole
+    get --> epasof{"as_of given?"}
+    find --> epasof
+    epasof -- "yes" --> epkeep["Keep the episodes valid at as_of"]
+    epasof -- "no" --> whole
+    epkeep --> whole["Add whole episodes while they fit<br/>in what the facts left"]
     whole --> out
 ```
 
-With `episodes="cited"`, `recall` sends one `get` for each distinct source that is an
-episode id in the allowed scopes. With `episodes="search"`, it sends a second search with
+With `episodes="cited"`, `recall` sends one `get` for each distinct source that is a
+valid record id in an allowed scope. Then it drops each record of another kind than
+`episode`. With chunks, a fact cites every chunk of its session, so a fact that cites 11
+chunks costs 11 `get` calls. With `episodes="search"`, it sends a second search with
 the filter `kind` = `episode`, so that search reads `episode_v1`. With chunks, each chunk
 is an episode, so that search ranks each chunk on its own. The episodes that `capture` and
 `load` write have no cues, so the fused ranking of that search is BM25 and the content
 vector.
 
-The `as_of` filter runs in the process, after the search. Thus `recall` with `as_of` can
+The `as_of` filter runs in the process, after the search. It runs on the facts, and then
+on the episodes. Thus `recall` with `as_of` can
 return fewer than k records. The search keeps k records before the filter, so a record that
 is valid at `as_of` but ranks below k is missing.
 
@@ -602,7 +614,7 @@ sequenceDiagram
         else a new or changed chunk
             Note over M: The episode id is known before the write:<br/>scope/key@next revision
             M->>H: search for the chunk (as capture does)
-            H->>API: vector SELECT on memory_v1
+            H->>API: one SELECT with the ranking of the store
             M->>X: extractor(chunk, observed_at, current records)
             X-->>M: facts
             Note over M: Add the episode id to the sources of each fact
@@ -666,3 +678,5 @@ These claims on this page come from reading source, or were not measured:
 - Where the cloud keeps the catalog, the parquet files, and the index files.
 - Whether the sorted index on `created_at` serves `list` and `sweep`.
 - The cost of a whole document `load` in the cloud.
+- The first page of `list_managed_databases`, and a second database that `provision` can
+  create with more than 100 databases in the workspace.
