@@ -66,7 +66,7 @@ token. [local.md](../local.md) describes the local stack.
 | Concurrent writes | One lock in each store, and a retry on `409 RESOURCE_LOCKED` | Locks a table for each load, and refuses a second load with 409. [measured] |
 | Expiry | Hides a record past `forget_after` in SQL, and deletes it in `sweep` | Deletes nothing. [measured] |
 | Rows on disk | Builds each batch of rows as a parquet file | Stores the rows as parquet files and records them in DuckLake metadata. [observed, local] |
-| Indexes | Asks for seven indexes at provision | Builds and stores them. [observed, local] |
+| Indexes | Asks for four indexes at provision, or seven with `vector_index=True` | Builds and stores them. [observed, local] |
 | Queries | Writes every SQL query, with values as literals | Plans and runs the SQL. |
 
 ## Where the data lives
@@ -87,7 +87,7 @@ erDiagram
         int64 revision
         string kind "fact, profile, or procedure"
         string content "BM25 index"
-        list_float content_embedding "vector index, cosine"
+        list_float content_embedding "vector index, cosine, with vector_index"
         timestamp created_at "sorted index"
         string superseded_by
         timestamp valid_from
@@ -99,12 +99,12 @@ erDiagram
         string id PK
         string kind "episode"
         string content "BM25 index"
-        list_float content_embedding "vector index, cosine"
+        list_float content_embedding "vector index, cosine, with vector_index"
         timestamp created_at "sorted index"
     }
     cue_v1 {
         string id PK "the id of a record row"
-        list_float cues_embedding "vector index, cosine"
+        list_float cues_embedding "vector index, cosine, with vector_index"
     }
     meta_v1 {
         string id PK "meta"
@@ -121,9 +121,9 @@ UTC to the microsecond.
 
 | Table | Rows | Indexes |
 |---|---|---|
-| `memory_v1` | The records of kind `fact`, `profile`, and `procedure` | BM25 on `content`, plain cosine vector on `content_embedding`, sorted on `created_at` |
-| `episode_v1` | The records of kind `episode` | The same three |
-| `cue_v1` | One row for each record that has cues: its id and the vector of its cues | Plain cosine vector on `cues_embedding` |
+| `memory_v1` | The records of kind `fact`, `profile`, and `procedure` | BM25 on `content`, sorted on `created_at`, and with `vector_index=True` plain cosine vector on `content_embedding` |
+| `episode_v1` | The records of kind `episode` | The same |
+| `cue_v1` | One row for each record that has cues: its id and the vector of its cues | None, or with `vector_index=True` plain cosine vector on `cues_embedding` |
 | `meta_v1` | One row: the schema version, the embedding model name, and the vector size | None |
 
 Every table has the key column `id`. A keyed load replaces or deletes rows by this column.
@@ -157,13 +157,13 @@ flowchart TD
     start["provision(name)"] --> list["List the managed databases<br/>and keep those whose description is name"]
     list --> count{"How many?"}
     count -- "more than one" --> dup["Raise LayoutError<br/>and create nothing"]
-    count -- "one" --> check["Check the tables, the columns,<br/>the seven indexes, and the meta row"]
+    count -- "one" --> check["Check the tables, the columns,<br/>the indexes, and the meta row"]
     check --> same{"Same layout, model,<br/>and vector size?"}
     same -- "yes" --> open["Return the store"]
     same -- "no" --> bad["Raise LayoutError"]
     count -- "none" --> create["Create the database<br/>with four tables keyed by id"]
     create --> seed["Load one seed row into<br/>memory_v1, episode_v1, and cue_v1"]
-    seed --> index["Build the seven indexes"]
+    seed --> index["Build the four indexes,<br/>or seven with vector_index"]
     index --> unseed["Delete the seed rows"]
     unseed --> meta["Load the meta row into meta_v1"]
     meta --> open
@@ -199,7 +199,7 @@ sequenceDiagram
         F->>S: PUT the parquet file
         F->>API: finish the upload, then load it
     end
-    loop seven indexes
+    loop four indexes, or seven with vector_index
         P->>F: create_index(table, column, type, metric)
         F->>API: submit the index build
         F->>API: poll every 0.2 s until it is done
@@ -303,7 +303,11 @@ key in one flush write revisions n+1 and n+2.
 ### The loads
 
 The new rows and the superseded rows of one table go into one parquet file and one upsert
-load. The cue vectors of the new rows go into a second load, on `cue_v1`. The loads of one
+load. The cue vectors of the new rows go into a second load, on `cue_v1`. A table whose
+rows are all new, at most 5 of them, gets a SQL `INSERT` in place of the load. So a `put`
+of a new fact with cues sends two `INSERT` statements and no upload. The `INSERT` selects
+its rows from a `VALUES` list, and keeps only the ids that the table does not hold, so a
+retried `INSERT` writes no row twice. The loads of one
 batch run at the same time, one thread for each load. They are not atomic. If the cue load
 fails, the record has no cue row. If the record load fails, a cue row is left without a
 record, and the search drops it.
@@ -319,8 +323,8 @@ then polls the job. [read from source, not observed] The engine then writes the 
 object storage and records them in the catalog. The order of those two steps was not
 observed.
 
-hotmemory never sends `INSERT`, `UPDATE`, or `DELETE` in SQL. Every change to a row is a
-keyed load. The cloud accepts `INSERT` and refuses `UPDATE` and `DELETE`. One row by
+hotmemory sends `INSERT` only for a small write of new rows. Every other change to a row
+is a keyed load. The cloud accepts `INSERT` and refuses `UPDATE` and `DELETE`. One row by
 `INSERT` took 531 ms in the cloud, against 1,682 ms by load. [measured, M4, 2026-10-21]
 
 ## Remember and capture
@@ -478,6 +482,12 @@ index. A filtered search through a plain vector index returns only the rows that
 the table at the build of the index. [measured, local, 2026-10-08] The query names its
 table with an alias and names the distance, and that form makes the engine scan.
 [measured, local, 2026-10-08]
+
+With `vector_index=True`, each vector ranking sends one subquery for each table with no
+alias, the filters in its `WHERE`, and `ORDER BY cosine_distance(...) LIMIT n`. That is
+the form that the engine serves from the vector index. The test that every later write
+is found through the index is marked as an expected failure, so it fails when the engine
+fixes the filtered search.
 
 BM25 needs its index. `bm25_search` refuses to run on a table without one. [measured] The
 engine applies the filters inside `bm25_search`, so BM25 fetches its top rows from the

@@ -253,7 +253,9 @@ class Run:
         return result
 
 
-def hotdata_stores(embedder: Embedder, location: str, url: str, name: str) -> Any:
+def hotdata_stores(
+    embedder: Embedder, location: str, url: str, name: str, vector_index: bool
+) -> Any:
     """Return the client, the database, and one store for each ranking."""
     from hotdata_framework import HotdataClient
 
@@ -264,7 +266,12 @@ def hotdata_stores(embedder: Embedder, location: str, url: str, name: str) -> An
     else:
         client = HotdataClient.from_env()
     store = HotdataStore.provision(
-        name, embedder=embedder, model=embed.MODEL, dimensions=embed.DIMENSIONS, client=client
+        name,
+        embedder=embedder,
+        model=embed.MODEL,
+        dimensions=embed.DIMENSIONS,
+        client=client,
+        vector_index=vector_index,
     )
     options: dict[str, Any] = {
         "embedder": embedder,
@@ -272,7 +279,9 @@ def hotdata_stores(embedder: Embedder, location: str, url: str, name: str) -> An
         "dimensions": embed.DIMENSIONS,
     }
     stores: dict[str, Store] = {
-        ranking: HotdataStore(client, store.database, ranking=ranking, **options)
+        ranking: HotdataStore(
+            client, store.database, ranking=ranking, vector_index=vector_index, **options
+        )
         for ranking in ("vector", "fused")
     }
     return client, store.database, stores
@@ -285,6 +294,9 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--url", default="http://localhost:3000")
     parser.add_argument("--keep", action="store_true", help="keep the database after the run")
     parser.add_argument("--tag", default="")
+    parser.add_argument(
+        "--vector-index", action="store_true", help="provision with the experimental vector index"
+    )
     args = parser.parse_args(argv)
     sizes = sorted(int(size) for size in args.sizes.split(","))
 
@@ -299,10 +311,29 @@ def main(argv: Sequence[str] | None = None) -> Path:
     embedder = embed.openai_embedder()
     run_id = uuid.uuid4().hex[:8]
     name = f"hotmemory-scale-{run_id}"
-    client, database, stores = hotdata_stores(embedder, args.location, args.url, name)
+    client, database, stores = hotdata_stores(
+        embedder, args.location, args.url, name, args.vector_index
+    )
     run = Run(stores, embedder, scored, sizes[-1])
     started = datetime.now(UTC)
-    checkpoints = []
+    checkpoints: list[dict[str, Any]] = []
+    tag = f"-{args.tag}" if args.tag else ""
+    path = RESULTS_DIR / f"scale-{args.location}{tag}-{run_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    config = {
+        "started": started.isoformat(),
+        "location": args.location,
+        "sizes": sizes,
+        "pool_rows": len(rows),
+        "questions": len(scored),
+        "chunk_chars": CHUNK_CHARS,
+        "flush": FLUSH,
+        "k": K,
+        "buckets": BUCKETS,
+        "vector_index": args.vector_index,
+        "commit": _commit(),
+        "database": name if args.keep else None,
+    }
     try:
         written = 0
         for size in sizes:
@@ -310,36 +341,37 @@ def main(argv: Sequence[str] | None = None) -> Path:
             written = size
             checkpoints.append(run.checkpoint())
             print(json.dumps(checkpoints[-1]), flush=True)
+            write_result(path, config, run.flushes, sizes, checkpoints)
     finally:
         if not args.keep:
             client.delete_managed_database(database)
-    result = {
-        "config": {
-            "started": started.isoformat(),
-            "location": args.location,
-            "sizes": sizes,
-            "pool_rows": len(rows),
-            "questions": len(scored),
-            "chunk_chars": CHUNK_CHARS,
-            "flush": FLUSH,
-            "k": K,
-            "buckets": BUCKETS,
-            "commit": _commit(),
-            "database": name if args.keep else None,
-        },
-        "flushes": run.flushes,
-        "flush_s_by_size": {
-            str(size): spread([f["s"] for f in run.flushes if prev < f["total"] <= size])
-            for prev, size in zip([0, *sizes], sizes, strict=False)
-        },
-        "checkpoints": checkpoints,
-    }
-    tag = f"-{args.tag}" if args.tag else ""
-    path = RESULTS_DIR / f"scale-{args.location}{tag}-{run_id}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=1) + "\n")
     print(path)
     return path
+
+
+def write_result(
+    path: Path,
+    config: dict[str, Any],
+    flushes: Sequence[dict[str, float]],
+    sizes: Sequence[int],
+    checkpoints: Sequence[dict[str, Any]],
+) -> None:
+    """Write the configuration, the flushes, and the checkpoints so far to `path`."""
+
+    def by_size(field: str) -> dict[str, dict[str, float]]:
+        return {
+            str(size): spread([f[field] for f in flushes if prev < f["total"] <= size])
+            for prev, size in zip([0, *sizes], sizes, strict=False)
+        }
+
+    result = {
+        "config": config,
+        "flushes": list(flushes),
+        "flush_s_by_size": by_size("s"),
+        "read_s_by_size": by_size("read_s"),
+        "checkpoints": list(checkpoints),
+    }
+    path.write_text(json.dumps(result, indent=1) + "\n")
 
 
 if __name__ == "__main__":

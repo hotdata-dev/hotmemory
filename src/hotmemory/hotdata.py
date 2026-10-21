@@ -65,6 +65,7 @@ DEPTH_PER_RESULT = 10
 LOAD_ATTEMPTS = 8
 LIST_PAGE = 100
 SLOT_BATCH = 500
+INSERT_ROWS = 5
 FIRST_BACKOFF = 0.25
 MAX_BACKOFF = 4.0
 
@@ -98,8 +99,9 @@ RECORD_SCHEMA = pa.schema(
     ]
 )
 READ_COLUMNS = tuple(name for name in RECORD_SCHEMA.names if name != "content_embedding")
-_Load = tuple[str, pa.Table, ManagedLoadMode]
-"""One load: the table, the rows, and the load mode."""
+WriteMode = ManagedLoadMode | Literal["insert"]
+_Load = tuple[str, pa.Table, WriteMode]
+"""One write: the table, the rows, and the load mode, or `insert` for a SQL INSERT."""
 
 CUE_SCHEMA = pa.schema([("id", pa.string()), ("cues_embedding", _VECTOR)])
 META_SCHEMA = pa.schema(
@@ -130,8 +132,10 @@ class _Index:
 
 INDEXES = (
     *(_Index(table, "bm25", "content") for table in RECORD_TABLES),
-    *(_Index(table, "vector", "content_embedding", "cosine") for table in RECORD_TABLES),
     *(_Index(table, "sorted", "created_at") for table in RECORD_TABLES),
+)
+VECTOR_INDEXES = (
+    *(_Index(table, "vector", "content_embedding", "cosine") for table in RECORD_TABLES),
     _Index(CUE_TABLE, "vector", "cues_embedding", "cosine"),
 )
 
@@ -156,6 +160,11 @@ class HotdataStore:
     as `MemoryStore` does. `ranking="fused"` ranks by reciprocal rank fusion of BM25 over
     `content`, cosine distance over the content vectors, and cosine distance over the cue
     vectors. In both, `Hit.distance` is the content cosine distance.
+
+    `vector_index=True` is experimental. The vector rankings then search through the
+    vector indexes, with the filters inside the index search, and do not scan. The engine
+    can miss rows loaded after the index build in such a search, so a search can miss
+    recent writes. The default scans every row in scope, which is exact.
     """
 
     def __init__(
@@ -168,6 +177,7 @@ class HotdataStore:
         dimensions: int,
         clock: Clock = utc_now,
         ranking: Ranking = "vector",
+        vector_index: bool = False,
     ) -> None:
         if ranking not in ("vector", "fused"):
             raise ValueError(f"ranking must be 'vector' or 'fused', got {ranking!r}")
@@ -178,8 +188,10 @@ class HotdataStore:
         self._dimensions = dimensions
         self._clock = clock
         self._ranking = ranking
+        self._vector_index = vector_index
         self._lock = threading.Lock()
         self._sleep: Callable[[float], None] = time.sleep
+        self._inserts = True
 
     @classmethod
     def provision(
@@ -191,6 +203,7 @@ class HotdataStore:
         dimensions: int,
         client: HotdataClient | None = None,
         clock: Clock = utc_now,
+        vector_index: bool = False,
     ) -> HotdataStore:
         """Open the database named `name`, or create it if no database has that name.
 
@@ -200,6 +213,10 @@ class HotdataStore:
         builds the indexes. Raises LayoutError, and creates nothing, if more than one
         database has the name or the one found has another layout. Two processes that
         provision the same new name at the same moment can both create a database.
+
+        With `vector_index=True`, an experimental option, a new database also gets the
+        three vector indexes, and the store searches through them. A database found
+        without them raises LayoutError. Each vector index makes each write slower.
 
         `client` defaults to `HotdataClient.from_env()`.
         """
@@ -211,11 +228,17 @@ class HotdataStore:
             raise LayoutError(f"{len(found)} databases are named {name!r}: {ids}")
         if found:
             database = found[0]
-            _check_layout(client, database, model, dimensions)
+            _check_layout(client, database, model, dimensions, vector_index)
         else:
-            database = _create(client, name, model, dimensions)
+            database = _create(client, name, model, dimensions, vector_index)
         return cls(
-            client, database, embedder=embedder, model=model, dimensions=dimensions, clock=clock
+            client,
+            database,
+            embedder=embedder,
+            model=model,
+            dimensions=dimensions,
+            clock=clock,
+            vector_index=vector_index,
         )
 
     @classmethod
@@ -228,6 +251,7 @@ class HotdataStore:
         dimensions: int,
         client: HotdataClient | None = None,
         clock: Clock = utc_now,
+        vector_index: bool = False,
     ) -> HotdataStore:
         """Open the database with the id `database_id`, after the checks of `provision`.
 
@@ -238,9 +262,15 @@ class HotdataStore:
         database = client.resolve_managed_database(database_id)
         if database.id != database_id:
             raise KeyError(f"no database has the id {database_id!r}")
-        _check_layout(client, database, model, dimensions)
+        _check_layout(client, database, model, dimensions, vector_index)
         return cls(
-            client, database, embedder=embedder, model=model, dimensions=dimensions, clock=clock
+            client,
+            database,
+            embedder=embedder,
+            model=model,
+            dimensions=dimensions,
+            clock=clock,
+            vector_index=vector_index,
         )
 
     def put(
@@ -336,9 +366,9 @@ class HotdataStore:
             return []
         vector = _vector(self._embed([query])[0])
         if self._ranking == "vector":
-            sql = _vector_query(tables, where, vector, k)
+            sql = _vector_query(tables, where, vector, k, self._vector_index)
         else:
-            sql = _fused_query(tables, where, vector, _bm25_text(query), k)
+            sql = _fused_query(tables, where, vector, _bm25_text(query), k, self._vector_index)
         return [Hit(_record(row), float(row["distance"])) for row in self._sql(sql).to_records()]
 
     def delete(self, namespace: Sequence[str], key: str) -> None:
@@ -488,7 +518,11 @@ class HotdataStore:
     def _load_records(
         self, records: Sequence[Record], vectors: dict[str, builtins.list[float]]
     ) -> None:
-        """Upsert `records` into their tables, and the cue rows of the new ones."""
+        """Write `records` into their tables, and the cue rows of the new ones.
+
+        A table whose rows are all new and number at most INSERT_ROWS gets a SQL INSERT,
+        and so do the cue rows. Every other table gets one upsert load.
+        """
         fresh = [record for record in records if record.id not in vectors]
         with_cues = [record for record in fresh if record.cues]
         embedded = self._embed(
@@ -500,13 +534,15 @@ class HotdataStore:
         for record in records:
             vector = vectors[record.id] if record.id in vectors else content[record.id]
             by_table.setdefault(_table(record.kind), []).append(_row(record, vector))
-        loads: builtins.list[_Load] = [
-            (table, pa.Table.from_pylist(rows, schema=RECORD_SCHEMA), "upsert")
-            for table, rows in by_table.items()
-        ]
+        loads: builtins.list[_Load] = []
+        for table, rows in by_table.items():
+            new = all(row["id"] not in vectors for row in rows)
+            mode: WriteMode = "insert" if new and len(rows) <= INSERT_ROWS else "upsert"
+            loads.append((table, pa.Table.from_pylist(rows, schema=RECORD_SCHEMA), mode))
         if cues:
             cue_rows = {"id": builtins.list(cues), "cues_embedding": builtins.list(cues.values())}
-            loads.append((CUE_TABLE, pa.table(cue_rows, schema=CUE_SCHEMA), "upsert"))
+            mode = "insert" if len(cues) <= INSERT_ROWS else "upsert"
+            loads.append((CUE_TABLE, pa.table(cue_rows, schema=CUE_SCHEMA), mode))
         self._load_all(loads)
 
     def _embed(self, texts: Sequence[str]) -> builtins.list[builtins.list[float]]:
@@ -536,25 +572,44 @@ class HotdataStore:
         for future in futures:
             future.result()
 
-    def _load(self, table: str, rows: pa.Table, mode: ManagedLoadMode) -> None:
-        """Upload `rows` once and load them, with a retry when the table is locked.
+    def _load(self, table: str, rows: pa.Table, mode: WriteMode) -> None:
+        """Write `rows` by INSERT or by one upload and load, with a retry when locked.
 
-        A load refused with 409 RESOURCE_LOCKED is tried up to LOAD_ATTEMPTS times, with
-        a backoff from FIRST_BACKOFF seconds that doubles up to MAX_BACKOFF seconds.
+        A write refused with 409 RESOURCE_LOCKED is tried up to LOAD_ATTEMPTS times, with
+        a backoff from FIRST_BACKOFF seconds that doubles up to MAX_BACKOFF seconds. The
+        INSERT writes only the ids that the table does not hold, so a second try writes
+        nothing twice. If the engine refuses the INSERT for another reason, this store
+        writes by upsert load from then on.
         """
+        if mode == "insert" and self._inserts:
+            sql = _insert_sql(table, rows)
+            try:
+                self._retry_locked(lambda: self._sql(sql))
+                return
+            except RuntimeError as error:
+                if _is_locked(error):
+                    raise
+                self._inserts = False
+        load_mode: ManagedLoadMode = "upsert" if mode == "insert" else mode
         with tempfile.TemporaryDirectory() as tmp:
             upload_id = self.client.upload_parquet(_Files(Path(tmp)).write(rows))
+        self._retry_locked(
+            lambda: self.client.load_managed_table(
+                self.database,
+                table,
+                schema=SCHEMA,
+                upload_id=upload_id,
+                mode=load_mode,
+                key=["id"],
+            )
+        )
+
+    def _retry_locked(self, call: Callable[[], object]) -> None:
+        """Run `call`, and run it again while the table is locked, up to LOAD_ATTEMPTS."""
         delay = FIRST_BACKOFF
         for attempt in range(1, LOAD_ATTEMPTS + 1):
             try:
-                self.client.load_managed_table(
-                    self.database,
-                    table,
-                    schema=SCHEMA,
-                    upload_id=upload_id,
-                    mode=mode,
-                    key=["id"],
-                )
+                call()
                 return
             except RuntimeError as error:
                 if attempt == LOAD_ATTEMPTS or not _is_locked(error):
@@ -596,7 +651,9 @@ def _named(client: HotdataClient, name: str) -> builtins.list[ManagedDatabase]:
     return [client.resolve_managed_database(database_id) for database_id in ids]
 
 
-def _create(client: HotdataClient, name: str, model: str, dimensions: int) -> ManagedDatabase:
+def _create(
+    client: HotdataClient, name: str, model: str, dimensions: int, vector_index: bool
+) -> ManagedDatabase:
     """Create the database, load a seed row into each table, index it, and remove the seeds.
 
     The meta row is loaded last, so a database without it did not finish provisioning.
@@ -609,7 +666,7 @@ def _create(client: HotdataClient, name: str, model: str, dimensions: int) -> Ma
         for table in (*RECORD_TABLES, CUE_TABLE):
             seed = files.write(_seed_rows(table, dimensions))
             client.load_managed_table(database, table, schema=SCHEMA, file=seed, mode="replace")
-        for index in INDEXES:
+        for index in (*INDEXES, *(VECTOR_INDEXES if vector_index else ())):
             client.create_index(
                 database,
                 index.table,
@@ -650,9 +707,17 @@ def _seed_rows(table: str, dimensions: int) -> pa.Table:
 
 
 def _check_layout(
-    client: HotdataClient, database: ManagedDatabase, model: str, dimensions: int
+    client: HotdataClient,
+    database: ManagedDatabase,
+    model: str,
+    dimensions: int,
+    vector_index: bool = False,
 ) -> None:
-    """Raise LayoutError unless `database` has the tables, columns, indexes, and meta row."""
+    """Raise LayoutError unless `database` has the tables, columns, indexes, and meta row.
+
+    The vector indexes are checked only with `vector_index`. A database that has them
+    opens without it too.
+    """
     columns = {
         info.table: [column.name for column in info.columns or []]
         for info in client.iter_tables(
@@ -675,7 +740,7 @@ def _check_layout(
         for table in (*RECORD_TABLES, CUE_TABLE)
         for index in indexes.list_indexes(database.default_connection_id, SCHEMA, table).indexes
     }
-    for wanted in INDEXES:
+    for wanted in (*INDEXES, *(VECTOR_INDEXES if vector_index else ())):
         if (wanted.table, wanted.index_type, (wanted.column,), wanted.metric) not in built:
             raise LayoutError(
                 f"table {wanted.table} of database {database.id} has no "
@@ -781,23 +846,36 @@ def _union(tables: Sequence[str], select: str, where: str) -> str:
     )
 
 
-def _vector_query(tables: Sequence[str], where: str, vector: str, k: int) -> str:
-    """Return the query that ranks by the content cosine distance alone, filters first.
+def _vector_query(
+    tables: Sequence[str], where: str, vector: str, k: int, indexed: bool = False
+) -> str:
+    """Return the query that ranks by the content cosine distance alone.
 
-    The table alias and the named distance keep the engine from the vector index, so the
-    query scans and stays exact. A filtered search through the index misses rows loaded
-    after the index build.
+    By default, the table alias and the named distance keep the engine from the vector
+    index, so the query filters first, scans, and stays exact. A filtered search through
+    the index misses rows loaded after the index build. With `indexed`, each table gets
+    the form that the engine serves from the vector index, with `where` inside it.
     """
     columns = ", ".join(f"scanned.{column}" for column in READ_COLUMNS)
-    rows = " UNION ALL ".join(
-        f"SELECT {columns}, cosine_distance(scanned.content_embedding, {vector}) AS distance "
-        f"FROM {_ref(table)} scanned WHERE {where}"
-        for table in tables
-    )
+    if indexed:
+        rows = " UNION ALL ".join(
+            f"SELECT * FROM (SELECT {', '.join(READ_COLUMNS)}, "
+            f"cosine_distance(content_embedding, {vector}) AS distance FROM {_ref(table)} "
+            f"WHERE {where} ORDER BY cosine_distance(content_embedding, {vector}) LIMIT {k})"
+            for table in tables
+        )
+    else:
+        rows = " UNION ALL ".join(
+            f"SELECT {columns}, cosine_distance(scanned.content_embedding, {vector}) AS distance "
+            f"FROM {_ref(table)} scanned WHERE {where}"
+            for table in tables
+        )
     return f"SELECT * FROM ({rows}) ORDER BY distance ASC, {NEWEST_FIRST} LIMIT {k}"
 
 
-def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: int) -> str:
+def _fused_query(
+    tables: Sequence[str], where: str, vector: str, text: str, k: int, indexed: bool = False
+) -> str:
     """Return the query that fuses BM25, content vector, and cue vector rankings.
 
     Each ranking keeps only the rows that `where` keeps, numbers them from 1, and adds
@@ -818,11 +896,30 @@ def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: i
             f"bm25_search('{_ref(table)}', 'content', {_text(text)}, {depth}) WHERE {where})"
         )
         rankings.append(name)
-    nearest = " UNION ALL ".join(
-        f"SELECT scanned.id, cosine_distance(scanned.content_embedding, {vector}) AS distance "
-        f"FROM {_ref(table)} scanned WHERE {where}"
-        for table in tables
-    )
+    if indexed:
+        nearest = " UNION ALL ".join(
+            f"SELECT * FROM (SELECT id, cosine_distance(content_embedding, {vector}) AS distance "
+            f"FROM {_ref(table)} WHERE {where} "
+            f"ORDER BY cosine_distance(content_embedding, {vector}) LIMIT {depth})"
+            for table in tables
+        )
+        cues = (
+            f"SELECT * FROM (SELECT id, cosine_distance(cues_embedding, {vector}) AS distance "
+            f"FROM {_ref(CUE_TABLE)} WHERE id IN ({_union(tables, 'id', where)}) "
+            f"ORDER BY cosine_distance(cues_embedding, {vector}) LIMIT {depth}) "
+            f"ORDER BY distance ASC, id ASC LIMIT {depth}"
+        )
+    else:
+        nearest = " UNION ALL ".join(
+            f"SELECT scanned.id, cosine_distance(scanned.content_embedding, {vector}) AS distance "
+            f"FROM {_ref(table)} scanned WHERE {where}"
+            for table in tables
+        )
+        cues = (
+            f"SELECT scanned.id, cosine_distance(scanned.cues_embedding, {vector}) AS distance "
+            f"FROM {_ref(CUE_TABLE)} scanned WHERE scanned.id IN ({_union(tables, 'id', where)}) "
+            f"ORDER BY distance ASC, id ASC LIMIT {depth}"
+        )
     parts.append(
         f"content_rank AS (SELECT candidate.id, "
         f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} FROM ("
@@ -832,9 +929,7 @@ def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: i
     parts.append(
         f"cue_rank AS (SELECT candidate.id, "
         f"{rank.format(order='candidate.distance ASC, candidate.id ASC')} FROM ("
-        f"SELECT scanned.id, cosine_distance(scanned.cues_embedding, {vector}) AS distance "
-        f"FROM {_ref(CUE_TABLE)} scanned WHERE scanned.id IN ({_union(tables, 'id', where)}) "
-        f"ORDER BY distance ASC, id ASC LIMIT {depth}) candidate)"
+        f"{cues}) candidate)"
     )
     rankings.append("cue_rank")
     ranked = " UNION ALL ".join(
@@ -858,6 +953,41 @@ def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: i
 def _slot_condition(namespace: tuple[str, ...], key: str) -> str:
     """Return the SQL condition that matches the rows of one key."""
     return f"namespace = {_text('/'.join(namespace))} AND key = {_text(key)}"
+
+
+def _insert_sql(table: str, rows: pa.Table) -> str:
+    """Return the INSERT of `rows` into `table`, for the ids that the table does not hold."""
+    names = rows.schema.names
+    types = [rows.schema.field(name).type for name in names]
+    values = ", ".join(
+        "("
+        + ", ".join(_literal(row[name], kind) for name, kind in zip(names, types, strict=True))
+        + ")"
+        for row in rows.to_pylist()
+    )
+    columns = ", ".join(names)
+    ids = ", ".join(_text(value) for value in rows.column("id").to_pylist())
+    return (
+        f"INSERT INTO {_ref(table)} ({columns}) SELECT * FROM (VALUES {values}) AS new({columns}) "
+        f"WHERE new.id NOT IN (SELECT id FROM {_ref(table)} WHERE id IN ({ids}))"
+    )
+
+
+def _literal(value: Any, kind: pa.DataType) -> str:
+    """Return `value` as a SQL literal of the column type `kind`."""
+    if value is None:
+        return "NULL"
+    if kind == _TEXTS:
+        if not value:
+            return "CAST(ARRAY[] AS VARCHAR[])"
+        return "ARRAY[" + ", ".join(_text(item) for item in value) + "]"
+    if kind == _VECTOR:
+        return f"CAST({_vector(value)} AS REAL[])"
+    if kind == _TIME:
+        return _timestamp(value)
+    if pa.types.is_integer(kind):
+        return str(int(value))
+    return _text(str(value))
 
 
 def _row(record: Record, vector: Sequence[float]) -> dict[str, Any]:

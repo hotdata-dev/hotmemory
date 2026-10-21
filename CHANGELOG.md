@@ -56,6 +56,17 @@ each one, and its failure message points to this file.
 - `Memory.recall` and `Memory.profile` read the records of kind `fact`, `profile`, and
   `procedure` only. They never return an episode, and the counts of `profile` leave
   episodes out.
+- `HotdataStore.provision` builds no vector index by default, so each write skips the cost
+  of the index. `provision` and `open` take `vector_index`, an experimental option: with
+  it, `provision` builds the three vector indexes, and the vector rankings search through
+  them. A filtered search through a vector index can miss rows loaded after its build.
+- `HotdataStore` writes a table by SQL `INSERT` when its rows in the write are all new and
+  number at most 5, as in a `put` of a new fact. The `INSERT` writes only the ids that the
+  table does not hold. Other writes stay keyed loads. If the engine refuses the `INSERT`,
+  the store writes by load from then on.
+- `HotdataStore` reads the current revisions before a write with lists of at most 500
+  keys. Before, one condition for each key could overflow the stack of the engine on a
+  flush of about 2,000 rows.
 - `HotdataStore.provision` reads every page of the database list. Before, it read the
   first 100 databases, and in a larger workspace it could create a second database with
   the name.

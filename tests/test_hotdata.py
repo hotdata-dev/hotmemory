@@ -8,7 +8,9 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pyarrow as pa
 import pytest
+from hotdata.api.indexes_api import IndexesApi
 from hotdata_framework import HotdataClient
 
 from hotmemory import Filter
@@ -22,8 +24,10 @@ from hotmemory.hotdata import (
     HotdataStore,
     LayoutError,
     _bm25_text,
+    _insert_sql,
     _record,
     _ref,
+    _row,
     _text,
 )
 
@@ -367,6 +371,83 @@ def test_a_flush_larger_than_a_slot_batch_reads_every_current_revision(
         namespace = NS if n % 2 else (*NS, "other")
         assert [r.content for r in store.history(namespace, f"k-{n}")] == ["first", "second"]
     assert len(store.list(NS, limit=size + 1)) == size
+
+
+def test_a_second_insert_writes_nothing(client: HotdataClient, name: str) -> None:
+    store = provision(client, name)
+    store.put(NS, "disk", kind="fact", content="disk full", cues=("disk?",))
+    record = store.get(NS, "disk")
+    assert record is not None
+    rows = pa.Table.from_pylist(
+        [_row(record, fake_embedder(["disk full"])[0])], schema=RECORD_SCHEMA
+    )
+    result = client.execute_sql(_insert_sql(MEMORY_TABLE, rows), database=store.database)
+    assert result.rows[0][0] == 0
+    assert [r.id for r in store.history(NS, "disk")] == [record.id]
+    assert store.search("disk", [NS], k=5)[0].record == record
+
+
+def built_indexes(client: HotdataClient, store: HotdataStore) -> set[tuple[str, str]]:
+    api = IndexesApi(client.api)
+    connection = store.database.default_connection_id
+    return {
+        (table, index.index_type)
+        for table in (MEMORY_TABLE, EPISODE_TABLE, CUE_TABLE)
+        for index in api.list_indexes(connection, "public", table).indexes
+    }
+
+
+def test_provision_builds_vector_indexes_only_when_asked(client: HotdataClient, name: str) -> None:
+    store = provision(client, name)
+    assert (MEMORY_TABLE, "vector") not in built_indexes(client, store)
+    assert (MEMORY_TABLE, "bm25") in built_indexes(client, store)
+    with pytest.raises(LayoutError, match="vector index"):
+        HotdataStore.provision(
+            name,
+            embedder=fake_embedder,
+            model=MODEL,
+            dimensions=DIMENSIONS,
+            client=client,
+            vector_index=True,
+        )
+
+
+def test_a_store_with_vector_indexes_opens_without_the_option(
+    client: HotdataClient, name: str
+) -> None:
+    indexed = HotdataStore.provision(
+        name,
+        embedder=fake_embedder,
+        model=MODEL,
+        dimensions=DIMENSIONS,
+        client=client,
+        vector_index=True,
+    )
+    found = built_indexes(client, indexed)
+    assert {(MEMORY_TABLE, "vector"), (EPISODE_TABLE, "vector"), (CUE_TABLE, "vector")} <= found
+    plain = provision(client, name)
+    assert plain.database.id == indexed.database.id
+
+
+@pytest.mark.xfail(
+    strict=True, reason="a filtered search through the vector index misses later rows"
+)
+def test_a_search_through_the_vector_index_finds_every_later_write(
+    client: HotdataClient, name: str
+) -> None:
+    store = HotdataStore.provision(
+        name,
+        embedder=fake_embedder,
+        model=MODEL,
+        dimensions=DIMENSIONS,
+        client=client,
+        vector_index=True,
+    )
+    keys = [f"fact-{n}" for n in range(8)]
+    for key in keys:
+        store.put(NS, key, kind="fact", content=f"The disk fills, {key} report.")
+    hits = store.search("disk fills report", [NS], Filter(kind="fact"), k=10)
+    assert sorted(hit.record.key for hit in hits) == sorted(keys)
 
 
 def test_two_stores_write_one_database_at_once(client: HotdataClient, name: str) -> None:
