@@ -18,9 +18,13 @@ from hotmemory.hotdata import (
     MEMORY_TABLE,
     META_TABLE,
     RECORD_SCHEMA,
+    SLOT_BATCH,
     HotdataStore,
     LayoutError,
+    _bm25_text,
     _record,
+    _ref,
+    _text,
 )
 
 from .conftest import DIMENSIONS, FakeClock, fake_embedder
@@ -330,6 +334,39 @@ def test_search_in_a_narrow_scope_returns_its_top_k(
 
     hits = store.search("disk report", [narrow], k=10)
     assert sorted(hit.record.key for hit in hits) == sorted(f"narrow-{n}" for n in range(10))
+
+
+def test_bm25_applies_the_scope_filter_before_its_depth(client: HotdataClient, name: str) -> None:
+    store = provision(client, name)
+    narrow = ("team", "narrow")
+    with store.writer() as writer:
+        for n in range(300):
+            writer.put(NS, f"wide-{n}", kind="fact", content=f"disk disk disk report {n}")
+        for n in range(10):
+            writer.put(narrow, f"narrow-{n}", kind="fact", content=f"disk usage {n}")
+
+    where = store._listed([narrow], None)
+    sql = (
+        f"SELECT key FROM bm25_search('{_ref(MEMORY_TABLE)}', 'content', "
+        f"{_text(_bm25_text('disk'))}, 100) WHERE {where}"
+    )
+    keys = sorted(row[0] for row in client.execute_sql(sql, database=store.database).rows)
+    assert keys == sorted(f"narrow-{n}" for n in range(10))
+
+
+def test_a_flush_larger_than_a_slot_batch_reads_every_current_revision(
+    client: HotdataClient, name: str
+) -> None:
+    store = provision(client, name)
+    size = 2 * SLOT_BATCH + 100
+    for content in ("first", "second"):
+        with store.writer(max_rows=size + 1) as writer:
+            for n in range(size):
+                writer.put(NS if n % 2 else (*NS, "other"), f"k-{n}", kind="fact", content=content)
+    for n in (0, 1, size - 1):
+        namespace = NS if n % 2 else (*NS, "other")
+        assert [r.content for r in store.history(namespace, f"k-{n}")] == ["first", "second"]
+    assert len(store.list(NS, limit=size + 1)) == size
 
 
 def test_two_stores_write_one_database_at_once(client: HotdataClient, name: str) -> None:

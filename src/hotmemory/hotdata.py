@@ -64,6 +64,7 @@ MIN_DEPTH = 100
 DEPTH_PER_RESULT = 10
 LOAD_ATTEMPTS = 8
 LIST_PAGE = 100
+SLOT_BATCH = 500
 FIRST_BACKOFF = 0.25
 MAX_BACKOFF = 4.0
 
@@ -455,21 +456,33 @@ class HotdataStore:
     def _current(
         self, slots: set[tuple[tuple[str, ...], str]]
     ) -> tuple[dict[tuple[tuple[str, ...], str], Record], dict[str, builtins.list[float]]]:
-        """Return the current revision of each slot that has one, and its content vector."""
+        """Return the current revision of each slot that has one, and its content vector.
+
+        Each query matches a list of namespaces and a list of at most SLOT_BATCH keys, and
+        the rows of other slots that it also matches are dropped.
+        """
         current: dict[tuple[tuple[str, ...], str], Record] = {}
         vectors: dict[str, builtins.list[float]] = {}
-        if not slots:
-            return current, vectors
-        where = " OR ".join(f"({_slot_condition(*slot)})" for slot in sorted(slots))
+        ordered = sorted(slots)
         columns = ", ".join(RECORD_SCHEMA.names)
-        for table in RECORD_TABLES:
-            sql = f"SELECT {columns} FROM {_ref(table)} WHERE superseded_by IS NULL AND ({where})"
-            for row in self._sql(sql).to_records():
-                record = _record(row)
-                slot = (record.namespace, record.key)
-                if slot not in current or current[slot].revision < record.revision:
-                    current[slot] = record
-                    vectors[record.id] = row["content_embedding"]
+        for start in range(0, len(ordered), SLOT_BATCH):
+            part = ordered[start : start + SLOT_BATCH]
+            paths = sorted({"/".join(namespace) for namespace, _ in part})
+            keys = sorted({key for _, key in part})
+            where = (
+                f"superseded_by IS NULL AND namespace IN ({', '.join(map(_text, paths))}) "
+                f"AND key IN ({', '.join(map(_text, keys))})"
+            )
+            for table in RECORD_TABLES:
+                sql = f"SELECT {columns} FROM {_ref(table)} WHERE {where}"
+                for row in self._sql(sql).to_records():
+                    record = _record(row)
+                    slot = (record.namespace, record.key)
+                    if slot not in slots:
+                        continue
+                    if slot not in current or current[slot].revision < record.revision:
+                        current[slot] = record
+                        vectors[record.id] = row["content_embedding"]
         return current, vectors
 
     def _load_records(
