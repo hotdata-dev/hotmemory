@@ -27,7 +27,8 @@ Agreed on 2026-10-13. `plan.md` holds the tasks, the acceptance criteria, and th
 conditions of each phase. The library stays deterministic: no code in `src/hotmemory`
 calls a model. Latency is not a goal, and its work waits under Deferred, except the
 measurements at scale of phase 11. On 2026-10-16 the owner added phases 9 to 11, and the
-later phases moved to 12 to 15.
+later phases moved to 12 to 15. On 2026-10-19, after phase 10 closed, the owner paused the
+workstream to work on other things first. Phase 11 opens when the owner resumes it.
 
 | Phase | Delivers | Status |
 |---|---|---|
@@ -35,7 +36,7 @@ later phases moved to 12 to 15.
 | 7. The extractor | A benchmark extractor that keeps what the assistant said, with sources, measured against the 19 misses where no stored fact held the answer. No library change. | closed 2026-10-14, PR #21 |
 | 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | closed 2026-10-15, PR #24 |
 | 9. Faster evaluation | The runner keeps the memory of a run and reuses it for runs that change only `recall` or the reader. A smoke run of 18 questions on `MemoryStore`. A run keeps its finished questions when it stops. No library change. | closed 2026-10-16, PR #28 |
-| 10. The ranking, and episode chunks | An ablation of the fused ranking, and a default ranking chosen by the benchmark. `capture` stores a session as chunks, so the block holds the chunks that match and not whole sessions, for fewer reader tokens. | open, issue #26 |
+| 10. The ranking, and episode chunks | An ablation of the fused ranking, and a default ranking chosen by the benchmark. `capture` stores a session as chunks, so the block holds the chunks that match and not whole sessions, for fewer reader tokens. | closed 2026-10-19, PR #30 |
 | 11. A large memory store | The time of a write and a search at 10,000, 100,000, and 1,000,000 memories, by scope size, locally and in the cloud. The vector rankings on the vector index once the engine fixes the filtered search, with tests that every record is found through both indexes. Retrieval on LongMemEval-M. Then a comparison with other memory layers in one harness. | proposed |
 | 12. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
 | 13. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
@@ -62,6 +63,15 @@ taken up now.
   The owner accepted it on 2026-10-14. With `detail`, the extractor still drops what the
   assistant said: 7 misses of the type single-session-assistant on sample A have no
   stored fact. A second extractor model was not tried, because the owner named none.
+- Precise chunk citations, from phase 10. A fact that `capture` writes with chunks cites
+  every chunk of its text, because the extractor does not say which chunk it came from.
+  So `episodes="cited"` still gives the whole text. A match of the fact to its chunk, or
+  an extractor that names it, can make `"cited"` save tokens too. Phase 10 measured
+  `"search"` only.
+- The first-page listing of `hotdata-framework`, from phase 10. `list_managed_databases`
+  and `resolve_managed_database` read only the first 100 databases, and
+  `HotdataStore.provision` uses the first. It is filed as
+  hotdata-dev/sdk-python-framework#89, and waits for the framework fix or for phase 11.
 - The ideas of the hindsight study of 2026-10-09 that the second workstream does not
   take, for later planning:
   - A chunk-hash delta on re-capture.
@@ -171,3 +181,17 @@ A closed phase keeps its row above with the date it closed and the pull request.
   it. A commit that changes `src/hotmemory` makes the kept memory unusable, so a phase
   that changes the library captures once again for each configuration. `MemoryStore`
   ranks by vector only, so the first smoke run of a configuration pays for extraction.
+- Phase 10 closed on 2026-10-19 with PR #30, which closed issue #26. An ablation on the
+  419 retrieval questions showed that the BM25 arm made the whole gap between the
+  rankings: `recall_all@10` was 0.9570 fused, 0.9928 by vector, and 0.8926 for BM25
+  alone. So `HotdataStore` ranks by vector by default, as `MemoryStore` does, and
+  `ranking="fused"` stays as an option. `capture` takes `chunk_chars` and stores a session
+  as chunks, and each fact cites every chunk. The block shows a run of chunk sources as one
+  range. With chunks of 1,000 characters at a budget of 16,000, the memory arm scored 48
+  of 54 on sample A and 46 on sample B, at about 4,350 reader tokens at the median. Phase
+  8 scored 45 on each with about 12,800 tokens. Phase 10 spent $12.77. It changed the plan
+  for later phases in three ways. The extractor reads a known-fact list of 2,000
+  characters, so a longer block line changes its prompt, and a run with chunks paid for
+  part of its extraction again. A run that reuses kept memory at a new budget pays for
+  the reader and the judge. The framework listing reads only the first 100 databases,
+  which the runs worked around by deleting each set of kept databases before the next.

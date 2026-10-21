@@ -4,20 +4,22 @@ Status: agreed, 2026-10-13. The owner agreed to each decision and to the target 
 2026-10-13. Phase 8 closed on 2026-10-15 with PR #24. On 2026-10-16 the owner added
 three phases after it: faster evaluation, the ranking with episode chunks, and a large
 memory store. The later phases moved to 12 to 15. Phase 9 closed on 2026-10-16 with PR
-#28, and phase 10 is open as issue #26. This file holds the open workstream, phases 10 to
-15. Each phase becomes one GitHub issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
+#28. Phase 10 closed on 2026-10-19 with PR #30. On 2026-10-19 the owner paused this
+workstream before phase 11, to work on other things first, so no phase is open. This file
+holds the phases still to come, 11 to 15. Each phase becomes one GitHub issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
 git history, at commit `4a6fb36`. The plan of phase 6, with the decisions taken during
 its work, is at commit `8a7318d`. The plan of phase 7 is at commit `ab93da1`. The plan
 of phase 8, with the decisions of its task 1, is at commit `b5443ac`. The plan of phase 9
-is at commit `2df6881`.
+is at commit `2df6881`. The plan of phase 10 is at commit `a0145ee`.
 
 ## Goal
 
 When this workstream closes, the memory arm meets the target below, and hotmemory is on
 PyPI. At the start of the workstream, the memory arm scored 19 of 54 on sample A (35.2
 percent). After phase 8, it scores 45 of 54 on sample A and 45 on sample B, with
-episodes after the facts. The retrieval arm scored 45 of 54 on sample A.
+episodes after the facts. After phase 10, with chunks of 1,000 characters at a budget of
+16,000, it scores 48 on sample A and 46 on sample B, at about 4,350 reader tokens. The retrieval arm scored 45 of 54 on sample A.
 
 The target (agreed) is a distance from the lowest published score of a memory layer with
 a GPT-4o reader: Zep at 71.2 percent (read, not reproduced). The published range goes up
@@ -43,7 +45,8 @@ writes, and does not try to reduce it. The roadmap lists the latency work under 
 
 All numbers are from `docs/benchmarks.md`. The rows of sample A were observed on
 2026-10-10, and the rows of sample B on 2026-10-14. The rows of phase 7 were observed on
-2026-10-14, and the rows of phase 8 on 2026-10-15.
+2026-10-14, the rows of phase 8 on 2026-10-15, and the rows of phase 10 on 2026-10-16
+and 2026-10-18.
 
 | Item | Value |
 |---|---|
@@ -67,10 +70,15 @@ All numbers are from `docs/benchmarks.md`. The rows of sample A were observed on
 | Phase 8, `episodes="search"` at 64,000 characters | 45 on sample A, 45 on sample B, 12,849 and 12,676 reader tokens |
 | Phase 8, `episodes="search"` at 32,000 characters | 43 on sample A, 5,715 reader tokens |
 | Phase 8 misses with `search` at 64,000 characters | 9 on each sample: 5 with no stored fact, and an evidence session in the block in 8 |
+| Phase 10, retrieval, fused ranking less BM25 | the same top 10 as the vector ranking on 419 of 419 questions |
+| Phase 10, memory arm, vector ranking, `search` at 64,000 characters | 46 on sample A, 13,405 reader tokens |
+| Phase 10, chunks of 1,000 characters, `search` at 16,000 characters | 48 on sample A, 46 on sample B, 4,336 and 4,360 reader tokens |
+| Phase 10 misses with chunks of 1,000 at 16,000 | 6 on sample A and 8 on sample B, 2 with no stored fact on each |
 | Phase 8 run time on sample A, 4 workers, from `duration_s` in the result files | 1,145 s for facts only, 1,507 s for `search` at 64,000 characters, 1,133 to 2,085 s over the seven runs |
 
-Four facts about the memory arm, read from `bench/e2e.py` and `src/hotmemory/contract.py`,
-shape the phases below:
+Four facts about the memory arm, read from `bench/e2e.py` and `src/hotmemory/contract.py`
+at the start of the workstream, shaped its first phases. Phases 8 and 10 changed facts 2
+and 4:
 
 1. The extractor is `extractor` in `bench/e2e.py`. It sends each session to
    `gpt-4o-mini-2024-07-18` with a prompt variant from `VARIANTS` in `bench/prompts.py`,
@@ -78,11 +86,13 @@ shape the phases below:
    `session:<hash>`. The hash is the first 12 hex digits of the SHA-256 of the session id.
    From phase 7, the memory arm runs with `--extractor detail`.
 2. `capture` stores facts only. It does not store the session, so the memory arm keeps no
-   session text in the store.
+   session text in the store. From phase 8, `capture` with `episode` also stores the
+   session as an episode, and from phase 10 as chunks with `chunk_chars`.
 3. `remember` derives each key from the subject and a hash of the content. A changed value
    gets a new key, so the old fact stays current beside the new one.
 4. `recall` searches the kinds `fact`, `profile`, and `procedure`, keeps k records, and
-   then applies `as_of` in the process. It never returns an episode.
+   then applies `as_of` in the process. It never returns an episode. From phase 8, it adds
+   episodes after the facts when the caller passes `episodes`.
 
 ## Decisions
 
@@ -108,83 +118,20 @@ The owner agreed to each item on 2026-10-13.
   tokens per question.
 - The cost limit (agreed in phase 5, kept). The runner prints an estimate and stops over
   50 dollars. Each phase records what it spent.
-- The stack (kept). End-to-end runs use `HotdataStore` on the local stack. A phase that
+- The stack (kept). End-to-end runs use `HotdataStore` on the local stack, with the vector
+  ranking, its default from phase 10. A phase that
   changes a driver runs `make integration` and keeps the oracle test of `MemoryStore`
   against `HotdataStore`.
 - Changes to a surface (kept). A change to a frozen surface updates `CHANGELOG.md`,
   `docs/contracts.md`, and `docs/guarantees.md` in the same commit, and `MemoryStore` gets
   the same behavior as `HotdataStore`.
 
-## Phase 10. The ranking, and episode chunks
-
-Goal: the default ranking of `HotdataStore` is the one that scores best, and the reason
-for the gap between the two rankings is known. The reader gets the accuracy of phase 8
-for fewer tokens, because the block holds the chunks of a session that match, and not
-the whole session.
-
-In phase 8, `search` at 64,000 characters scored 45 on both samples with about 12,800
-reader tokens at the median. At 32,000 characters it scored 43 on sample A with 5,715
-tokens. A session is one episode, so an episode that holds one needed turn still fills
-the budget with every other turn. `load` already cuts a document into chunks of
-`chunk_chars`, and each chunk is an episode.
-
-The runs use the options of phase 9. A run with `--keep` captures once for each ranking,
-chunk size, and commit of `src/hotmemory`, and each other budget or episodes value is a run
-with `--reuse`. A commit that changes `src/hotmemory` makes the kept memory of earlier
-commits unusable: delete it by hand after the runs that need it. Check each library change
-first with `--smoke --workers 4`. The first smoke run after a change to `capture` pays
-for extraction.
-
-Tasks:
-
-1. Explain the gap on the 419 retrieval questions, with no reader model. Run the fused
-   query with one arm left out at a time: BM25 and content, content and cue, and BM25
-   alone. Episodes have no cues, so in the retrieval run the cue arm adds nothing. Find
-   which arm costs the most and on which question types.
-2. Run the memory arm on sample A with each ranking, with `search` at 64,000 characters.
-   The fused memory of the phase 9 proof is kept, at commit `b5443ac` of `src/hotmemory`.
-   The vector ranking needs one run with `--keep`.
-3. Propose the default ranking and the surface of episode chunks in `docs/contracts.md`,
-   and stop for the owner's agreement. The ranking: the vector ranking, or a rebuilt
-   fusion that ranks BM25 inside the scope or fuses two arms with no weights. The chunks,
-   as a starting point: `capture` with `episode` takes `chunk_chars`, cuts the text at
-   blank lines outside fences, without the headings and prefixes of `load`, and stores
-   chunk n under `<episode>-<n>`. The extractor still reads the whole text once. Each fact
-   cites every chunk, and the block shows a run of chunk sources as one range. A fact line
-   is still a little longer, so the known facts that the extractor reads can change, and
-   part of the extraction can miss the cache. The proposal names which chunks a fact
-   cites, and how `"cited"` uses them.
-4. Build the agreed change for both drivers, with `CHANGELOG.md`, `docs/contracts.md`,
-   `docs/guarantees.md`, and the skill commands. If the default ranking changes, the
-   oracle test and the benchmark runner follow.
-5. Run `search` with chunks of 1,000, 2,000, and 4,000 characters, at budgets of 8,000,
-   16,000, and 32,000 characters, on sample A. Each chunk size is one run with `--keep`,
-   and each budget after the first is a run with `--reuse`. Report accuracy against
-   reader tokens, next to the phase 8 runs.
-6. Run the best configuration on sample B, rerun the retrieval score on all 419 questions
-   with the agreed ranking, and diagnose the misses.
-
-Acceptance criteria:
-
-- `docs/benchmarks.md` reports the ablation of task 1, the retrieval score of the agreed
-  ranking, and each chunk size and budget.
-- The search inside `capture` uses the same ranking as `recall`, and a test proves it.
-- A configuration with chunks scores at least 45 on sample A and 45 on sample B with
-  fewer reader tokens at the median than 12,849, or the report states why none does.
-- `MemoryStore` and `HotdataStore` return the same block for the same calls with chunks.
-
-Stop and ask if:
-
-- The ablation shows that the gap comes from the data and not from an arm, for example
-  that BM25 favors a long session.
-- Chunks need a new `Store` method or a new record field.
-- No chunk size reaches 43 on sample A within 6,000 reader tokens at the median.
-
 ## Phase 11. A large memory store
 
 Goal: numbers for hotmemory at 10,000, 100,000, and 1,000,000 memories: the time of a
 write and of a search, and the accuracy of retrieval when the store is large. The owner
-asked for it on 2026-10-16, and the tasks are planned when phase 10 closes.
+asked for it on 2026-10-16. Phase 10 closed on 2026-10-19, and the owner paused the
+workstream before this phase. The tasks are planned when the owner resumes it.
 
 The parts discussed so far:
 
@@ -205,6 +152,17 @@ The parts discussed so far:
 - A comparison with other memory layers in one harness, such as MemoryBench, with the
   same questions, reader, and judge. It needs accounts for each service and the owner's
   yes on its cost.
+
+What phase 10 changed for this phase:
+
+- The default ranking is the vector ranking. The loss of BM25 hits in a narrow scope now
+  applies only with `ranking="fused"`.
+- With chunks, a session is many episode rows: about 11 for a session of 10,800
+  characters, in chunks of 1,000. A store with chunks reaches each size sooner.
+- `list_managed_databases` of `hotdata-framework` 0.14.1 reads only the first 100
+  databases, and `HotdataStore.provision` uses it. A run that makes many databases, or a
+  workspace that holds more than 100, can make `provision` miss a database and create a
+  second one with the same name. It is filed as hotdata-dev/sdk-python-framework#89.
 
 ## Phase 12. Supersede in capture
 
