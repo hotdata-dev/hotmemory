@@ -132,9 +132,35 @@ alone.
 
 ### M4. What does a SQL INSERT cost against a file load?
 
-With `RUNTIMEDB_ENGINE__SQL_WRITES=true`, time one hundred single-row INSERT statements and
-one hundred single-row upload-and-load calls into the same table shape. Record the cost per
-call of each.
+Time one hundred single-row INSERT statements and one hundred single-row upload-and-load
+calls into the same table shape. Record the cost per call of each. From 2026-10-21, also
+time five flushes of 1, 10, 100, and 1,000 rows with 1,536-dimension vectors, by INSERT
+and by upload and load. Run it with `scripts/measure_local.py --only m4`.
+
+Cloud result, 2026-10-21, `api.hotdata.dev`: the engine accepted INSERT. The engine ran
+SQL writes without a setting from 2026-10-18. Two runs gave the same picture, and the
+table gives the second. Each value is the median.
+
+| Write | By INSERT | By upload and load |
+|---|---|---|
+| One row, no vector, 100 calls | 494 ms | 1,693 ms |
+| One row with a vector, 5 calls | 531 ms | 1,682 ms |
+| 10 rows with vectors, 5 calls | 1,744 ms | 1,811 ms |
+| 100 rows with vectors, 5 calls | 13,338 ms | 2,526 ms |
+| 1,000 rows with vectors, 5 calls | refused, `Payload Too Large` | 8,323 ms |
+
+The vectors go into the SQL text as array literals. So a flush of 100 rows is 3.2 MB of
+SQL, against 1.0 MB of parquet, and a flush of 1,000 rows is 32 MB, over the size limit of
+a query request. An INSERT is about three times faster than a load for one row, the same
+for 10 rows, and slower above that. Every table held the expected row count after the
+calls.
+
+Local result, 2026-10-21, the local stack with an engine image of 2026-10-08: one row by
+INSERT took a median of 22 ms, against 30 ms by load. A flush of 100 rows with vectors
+took 874 ms by INSERT and 93 ms by load. A flush of 1,000 rows by INSERT was refused with
+`Payload Too Large`, and took 248 ms by load.
+
+The results of 2026-10-05 follow.
 
 Cloud result, 2026-10-05, `api.hotdata.dev`: the engine refused the first INSERT with
 `Bad Request`. Production does not turn on SQL writes, so this is the expected result. One
@@ -148,7 +174,7 @@ of 29 ms, and a mean of 24 ms. Both tables held 101 rows after the calls.
 
 Locally, a load costs about 24 ms, against 2,136 ms in the cloud. So almost all of the
 cloud cost is outside the engine. An INSERT is about 30 percent cheaper than a load
-locally, but production does not accept it.
+locally, but production did not accept it on 2026-10-05.
 
 ### M5. At what size does an index beat a scan?
 

@@ -309,8 +309,9 @@ fails, the record has no cue row. If the record load fails, a cue row is left wi
 record, and the search drops it.
 
 Each load uploads its file once, and then calls the load API. Only the load call is
-retried on 409. A load costs about 2.1 seconds in the cloud, and the cost does not change
-with row count. [measured] So hotmemory buffers puts in a writer, and each flush pays for
+retried on 409. A load of rows with no vector costs about 2.1 seconds in the cloud, and
+the cost does not change with row count. [measured] With 1,536-dimension vectors, a load
+of 100 rows took 2.5 s, and 1,000 rows 8.3 s. [measured, M4, 2026-10-21] So hotmemory buffers puts in a writer, and each flush pays for
 one load for each table, not one load for each record.
 
 If a load takes more than 10 seconds, the framework asks the API to run it as a job, and
@@ -319,7 +320,8 @@ object storage and records them in the catalog. The order of those two steps was
 observed.
 
 hotmemory never sends `INSERT`, `UPDATE`, or `DELETE` in SQL. Every change to a row is a
-keyed load. The cloud refuses SQL writes. [measured]
+keyed load. The cloud accepts `INSERT` and refuses `UPDATE` and `DELETE`. One row by
+`INSERT` took 531 ms in the cloud, against 1,682 ms by load. [measured, M4, 2026-10-21]
 
 ## Remember and capture
 

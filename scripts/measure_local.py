@@ -8,8 +8,9 @@
 """Run measurements M6, M4, and M5 against a local RuntimeDB container or the cloud.
 
 By default the script targets a running local container. It does not start the
-container. Start it with `make local-up`, which sets RUNTIMEDB_ENGINE__SQL_WRITES=true
-for M4. With --cloud, it targets the Hotdata cloud API instead.
+container. Start it with `make local-up`. With --cloud, it targets the Hotdata cloud API
+instead. With --only and a comma-separated list, such as --only m4, it runs only those
+measurements.
 
 Reads the connection from the environment:
 
@@ -56,6 +57,9 @@ from hotdata_framework.env import default_api_key, default_host, pick_workspace
 
 SCHEMA = "public"
 M4_CALLS = 100
+M4_FLUSHES = (1, 10, 100, 1000)
+M4_FLUSH_RUNS = 5
+M4_DIMENSIONS = 1536
 M5_DIMENSIONS = 64
 M5_RUNS = 5
 M5_DEPTH = 100
@@ -305,6 +309,77 @@ def measure_insert(client: HotdataClient, work: Path, prefix: str) -> dict[str, 
             out[f"{table}_rows"] = int(result.rows[0][0])
     finally:
         client.delete_managed_database(db)
+    out["flushes"] = measure_flushes(client, work, prefix)
+    return out
+
+
+def flush_rows(size: int, start: int, rng: random.Random) -> pa.Table:
+    return pa.table(
+        {
+            "id": [f"row-{start + n}" for n in range(size)],
+            "content": [f"row {start + n} {rng.choice(WORDS)}" for n in range(size)],
+            "embedding": [[rng.uniform(-1, 1) for _ in range(M4_DIMENSIONS)] for _ in range(size)],
+        },
+        schema=pa.schema(
+            [
+                ("id", pa.string()),
+                ("content", pa.string()),
+                ("embedding", pa.list_(pa.float32())),
+            ]
+        ),
+    )
+
+
+def insert_sql(table: str, rows: pa.Table) -> str:
+    values = ", ".join(
+        f"('{row['id']}', '{row['content']}', CAST({vector_literal(row['embedding'])} AS REAL[]))"
+        for row in rows.to_pylist()
+    )
+    return f"INSERT INTO {table_ref(table)} (id, content, embedding) VALUES {values}"
+
+
+def measure_flushes(client: HotdataClient, work: Path, prefix: str) -> dict[int, dict[str, Any]]:
+    """Time flushes of M4_FLUSHES rows with vectors, by INSERT and by upload and load."""
+    rng = random.Random(4)
+    out: dict[int, dict[str, Any]] = {}
+    db = client.create_managed_database(f"{prefix}-m4f", tables=["by_load", "by_sql"])
+    try:
+        seed = flush_rows(1, -1, rng)
+        for table in ("by_load", "by_sql"):
+            client.load_managed_table(
+                db, table, file=write_parquet(work, f"m4f_{table}", seed), mode="replace"
+            )
+        start = 0
+        for size in M4_FLUSHES:
+            entry: dict[str, Any] = {"sql": [], "load": []}
+            for _run in range(M4_FLUSH_RUNS):
+                rows = flush_rows(size, start, rng)
+                start += size
+                sql = insert_sql("by_sql", rows)
+                entry["sql_bytes"] = len(sql.encode())
+                try:
+                    entry["sql"].append(timed(lambda sql=sql: client.execute_sql(sql, database=db)))
+                except RuntimeError as e:
+                    entry["sql_error"] = short(e)
+                    break
+            for run in range(M4_FLUSH_RUNS):
+                rows = flush_rows(size, start, rng)
+                start += size
+                path = write_parquet(work, f"m4f_load_{size}_{run}", rows)
+                entry["parquet_bytes"] = Path(path).stat().st_size
+                entry["load"].append(
+                    timed(
+                        lambda path=path: client.load_managed_table(
+                            db, "by_load", file=path, mode="append"
+                        )
+                    )
+                )
+            out[size] = entry
+        for table in ("by_load", "by_sql"):
+            result = client.execute_sql(f"SELECT count(*) FROM {table_ref(table)}", database=db)
+            out.setdefault(0, {})[f"{table}_rows"] = int(result.rows[0][0])
+    finally:
+        client.delete_managed_database(db)
     return out
 
 
@@ -472,11 +547,14 @@ def summary(times: list[float]) -> str:
 def main() -> int:
     provider = os.environ.get("HOTMEMORY_EMBEDDING_PROVIDER", "sys_emb_openai")
     sizes = [int(s) for s in os.environ.get("HOTMEMORY_M5_SIZES", "1000,10000,100000").split(",")]
-    cloud = "--cloud" in sys.argv[1:]
+    args = sys.argv[1:]
+    cloud = "--cloud" in args
+    only = set(args[args.index("--only") + 1].split(",")) if "--only" in args else set()
+    wanted = only or {"m4", "m5", "m6"}
     if cloud:
         prefix = env("HOTMEMORY_MEASURE_DB")
         client = connect_cloud()
-        names = {f"{prefix}-{m}" for m in ("m4", "m5", "m6")}
+        names = {f"{prefix}-{m}" for m in ("m4", "m4f", "m5", "m6")}
         taken = sorted(names & {d.description for d in client.list_managed_databases()})
         if taken:
             sys.exit(
@@ -488,28 +566,41 @@ def main() -> int:
     started_at = now()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        bare = measure_bare(client, work, provider, prefix)
+        bare = measure_bare(client, work, provider, prefix) if "m6" in wanted else []
         print("m6 done", file=sys.stderr)
-        try:
-            insert = measure_insert(client, work, prefix)
-        except RuntimeError as e:
-            insert = {"setup_error": short(e)}
+        insert: dict[str, Any] = {}
+        if "m4" in wanted:
+            try:
+                insert = measure_insert(client, work, prefix)
+            except RuntimeError as e:
+                insert = {"setup_error": short(e)}
         print("m4 done", file=sys.stderr)
-        try:
-            scale = measure_scale(client, work, sizes, provider, prefix)
-        except RuntimeError as e:
-            scale = {"sizes": {}, "coexistence": [], "setup_error": short(e)}
+        scale: dict[str, Any] = {"sizes": {}, "coexistence": []}
+        if "m5" in wanted:
+            try:
+                scale = measure_scale(client, work, sizes, provider, prefix)
+            except RuntimeError as e:
+                scale = {"sizes": {}, "coexistence": [], "setup_error": short(e)}
         print("m5 done", file=sys.stderr)
 
     print(f"## {'Cloud' if cloud else 'Local'} measurements of M4 to M6, {started_at}")
     print()
     print(f"Host: {client.host}.")
     print()
-    print("### M6")
-    print()
-    for label, outcome in bare:
-        print(f"- {label}: {outcome}")
-    print()
+    if "m6" in wanted:
+        print("### M6")
+        print()
+        for label, outcome in bare:
+            print(f"- {label}: {outcome}")
+        print()
+    if "m4" in wanted:
+        print_insert(insert)
+    if "m5" in wanted:
+        print_scale(scale)
+    return 0
+
+
+def print_insert(insert: dict[str, Any]) -> None:
     print("### M4")
     print()
     if "setup_error" in insert:
@@ -522,7 +613,30 @@ def main() -> int:
         f"- Rows after the calls: by_sql {insert.get('by_sql_rows')}, "
         f"by_load {insert.get('by_load_rows')} (each includes one seed row)."
     )
+    flushes = insert.get("flushes", {})
+    for size, entry in flushes.items():
+        if size == 0:
+            continue
+        print(
+            f"- Flush of {size} rows with {M4_DIMENSIONS}-dimension vectors, by INSERT "
+            f"({entry.get('sql_bytes', 0) / 1e6:.1f} MB of SQL): {summary(entry['sql'])}."
+        )
+        if "sql_error" in entry:
+            print(f"  - error: {entry['sql_error']}")
+        print(
+            f"- Flush of {size} rows by upload and append load "
+            f"({entry.get('parquet_bytes', 0) / 1e6:.1f} MB of parquet): "
+            f"{summary(entry['load'])}."
+        )
+    if 0 in flushes:
+        print(
+            f"- Rows after the flushes: by_sql {flushes[0].get('by_sql_rows')}, "
+            f"by_load {flushes[0].get('by_load_rows')} (each includes one seed row)."
+        )
     print()
+
+
+def print_scale(scale: dict[str, Any]) -> None:
     print("### M5")
     print()
     if "setup_error" in scale:
@@ -545,7 +659,6 @@ def main() -> int:
     print()
     for label, outcome in scale["coexistence"]:
         print(f"- {label}: {outcome}")
-    return 0
 
 
 if __name__ == "__main__":

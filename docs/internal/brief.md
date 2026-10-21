@@ -65,9 +65,10 @@ These come from measurements against Hotdata between 2026-08-27 and 2026-09-18.
 
 - A write is a file load in every released engine and in production. The caller uploads
   parquet and calls a keyed load in replace, append, upsert, update, or delete mode.
-  [measured] On RuntimeDB main since 2026-09-25, a SQL write path exists behind the
-  `[engine] sql_writes` flag, off by default, and production does not set it. INSERT and
-  CREATE TABLE, CREATE TABLE AS, and DROP TABLE are implemented. An INSERT is an append
+  [measured] On RuntimeDB main since 2026-09-25, a SQL write path exists. It ran behind
+  the `[engine] sql_writes` flag until 2026-10-18, and runs for every instance after.
+  The cloud accepted INSERT on 2026-10-21. [measured, M4] INSERT and CREATE TABLE, CREATE
+  TABLE AS, and DROP TABLE are implemented. UPDATE and DELETE are refused. An INSERT is an append
   load whose source is a query: the planned rows are staged as parquet and appended through
   the same locked load path, so it holds the same per-table lock and maintains indexes the
   same way. A SQL write needs the read and write claims and can target only the database's
@@ -320,7 +321,7 @@ because the bare container refuses managed tables. All six were run on 2026-10-0
   index still returns it.
 - M3. Run two processes that load the same table at once with the serialized writer in
   each. Record how many 409s occur and whether the retry bound of the driver is enough.
-- M4. With `RUNTIMEDB_ENGINE__SQL_WRITES=true`, time one hundred single-row INSERT
+- M4. With SQL writes on, time one hundred single-row INSERT
   statements and one hundred single-row upload-plus-load calls into the same table shape.
   Record both per-call costs.
 - M5. Load one thousand, ten thousand, and one hundred thousand rows into the `memory`
