@@ -322,11 +322,15 @@ openai = [
 [package.dev-dependencies]
 bench = [
     { name = "hotmemory", extra = ["hotdata", "openai"] },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tiktoken" },
 ]
 dev = [
     { name = "hotmemory", extra = ["hotdata", "openai"] },
     { name = "mypy" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pytest" },
     { name = "pytest-socket" },
     { name = "ruff" },
@@ -344,11 +348,13 @@ provides-extras = ["hotdata", "openai"]
 [package.metadata.requires-dev]
 bench = [
     { name = "hotmemory", extras = ["hotdata", "openai"] },
+    { name = "numpy" },
     { name = "tiktoken" },
 ]
 dev = [
     { name = "hotmemory", extras = ["hotdata", "openai"] },
     { name = "mypy" },
+    { name = "numpy" },
     { name = "pytest" },
     { name = "pytest-socket" },
     { name = "ruff" },

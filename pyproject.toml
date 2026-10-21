@@ -27,7 +27,7 @@ dev = [
     "ruff",
     { include-group = "bench" },
 ]
-bench = ["hotmemory[hotdata,openai]", "tiktoken"]
+bench = ["hotmemory[hotdata,openai]", "numpy", "tiktoken"]
 
 [tool.ruff]
 line-length = 100
