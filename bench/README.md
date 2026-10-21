@@ -37,6 +37,7 @@ The options are these:
 | `--location` | `local` or `cloud` | `local` |
 | `--url` | the address of the local engine | `http://localhost:3000` |
 | `--limit` | the first N scored questions | every scored question |
+| `--data` | `s` for LongMemEval-S, or `m` for LongMemEval-M, about 500 sessions for each question. The M file is 2.74 GB. The runner reads it one question at a time and keeps only the user turns. | `s` |
 | `--ablate` | also rank with the fused query less one arm at a time: `bm25-content`, `content-cue`, and `bm25`; needs `--driver hotdata` | off |
 
 With `--location cloud`, the runner reads the connection from `HOTDATA_API_KEY`,

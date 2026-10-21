@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from bench import embed
-from bench.data import DATA_DIR, DATA_FILE, DATA_REVISION, DATA_SHA256, Question, load
+from bench.data import DATA_DIR, DATA_REVISION, DATASETS, Question, load
 from bench.episodes import scope, session_of, write_episodes
 from bench.metrics import KS, mean, score
 from hotmemory import Embedder, Filter, Hit, MemoryStore, Store
@@ -227,14 +227,17 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--location", choices=("local", "cloud"), default="local")
     parser.add_argument("--url", default="http://localhost:3000")
     parser.add_argument("--limit", type=int, default=None, help="the first N scored questions")
+    parser.add_argument("--data", choices=sorted(DATASETS), default="s", help="LongMemEval-S or -M")
     args = parser.parse_args(argv)
+    data_file, data_sha256 = DATASETS[args.data]
 
     rankings = RANKINGS if args.ranking == "both" else (args.ranking,)
     if args.ablate:
         if args.driver == "memory":
             parser.error("--ablate needs --driver hotdata")
         rankings = (*rankings, *ABLATED)
-    questions = [question for question in load(DATA_DIR / DATA_FILE) if question.is_scored]
+    loaded = load(DATA_DIR / data_file, data_sha256, user_only=args.data == "m")
+    questions = [question for question in loaded if question.is_scored]
     questions = questions[: args.limit]
     commit = _commit()
     started = datetime.now(UTC)
@@ -255,10 +258,10 @@ def main(argv: Sequence[str] | None = None) -> Path:
     summaries = {name: summarize(rows, name) for name in rankings}
     result = {
         "config": {
-            "benchmark": "LongMemEval-S",
-            "data_file": DATA_FILE,
+            "benchmark": f"LongMemEval-{args.data.upper()}",
+            "data_file": data_file,
             "data_revision": DATA_REVISION,
-            "data_sha256": DATA_SHA256,
+            "data_sha256": data_sha256,
             "granularity": "session, user turns only",
             "embedder": {
                 "model": embed.MODEL,
@@ -288,6 +291,8 @@ def main(argv: Sequence[str] | None = None) -> Path:
     embedder.close()
     RESULTS_DIR.mkdir(exist_ok=True)
     name = f"retrieval-{target.driver}-{target.location}-{args.mode}-{'-'.join(rankings)}"
+    if args.data != "s":
+        name = name.replace("retrieval-", f"retrieval-{args.data}-", 1)
     if args.limit is not None:
         name += f"-first{args.limit}"
     path = RESULTS_DIR / f"{name}.json"

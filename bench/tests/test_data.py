@@ -103,3 +103,15 @@ def test_write_episodes(questions: dict[str, Question]) -> None:
     assert {session_of(hit.record.sources) for hit in hits} == {
         session.id for session in question.episodes()
     }
+
+
+def test_load_user_only_streams_the_same_questions_with_user_turns() -> None:
+    fixture = Path(__file__).with_name("fixture.json")
+    full = load(fixture, expected_sha256=None)
+    lean = load(fixture, expected_sha256=None, user_only=True)
+    assert [q.id for q in lean] == [q.id for q in full]
+    for whole, part in zip(full, lean, strict=True):
+        assert [s.id for s in part.sessions] == [s.id for s in whole.sessions]
+        assert all(t.role == "user" for s in part.sessions for t in s.turns)
+        assert [s.user_text for s in part.sessions] == [s.user_text for s in whole.sessions]
+        assert part.evidence == whole.evidence
