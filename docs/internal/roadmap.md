@@ -28,7 +28,9 @@ conditions of each phase. The library stays deterministic: no code in `src/hotme
 calls a model. Latency is not a goal, and its work waits under Deferred, except the
 measurements at scale of phase 11. On 2026-10-16 the owner added phases 9 to 11, and the
 later phases moved to 12 to 15. On 2026-10-19, after phase 10 closed, the owner paused the
-workstream to work on other things first. Phase 11 opens when the owner resumes it.
+workstream to work on other things first. On 2026-10-21 the owner resumed it with phase
+11, to test hotmemory as a large memory store: recall from one store that holds 100,000
+memories or more.
 
 | Phase | Delivers | Status |
 |---|---|---|
@@ -37,7 +39,7 @@ workstream to work on other things first. Phase 11 opens when the owner resumes 
 | 8. Episodes behind facts | `capture` stores its text as an episode that its facts cite. `recall` can add the cited or ranked episodes to its block, within one budget. | closed 2026-10-15, PR #24 |
 | 9. Faster evaluation | The runner keeps the memory of a run and reuses it for runs that change only `recall` or the reader. A smoke run of 18 questions on `MemoryStore`. A run keeps its finished questions when it stops. No library change. | closed 2026-10-16, PR #28 |
 | 10. The ranking, and episode chunks | An ablation of the fused ranking, and a default ranking chosen by the benchmark. `capture` stores a session as chunks, so the block holds the chunks that match and not whole sessions, for fewer reader tokens. | closed 2026-10-19, PR #30 |
-| 11. A large memory store | The time of a write and a search at 10,000, 100,000, and 1,000,000 memories, by scope size, locally and in the cloud. The vector rankings on the vector index once the engine fixes the filtered search, with tests that every record is found through both indexes. Retrieval on LongMemEval-M. Then a comparison with other memory layers in one harness. | proposed |
+| 11. A large memory store | Recall from one store that holds 100,000 memories or more. SQL `INSERT` measured in the cloud, and taken for appends if it is faster. The time of a write and a search at 10,000, 100,000, and 1,000,000 rows built from real text, by scope size, locally and in the cloud, with each top k checked against a brute-force ranking. Retrieval on LongMemEval-M. Samples A and B answered from one store of every LongMemEval-S question. A test of cues on facts. | open |
 | 12. Supersede in capture | A fact can name the current record that it replaces, and `remember` closes that record. The extractor decides, and the library applies the rule. | proposed |
 | 13. Search over history | `recall(as_of=T)` returns the revision valid at T, with the as-of filter in SQL, and a date window from the caller. | proposed |
 | 14. The full benchmark | The final configuration on all 500 LongMemEval-S questions, and a LoCoMo smoke test. | proposed |
@@ -53,8 +55,7 @@ taken up now.
   and is on PyPI.
 - Latency, from phase 5: a conditional write for more than one writer, text loaded only
   for ranked rows, and the time of each cloud request. The second workstream measures
-  accuracy first. Native DML for writes and the filtered vector index search moved to
-  phase 11 on 2026-10-16, to be measured at scale.
+  accuracy first. Phase 11 measures SQL writes and the search at scale.
 - Model calls, from the discussion of 2026-10-13: a model-backed extractor in an extra,
   and decision calls with a probability, for example to decide a supersede or to route a
   recall. The library stays deterministic in the second workstream.
@@ -71,7 +72,19 @@ taken up now.
 - The first-page listing of `hotdata-framework`, from phase 10. `list_managed_databases`
   and `resolve_managed_database` read only the first 100 databases, and
   `HotdataStore.provision` uses the first. It is filed as
-  hotdata-dev/sdk-python-framework#89, and waits for the framework fix or for phase 11.
+  hotdata-dev/sdk-python-framework#89. Phase 11 works around it in `provision`.
+- The vector rankings on the vector index, from phase 2. A filtered search through the
+  vector index misses rows loaded after the build. The defect is reported to the engine
+  team. Until it is fixed, the vector rankings scan, and phase 11 measures that cost.
+- A BM25 search that applies the namespace filter inside the search, from phase 9. BM25
+  ranks the whole table before the filter, so a narrow scope in a shared table loses
+  hits. It needs a change in the engine. Phase 11 measures the loss.
+- SQL `UPDATE` and `DELETE`, from phase 11. The engine refuses them, so a closed
+  revision, `forget`, and `sweep` stay on keyed loads.
+- The comparison with other memory layers in one harness, such as MemoryBench, from
+  phase 11. It needs an account and a cost for each service, and it does not test a
+  large store.
+- BEAM at 10 million tokens, from phase 11, as a later test of one very large store.
 - The ideas of the hindsight study of 2026-10-09 that the second workstream does not
   take, for later planning:
   - A chunk-hash delta on re-capture.
