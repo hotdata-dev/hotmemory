@@ -479,9 +479,11 @@ the table at the build of the index. [measured, local, 2026-10-08] The query nam
 table with an alias and names the distance, and that form makes the engine scan.
 [measured, local, 2026-10-08]
 
-BM25 needs its index. `bm25_search` refuses to run on a table without one. [measured] It
-fetches its top rows from the whole table before the filters apply. So a narrow scope can
-leave BM25 with fewer than k rows, while the vector rankings still rank every row in scope.
+BM25 needs its index. `bm25_search` refuses to run on a table without one. [measured] The
+engine applies the filters inside `bm25_search`, so BM25 fetches its top rows from the
+rows in scope. In a table of 2,020 rows, a depth of 100 in a scope of 20 rows returned all
+20, although each scored below the 2,000 other rows. [measured, local and cloud,
+2026-10-21] Whether the rows of other scopes change the BM25 scores was not measured.
 
 BM25 ranks each record table on its own, because the BM25 scores of two tables do not
 compare. A fused search with an `episode` filter and another kind thus has four rankings.

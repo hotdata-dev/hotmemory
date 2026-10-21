@@ -209,7 +209,6 @@ Tasks:
    - For each search, whether the top k equals a brute-force top k in Python over the
      same rows. While the rankings scan, any difference is a defect.
    - The `recall_any@k` against the evidence sessions.
-   - For the fused ranking, the share of BM25 hits that pass the namespace filter.
    
    It runs on the local stack first, then in the cloud. Embeddings for 1,000,000 rows
    cost about $2 to $5. The time of the load is not known. The script stops after
@@ -261,8 +260,6 @@ Not in this phase, under Deferred in `roadmap.md`:
 - The vector rankings on the vector index. They wait for the engine's fix of the filtered
   search. When it lands, tests must prove that every write, revision, and delete is found
   through the vector index and the BM25 index.
-- A BM25 search that applies the namespace filter inside the search. It needs a change in
-  the engine, and the request goes to the engine team with the numbers of task 4.
 - `UPDATE` and `DELETE` by SQL, until the engine has them.
 - The comparison with other memory layers, such as MemoryBench. It needs an account and a
   cost for each service, and it does not test a large store.

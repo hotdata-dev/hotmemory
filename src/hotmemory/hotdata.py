@@ -802,10 +802,10 @@ def _fused_query(tables: Sequence[str], where: str, vector: str, text: str, k: i
 
     Each ranking keeps only the rows that `where` keeps, numbers them from 1, and adds
     1 / (RRF_CONSTANT + rank) to the score of each row. BM25 ranks each table on its own,
-    because BM25 scores of two tables do not compare. BM25 fetches its depth before the
-    filter applies, so a narrow filter can leave it with fewer rows. The vector rankings
-    filter first and rank by a scan, in the form of `_vector_query`, so they rank every
-    row that `where` keeps.
+    because BM25 scores of two tables do not compare. The engine applies `where` inside
+    `bm25_search`, so BM25 fetches its depth from the rows that `where` keeps. The vector
+    rankings filter first and rank by a scan, in the form of `_vector_query`, so they rank
+    every row that `where` keeps.
     """
     depth = _depth(k)
     rank = "ROW_NUMBER() OVER (ORDER BY {order}) AS rank"

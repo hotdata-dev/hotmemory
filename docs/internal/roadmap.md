@@ -76,9 +76,6 @@ taken up now.
 - The vector rankings on the vector index, from phase 2. A filtered search through the
   vector index misses rows loaded after the build. The defect is reported to the engine
   team. Until it is fixed, the vector rankings scan, and phase 11 measures that cost.
-- A BM25 search that applies the namespace filter inside the search, from phase 9. BM25
-  ranks the whole table before the filter, so a narrow scope in a shared table loses
-  hits. It needs a change in the engine. Phase 11 measures the loss.
 - SQL `UPDATE` and `DELETE`, from phase 11. The engine refuses them, so a closed
   revision, `forget`, and `sweep` stay on keyed loads.
 - The comparison with other memory layers in one harness, such as MemoryBench, from

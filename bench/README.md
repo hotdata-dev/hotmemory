@@ -103,8 +103,8 @@ The options are these:
 Each worker gets the questions in turn. Without `--keep` or `--reuse`, it runs them over a
 new local database of its own, and empties the namespaces of each question after it. Each
 table then holds one question at a time, as in a run with one worker. With
-`--memory-ranking fused`, BM25 ranks over the whole table before the scope filter, so the
-rows of a second question in a table can change the ranking. An extractor variant names a prompt and a model. Each fact carries
+`--memory-ranking fused`, the BM25 scores can depend on every row of the table, so the
+rows of a second question in a table can change the ranking. This was not measured. An extractor variant names a prompt and a model. Each fact carries
 the source `session:<hash>`, where the hash is the first 12 hex digits of the SHA-256 of
 the session id. The block shows the sources to the reader, and the id of an evidence
 session holds `answer`, so the source does not show the id. If an extractor reply reaches
@@ -136,9 +136,9 @@ uv run --group bench --env-file .env python -m bench.e2e --run --arms memory --e
 ```
 
 With `--keep`, each question runs over a new local database of its own, and the database
-stays after the run. One database holds one question. With `--memory-ranking fused`, BM25
-ranks the whole table before the namespace filter, so the memory of a second question
-would change the block. The
+stays after the run. One database holds one question. With `--memory-ranking fused`, the
+BM25 scores can depend on every row of the table, so the memory of a second question can
+change the block. This was not measured. The
 name of the database is `hotmemory-kept-<sample>-<extractor><digest>-<cites>-<ranking>-<commit>-<question id>`:
 
 | Part | What it holds |

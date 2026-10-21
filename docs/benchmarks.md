@@ -73,9 +73,11 @@ number on S compares with this table.
 ### Every question in one table
 
 A second run kept the episodes of all 419 questions in the same tables, 19,864 rows, and
-searched each question inside its own namespace. BM25 in the fused ranking takes its top
-rows from the whole table before the namespace filter applies, so this run tests that
-limit. On the local stack, the fused ranking scored higher at the top 5 and slightly lower
+searched each question inside its own namespace. This run was planned to test whether BM25
+loses rows of the namespace, because it was thought to rank the whole table before the
+filter. On 2026-10-21, a check showed that the engine applies the filter inside
+`bm25_search`, so BM25 loses no rows of the namespace. The cause of the small differences
+below was not measured. On the local stack, the fused ranking scored higher at the top 5 and slightly lower
 at the top 10. At the top 10, 1 more question had no evidence session. The vector ranking
 gave the same sessions in the same order in both runs. File:
 `retrieval-hotdata-local-shared-fused-vector.json`.

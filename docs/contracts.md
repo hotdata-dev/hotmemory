@@ -280,8 +280,8 @@ With `ranking="fused"`, the query has three parts.
    `forget_after`, and the `Filter`. The two vector rankings apply the filters first and
    then rank every row that is left by a scan. Thus a narrow scope keeps its recall. They do
    not use the vector index, because a filtered search through the index misses rows
-   loaded after its build. BM25 fetches its top rows from the whole table and then
-   applies the filters. Thus a narrow filter can leave BM25 with fewer rows than k.
+   loaded after its build. The engine applies the filters inside the BM25 search, so BM25
+   fetches its top rows from the rows that the filters keep.
 3. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking, and the query returns
    the k rows with the highest sum. Ties go to the smaller content distance, then to the
    newer row.
