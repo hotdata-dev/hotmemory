@@ -135,13 +135,19 @@ hotmemory ran LongMemEval-S, a public benchmark of 500 questions over long chat 
 on 2026-10-10. [docs/benchmarks.md](docs/benchmarks.md) gives every number with its
 configuration.
 
+On all 500 questions, on 2026-10-22, the memory arm scored 439 of 500 (87.8%). It ran
+`capture` with chunks of 1,000 characters and a `gpt-4o-mini` extractor, and `recall` with
+a budget of 16,000 characters, about 4,350 tokens of reader input. The reader and the judge
+were `gpt-4o-2024-08-06`. This is one run, and its 95% confidence interval is about 2.9
+points on each side. The 392 questions that no tuning used scored 88.0%.
+
 Retrieval needs no model except the embedder. The runner stored each session of a question
 as an episode in `HotdataStore` and searched with the question. The 419 scored questions
 had these results with the vector ranking. For 98.3% of them, an evidence session was in
 the top 5. For 99.3% of them, every evidence session was in the top 10.
 
-The end-to-end score ran on two samples of 54 questions, sample A on 2026-10-10 and
-sample B on 2026-10-14. Later rows give their own date. The reader and the judge were
+Before that run, the end-to-end score ran on two samples of 54 questions, sample A on
+2026-10-10 and sample B on 2026-10-14. Later rows give their own date. The reader and the judge were
 `gpt-4o-2024-08-06`.
 
 | What the reader got | Sample A | Sample B |
