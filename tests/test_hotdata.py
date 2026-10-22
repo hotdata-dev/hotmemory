@@ -412,6 +412,37 @@ def test_provision_builds_vector_indexes_only_when_asked(client: HotdataClient, 
         )
 
 
+def test_provision_builds_sorted_indexes_only_when_asked(client: HotdataClient, name: str) -> None:
+    store = provision(client, name)
+    assert (MEMORY_TABLE, "sorted") not in built_indexes(client, store)
+    assert (EPISODE_TABLE, "bm25") in built_indexes(client, store)
+    with pytest.raises(LayoutError, match="sorted index"):
+        HotdataStore.provision(
+            name,
+            embedder=fake_embedder,
+            model=MODEL,
+            dimensions=DIMENSIONS,
+            client=client,
+            sorted_index=True,
+        )
+
+
+def test_a_store_with_sorted_indexes_opens_without_the_option(
+    client: HotdataClient, name: str
+) -> None:
+    indexed = HotdataStore.provision(
+        name,
+        embedder=fake_embedder,
+        model=MODEL,
+        dimensions=DIMENSIONS,
+        client=client,
+        sorted_index=True,
+    )
+    assert {(MEMORY_TABLE, "sorted"), (EPISODE_TABLE, "sorted")} <= built_indexes(client, indexed)
+    plain = provision(client, name)
+    assert plain.database.id == indexed.database.id
+
+
 def test_a_store_with_vector_indexes_opens_without_the_option(
     client: HotdataClient, name: str
 ) -> None:

@@ -66,7 +66,7 @@ token. [local.md](../local.md) describes the local stack.
 | Concurrent writes | One lock in each store, and a retry on `409 RESOURCE_LOCKED` | Locks a table for each load, and refuses a second load with 409. [measured] |
 | Expiry | Hides a record past `forget_after` in SQL, and deletes it in `sweep` | Deletes nothing. [measured] |
 | Rows on disk | Builds each batch of rows as a parquet file | Stores the rows as parquet files and records them in DuckLake metadata. [observed, local] |
-| Indexes | Asks for four indexes at provision, or seven with `vector_index=True` | Builds and stores them. [observed, local] |
+| Indexes | Asks for two BM25 indexes at provision, two more sorted indexes with `sorted_index=True`, and three vector indexes with `vector_index=True` | Builds and stores them. [observed, local] |
 | Queries | Writes every SQL query, with values as literals | Plans and runs the SQL. |
 
 ## Where the data lives
@@ -88,7 +88,7 @@ erDiagram
         string kind "fact, profile, or procedure"
         string content "BM25 index"
         list_float content_embedding "vector index, cosine, with vector_index"
-        timestamp created_at "sorted index"
+        timestamp created_at "sorted index, with sorted_index"
         string superseded_by
         timestamp valid_from
         timestamp valid_until
@@ -100,7 +100,7 @@ erDiagram
         string kind "episode"
         string content "BM25 index"
         list_float content_embedding "vector index, cosine, with vector_index"
-        timestamp created_at "sorted index"
+        timestamp created_at "sorted index, with sorted_index"
     }
     cue_v1 {
         string id PK "the id of a record row"
@@ -121,7 +121,7 @@ UTC to the microsecond.
 
 | Table | Rows | Indexes |
 |---|---|---|
-| `memory_v1` | The records of kind `fact`, `profile`, and `procedure` | BM25 on `content`, sorted on `created_at`, and with `vector_index=True` plain cosine vector on `content_embedding` |
+| `memory_v1` | The records of kind `fact`, `profile`, and `procedure` | BM25 on `content`, with `sorted_index=True` sorted on `created_at`, and with `vector_index=True` plain cosine vector on `content_embedding` |
 | `episode_v1` | The records of kind `episode` | The same |
 | `cue_v1` | One row for each record that has cues: its id and the vector of its cues | None, or with `vector_index=True` plain cosine vector on `cues_embedding` |
 | `meta_v1` | One row: the schema version, the embedding model name, and the vector size | None |
@@ -163,7 +163,7 @@ flowchart TD
     same -- "no" --> bad["Raise LayoutError"]
     count -- "none" --> create["Create the database<br/>with four tables keyed by id"]
     create --> seed["Load one seed row into<br/>memory_v1, episode_v1, and cue_v1"]
-    seed --> index["Build the four indexes,<br/>or seven with vector_index"]
+    seed --> index["Build the two BM25 indexes,<br/>and the optional ones"]
     index --> unseed["Delete the seed rows"]
     unseed --> meta["Load the meta row into meta_v1"]
     meta --> open
@@ -199,7 +199,7 @@ sequenceDiagram
         F->>S: PUT the parquet file
         F->>API: finish the upload, then load it
     end
-    loop four indexes, or seven with vector_index
+    loop two BM25 indexes, and the sorted and vector indexes when asked
         P->>F: create_index(table, column, type, metric)
         F->>API: submit the index build
         F->>API: poll every 0.2 s until it is done
@@ -690,7 +690,6 @@ These claims on this page come from reading source, or were not measured:
 - The order in which the engine writes parquet files and records them in the catalog.
 - Whether each load writes exactly one parquet file.
 - Where the cloud keeps the catalog, the parquet files, and the index files.
-- Whether the sorted index on `created_at` serves `list` and `sweep`.
 - The cost of a whole document `load` in the cloud.
 - `provision` in a workspace with more than 100 databases. An offline test proves the
   paging against a fake listing.

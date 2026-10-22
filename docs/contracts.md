@@ -236,9 +236,17 @@ timestamp in UTC to the microsecond. The embedding model and the vector size are
 each database. If an embedder returns a vector of another size, the write or search raises
 `ValueError`, and a write sends nothing.
 
-`provision` builds two indexes in each record table: BM25 on `content`, and sorted on
-`created_at`. The engine refuses an index on an empty table. So `provision` loads one seed
-row into each table, builds the indexes, and deletes the seed rows.
+`provision` builds one index in each record table: BM25 on `content`. The engine refuses
+an index on an empty table. So `provision` loads one seed row into each table, builds the
+indexes, and deletes the seed rows.
+
+`sorted_index=True`, in `provision` and `open`, also builds a sorted index on `created_at`
+in each record table. No query of `HotdataStore` needs it. Each load into a table with it
+takes longer as the table grows: a load of 12 rows into a table of 188,893 episodes took
+7.9 to 20.1 s with it, 1.2 to 2.1 s with BM25 alone, and 0.1 to 0.2 s with no index, on
+the local stack. [measured, 2026-10-21] In the cloud, M5 found that the sorted index cut a
+newest-first filter scan at 100,000 rows from 695 ms to 407 ms. [measured 2026-10-05] A
+database that has the sorted indexes opens without the option too.
 
 `vector_index=True`, in `provision` and `open`, is experimental. With it, `provision` also
 builds a plain cosine vector index on `content_embedding` in each record table, and on
@@ -307,8 +315,7 @@ index saves engine time from about ten thousand rows. In the cloud, one request 
 400 ms at every size. That cost hides the saving up to at least one hundred thousand rows.
 [measured 2026-10-05] The fused query costs more than that. On LongMemEval-S in the cloud,
 a fused search took 998 ms at p50, and a vector search took 361 ms. About 50 rows were in
-scope. [measured 2026-10-10, [docs/benchmarks.md](benchmarks.md)] Whether the sorted index on `created_at` serves `list` and `sweep`
-was not observed.
+scope. [measured 2026-10-10, [docs/benchmarks.md](benchmarks.md)]
 
 ## The memory contract
 

@@ -236,7 +236,9 @@ Retrieval runs in one SQL query over the `memory` table, in three stages.
    a provider-backed vector ranking alone, not both. `bm25_search` ranks the whole table
    and the filters of stage 1 apply after it, so the BM25 fetch depth must be wide enough
    to survive the filters.
-3. A sorted index on `created_at` for recency ordering and for the sweeper.
+3. A sorted index on `created_at` for recency ordering and for the sweeper. Since phase 11
+   it is an option, `sorted_index=True`, because a write into a table of 188,893 rows took
+   8 to 20 s with it and about 1.4 s without it. [measured, local, 2026-10-22]
 
 `cues` is the part that is not in any surveyed system and is cheap here. A cue is the
 question a record answers, written at capture time by the extractor or by the caller. A
@@ -253,7 +255,8 @@ request costs about 400 ms at every size, and that floor hides the saving up to 
 one hundred thousand rows. Only the sorted index on `created_at` showed a cloud gain, 695 ms
 to 407 ms at one hundred thousand rows. The driver therefore builds the BM25 index whatever
 the size, because `bm25_search` needs it, and treats the vector and sorted indexes as an
-optimisation that matters from about ten thousand rows. [measured, M5]
+optimisation that matters from about ten thousand rows. [measured, M5] Phase 11 found the
+cost of that optimisation on writes, so both are options, off by default.
 
 ## 4. The memory contract
 

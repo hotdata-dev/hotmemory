@@ -130,10 +130,8 @@ class _Index:
     metric: VectorMetric | None = None
 
 
-INDEXES = (
-    *(_Index(table, "bm25", "content") for table in RECORD_TABLES),
-    *(_Index(table, "sorted", "created_at") for table in RECORD_TABLES),
-)
+INDEXES = tuple(_Index(table, "bm25", "content") for table in RECORD_TABLES)
+SORTED_INDEXES = tuple(_Index(table, "sorted", "created_at") for table in RECORD_TABLES)
 VECTOR_INDEXES = (
     *(_Index(table, "vector", "content_embedding", "cosine") for table in RECORD_TABLES),
     _Index(CUE_TABLE, "vector", "cues_embedding", "cosine"),
@@ -165,6 +163,9 @@ class HotdataStore:
     vector indexes, with the filters inside the index search, and do not scan. The engine
     can miss rows loaded after the index build in such a search, so a search can miss
     recent writes. The default scans every row in scope, which is exact.
+
+    `sorted_index=True` in `provision` and `open` adds a sorted index on `created_at` in
+    each record table. A load into a table with it takes longer as the table grows.
     """
 
     def __init__(
@@ -204,6 +205,7 @@ class HotdataStore:
         client: HotdataClient | None = None,
         clock: Clock = utc_now,
         vector_index: bool = False,
+        sorted_index: bool = False,
     ) -> HotdataStore:
         """Open the database named `name`, or create it if no database has that name.
 
@@ -218,6 +220,9 @@ class HotdataStore:
         three vector indexes, and the store searches through them. A database found
         without them raises LayoutError. Each vector index makes each write slower.
 
+        With `sorted_index=True`, a new database also gets a sorted index on `created_at` in
+        each record table, and a database found without it raises LayoutError.
+
         `client` defaults to `HotdataClient.from_env()`.
         """
         _check_settings(model, dimensions)
@@ -228,9 +233,9 @@ class HotdataStore:
             raise LayoutError(f"{len(found)} databases are named {name!r}: {ids}")
         if found:
             database = found[0]
-            _check_layout(client, database, model, dimensions, vector_index)
+            _check_layout(client, database, model, dimensions, vector_index, sorted_index)
         else:
-            database = _create(client, name, model, dimensions, vector_index)
+            database = _create(client, name, model, dimensions, vector_index, sorted_index)
         return cls(
             client,
             database,
@@ -252,6 +257,7 @@ class HotdataStore:
         client: HotdataClient | None = None,
         clock: Clock = utc_now,
         vector_index: bool = False,
+        sorted_index: bool = False,
     ) -> HotdataStore:
         """Open the database with the id `database_id`, after the checks of `provision`.
 
@@ -262,7 +268,7 @@ class HotdataStore:
         database = client.resolve_managed_database(database_id)
         if database.id != database_id:
             raise KeyError(f"no database has the id {database_id!r}")
-        _check_layout(client, database, model, dimensions, vector_index)
+        _check_layout(client, database, model, dimensions, vector_index, sorted_index)
         return cls(
             client,
             database,
@@ -652,7 +658,12 @@ def _named(client: HotdataClient, name: str) -> builtins.list[ManagedDatabase]:
 
 
 def _create(
-    client: HotdataClient, name: str, model: str, dimensions: int, vector_index: bool
+    client: HotdataClient,
+    name: str,
+    model: str,
+    dimensions: int,
+    vector_index: bool,
+    sorted_index: bool = False,
 ) -> ManagedDatabase:
     """Create the database, load a seed row into each table, index it, and remove the seeds.
 
@@ -666,7 +677,7 @@ def _create(
         for table in (*RECORD_TABLES, CUE_TABLE):
             seed = files.write(_seed_rows(table, dimensions))
             client.load_managed_table(database, table, schema=SCHEMA, file=seed, mode="replace")
-        for index in (*INDEXES, *(VECTOR_INDEXES if vector_index else ())):
+        for index in _wanted(vector_index, sorted_index):
             client.create_index(
                 database,
                 index.table,
@@ -712,11 +723,12 @@ def _check_layout(
     model: str,
     dimensions: int,
     vector_index: bool = False,
+    sorted_index: bool = False,
 ) -> None:
     """Raise LayoutError unless `database` has the tables, columns, indexes, and meta row.
 
-    The vector indexes are checked only with `vector_index`. A database that has them
-    opens without it too.
+    The vector indexes are checked only with `vector_index`, and the sorted indexes only
+    with `sorted_index`. A database that has them opens without the option too.
     """
     columns = {
         info.table: [column.name for column in info.columns or []]
@@ -740,7 +752,7 @@ def _check_layout(
         for table in (*RECORD_TABLES, CUE_TABLE)
         for index in indexes.list_indexes(database.default_connection_id, SCHEMA, table).indexes
     }
-    for wanted in (*INDEXES, *(VECTOR_INDEXES if vector_index else ())):
+    for wanted in _wanted(vector_index, sorted_index):
         if (wanted.table, wanted.index_type, (wanted.column,), wanted.metric) not in built:
             raise LayoutError(
                 f"table {wanted.table} of database {database.id} has no "
@@ -759,6 +771,15 @@ def _check_layout(
             f"and {found[2]} dimensions; this store has schema version {SCHEMA_VERSION}, "
             f"model {model!r}, and {dimensions} dimensions"
         )
+
+
+def _wanted(vector_index: bool, sorted_index: bool) -> tuple[_Index, ...]:
+    """Return the indexes of a database with the options `vector_index` and `sorted_index`."""
+    return (
+        *INDEXES,
+        *(SORTED_INDEXES if sorted_index else ()),
+        *(VECTOR_INDEXES if vector_index else ()),
+    )
 
 
 def _table(kind: Kind) -> str:

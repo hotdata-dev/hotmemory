@@ -214,7 +214,10 @@ dominates.
 These results lead to four conclusions.
 
 - The only clear gain is the sorted index on `created_at`. It cut the newest-first filter
-  scan at one hundred thousand rows from 695 ms to 407 ms.
+  scan at one hundred thousand rows from 695 ms to 407 ms. Phase 11 found that a load into
+  a table with this index takes longer as the table grows: 7.9 to 20.1 s for 12 rows into
+  188,893 rows, locally. So `provision` builds it only with `sorted_index=True`.
+  [measured, local, 2026-10-21]
 - The vector index gave no gain at any size. A scan of one hundred thousand vectors of 64
   dimensions is already inside the 400 ms floor.
 - `bm25_search` refuses to run without a BM25 index, so the fused query cannot run without

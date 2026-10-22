@@ -60,6 +60,10 @@ each one, and its failure message points to this file.
   of the index. `provision` and `open` take `vector_index`, an experimental option: with
   it, `provision` builds the three vector indexes, and the vector rankings search through
   them. A filtered search through a vector index can miss rows loaded after its build.
+- `HotdataStore.provision` builds no sorted index on `created_at` by default, because a
+  load into a table with it takes longer as the table grows. `provision` and `open` take
+  `sorted_index`: with it, `provision` builds the sorted index in each record table.
+  Databases provisioned before this change keep the index and open as before.
 - `HotdataStore` writes a table by SQL `INSERT` when its rows in the write are all new and
   number at most 5, as in a `put` of a new fact. The `INSERT` writes only the ids that the
   table does not hold. Other writes stay keyed loads. If the engine refuses the `INSERT`,
