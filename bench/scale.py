@@ -16,6 +16,12 @@ ranking, it compares the top k with a brute-force ranking in numpy over the same
 Over the whole store, it scores `recall_any@k` against the evidence sessions. Each flush
 records its time and the time of the read of the current revisions before it. It writes
 one JSON file into `bench/results/`.
+
+With `--prefill`, the run fills the namespace `BACKGROUND` of `bench.e2e` instead, with
+the chunks of every session that no history of samples A and B holds, each with the date
+of its session as `observed_at`. It keeps the database, runs no search, and writes the
+flushes into its result file. `python -m bench.e2e --background <database>` then recalls
+over it.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ import numpy as np
 
 from bench import embed, prompts
 from bench.data import DATA_DIR, DATA_FILE, Question, Session, load
-from bench.e2e import episode_key, sample_ids
+from bench.e2e import BACKGROUND, episode_key, sample_ids
 from bench.episodes import ACTOR, session_of
 from bench.metrics import score
 from bench.retrieval import RESULTS_DIR, _commit
@@ -63,6 +69,7 @@ class Row:
     key: str
     content: str
     session: str
+    observed_at: datetime | None = None
 
 
 def bucket(session_id: str) -> int:
@@ -104,6 +111,14 @@ def rows_of(sessions: Sequence[Session]) -> Iterator[Row]:
         key = episode_key(session.id)
         for number, chunk in enumerate(chunk_text(prompts.session_text(session), CHUNK_CHARS), 1):
             yield Row(namespace, f"{key}-{number:04d}", chunk, session.id)
+
+
+def background_rows(sessions: Sequence[Session]) -> Iterator[Row]:
+    """Yield the chunks of each session in order, under BACKGROUND, with the session date."""
+    for session in sessions:
+        key = episode_key(session.id)
+        for number, chunk in enumerate(chunk_text(prompts.session_text(session), CHUNK_CHARS), 1):
+            yield Row(BACKGROUND, f"{key}-{number:04d}", chunk, session.id, session.date)
 
 
 def spread(values: Sequence[float]) -> dict[str, float]:
@@ -175,12 +190,14 @@ class Run:
         embedder: Embedder,
         questions: Sequence[Question],
         capacity: int,
+        exact: bool = True,
     ) -> None:
         self.stores = stores
         self.first = next(iter(stores.values()))
         self.embedder = embedder
         self.questions = questions
-        self.exact = Exact(capacity)
+        self.exact = Exact(capacity) if exact else None
+        self.written = 0
         self.flushes: list[dict[str, float]] = []
         self.retries = 0
         self.reads: list[float] = []
@@ -213,8 +230,10 @@ class Run:
                     print(f"flush failed, try {attempt + 1}: {error}", flush=True)
             seconds = time.perf_counter() - started
             read = self.reads[-1] if self.reads else 0.0
-            self.exact.add(part, vectors)
-            total = len(self.exact.rows)
+            if self.exact is not None:
+                self.exact.add(part, vectors)
+            self.written += len(part)
+            total = self.written
             self.flushes.append({"rows": len(part), "total": total, "s": seconds, "read_s": read})
             print(f"wrote {total} rows, flush {seconds:.2f} s, read {read:.2f} s", flush=True)
 
@@ -229,10 +248,13 @@ class Run:
                     content=row.content,
                     sources=(f"session:{row.session}",),
                     actor=ACTOR,
+                    observed_at=row.observed_at,
                 )
 
     def checkpoint(self) -> dict[str, Any]:
         """Search each question in each scope by each ranking, and return the results."""
+        if self.exact is None:
+            raise RuntimeError("a run with no exact ranking has no checkpoint")
         result: dict[str, Any] = {"rows": len(self.exact.rows), "scopes": {}}
         for name, prefix in scopes().items():
             index = self.exact.scope(prefix)
@@ -312,7 +334,14 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument(
         "--vector-index", action="store_true", help="provision with the experimental vector index"
     )
+    parser.add_argument(
+        "--prefill",
+        action="store_true",
+        help="fill the background namespace with the sessions outside samples A and B, and keep it",
+    )
     args = parser.parse_args(argv)
+    if args.prefill:
+        return prefill(args.location, args.url, args.vector_index, args.tag)
     sizes = sorted(int(size) for size in args.sizes.split(","))
 
     questions = load(DATA_DIR / DATA_FILE)
@@ -360,6 +389,57 @@ def main(argv: Sequence[str] | None = None) -> Path:
             write_result(path, config, run.flushes, sizes, checkpoints)
     finally:
         if not args.keep:
+            client.delete_managed_database(database)
+    print(path)
+    return path
+
+
+def prefill(location: str, url: str, vector_index: bool, tag: str) -> Path:
+    """Fill BACKGROUND in a new database, keep it, and return the path of the result file.
+
+    The background holds the chunks of every session of LongMemEval-S that no history of
+    samples A and B holds. A run stopped with SIGINT deletes the database.
+    """
+    questions = load(DATA_DIR / DATA_FILE)
+    by_id = {question.id: question for question in questions}
+    chosen = [by_id[i] for name in ("a", "b") for i in sample_ids(name, questions)]
+    held = {session.id for question in chosen for session in question.sessions}
+    sessions = [session for session in pool(questions, chosen) if session.id not in held]
+    rows = list(background_rows(sessions))
+
+    embedder = embed.openai_embedder()
+    run_id = uuid.uuid4().hex[:8]
+    name = f"hotmemory-prefill-{run_id}"
+    client, database, stores = hotdata_stores(embedder, location, url, name, vector_index)
+    run = Run({"vector": stores["vector"]}, embedder, [], len(rows), exact=False)
+    started = datetime.now(UTC)
+    suffix = f"-{tag}" if tag else ""
+    path = RESULTS_DIR / f"prefill-{location}{suffix}-{run_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    config: dict[str, Any] = {
+        "started": started.isoformat(),
+        "location": location,
+        "database": name,
+        "namespace": "/".join(BACKGROUND),
+        "sessions": len(sessions),
+        "rows": len(rows),
+        "left_out_sessions": len(held),
+        "chunk_chars": CHUNK_CHARS,
+        "flush": FLUSH,
+        "vector_index": vector_index,
+        "commit": _commit(),
+    }
+    print(f"filling {name} with {len(rows)} rows of {len(sessions)} sessions", flush=True)
+    finished = False
+    try:
+        run.fill(rows)
+        finished = True
+    finally:
+        config["flush_retries"] = run.retries
+        config["finished"] = finished
+        config["duration_s"] = round((datetime.now(UTC) - started).total_seconds(), 1)
+        write_result(path, config, run.flushes, [len(rows)], [])
+        if not finished:
             client.delete_managed_database(database)
     print(path)
     return path

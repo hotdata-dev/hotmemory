@@ -50,7 +50,8 @@ sessions of each question. Git ignores `bench/results/`, and
 
 ## The end-to-end score
 
-This command runs three arms on a sample of 54 questions, 9 of each question type:
+This command runs three arms on a sample of 54 questions, 9 of each question type. With
+`--sample all`, it runs every question of the data file:
 
 ```sh
 uv run --group bench --env-file .env python -m bench.e2e
@@ -81,7 +82,7 @@ The options are these:
 
 | Option | Values | Default |
 |---|---|---|
-| `--sample` | `a` or `b` | `a` |
+| `--sample` | `a`, `b`, or `all` for every question of the data file | `a` |
 | `--arms` | a comma-separated list of `full`, `retrieval`, and `memory` | every arm |
 | `--retrieval-ranking` | `vector` or `fused`, the ranking of the retrieval arm | `vector` |
 | `--memory-ranking` | `vector` or `fused`, the ranking of `capture` and `recall` | `vector` |
@@ -97,6 +98,7 @@ The options are these:
 | `--keep` | keep the memory of each question in a local database of its own; needs `--arms memory` | off |
 | `--reuse` | recall from the kept memory, and skip `capture`; needs `--arms memory` | off |
 | `--smoke` | run the 18 questions of the smoke sample on `MemoryStore`, one store in each worker | off |
+| `--background` | a local database that `python -m bench.scale --prefill` filled: run every question in it, and recall over the namespace of the question and `background/lme_s`; needs `--arms memory` | off |
 | `--resume` | run only the questions that the rows file of an earlier run does not hold | off |
 | `--tag` | a suffix for the name of the result file | none |
 | `--limit` | the first N questions of the sample | every question |
@@ -121,7 +123,7 @@ the block shows the sources as one range, `session-<hash>-0001…<last>@1`. The 
 holds no run id, so a second run with another `--episodes` or `--recall-budget` replays
 `capture` from the cache. The result file lists the episode keys of each block in
 `episodes_in_block`, and the SHA-256 of each block in `block_sha256`. The result file is
-`bench/results/e2e-sample-<a or b>[-<tag>].json`, or `bench/results/e2e-smoke[-<tag>].json`
+`bench/results/e2e-sample-<a, b, or all>[-<tag>].json`, or `bench/results/e2e-smoke[-<tag>].json`
 for a smoke run, and it records each option.
 
 ## Faster runs
@@ -205,7 +207,11 @@ The command runs `capture` again with the ranking, the `k`, the `budget`, and th
 variant that the result file records. The replay calls no model, and it stops at the first
 reply that the cache does not hold. If the result file names kept databases, from a run
 with `--keep` or `--reuse`, the command reads the memory of each question from its kept
-database and does not run `capture`. GPT-4o marks the stored facts that hold each answer.
+database and does not run `capture`. If the result file names a background database, from
+a run with `--background`, the command captures again in that database, recalls over the
+background as the run did, and records whether the block has the SHA-256 of the run.
+`--ids` limits the diagnosis to the listed misses. A result file written before the runner
+recorded `chunk_chars` needs `--chunk-chars`. GPT-4o marks the stored facts that hold each answer.
 Each miss then gets one of four causes:
 
 | Cause | Meaning |
