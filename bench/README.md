@@ -37,6 +37,7 @@ The options are these:
 | `--location` | `local` or `cloud` | `local` |
 | `--url` | the address of the local engine | `http://localhost:3000` |
 | `--limit` | the first N scored questions | every scored question |
+| `--data` | `s` for LongMemEval-S, or `m` for LongMemEval-M, about 500 sessions for each question. The M file is 2.74 GB. The runner reads it one question at a time and keeps only the user turns. | `s` |
 | `--ablate` | also rank with the fused query less one arm at a time: `bm25-content`, `content-cue`, and `bm25`; needs `--driver hotdata` | off |
 
 With `--location cloud`, the runner reads the connection from `HOTDATA_API_KEY`,
@@ -49,7 +50,8 @@ sessions of each question. Git ignores `bench/results/`, and
 
 ## The end-to-end score
 
-This command runs three arms on a sample of 54 questions, 9 of each question type:
+This command runs three arms on a sample of 54 questions, 9 of each question type. With
+`--sample all`, it runs every question of the data file:
 
 ```sh
 uv run --group bench --env-file .env python -m bench.e2e
@@ -80,7 +82,7 @@ The options are these:
 
 | Option | Values | Default |
 |---|---|---|
-| `--sample` | `a` or `b` | `a` |
+| `--sample` | `a`, `b`, or `all` for every question of the data file | `a` |
 | `--arms` | a comma-separated list of `full`, `retrieval`, and `memory` | every arm |
 | `--retrieval-ranking` | `vector` or `fused`, the ranking of the retrieval arm | `vector` |
 | `--memory-ranking` | `vector` or `fused`, the ranking of `capture` and `recall` | `vector` |
@@ -96,6 +98,7 @@ The options are these:
 | `--keep` | keep the memory of each question in a local database of its own; needs `--arms memory` | off |
 | `--reuse` | recall from the kept memory, and skip `capture`; needs `--arms memory` | off |
 | `--smoke` | run the 18 questions of the smoke sample on `MemoryStore`, one store in each worker | off |
+| `--background` | a local database that `python -m bench.scale --prefill` filled: run every question in it, and recall over the namespace of the question and `background/lme_s`; needs `--arms memory` | off |
 | `--resume` | run only the questions that the rows file of an earlier run does not hold | off |
 | `--tag` | a suffix for the name of the result file | none |
 | `--limit` | the first N questions of the sample | every question |
@@ -103,8 +106,8 @@ The options are these:
 Each worker gets the questions in turn. Without `--keep` or `--reuse`, it runs them over a
 new local database of its own, and empties the namespaces of each question after it. Each
 table then holds one question at a time, as in a run with one worker. With
-`--memory-ranking fused`, BM25 ranks over the whole table before the scope filter, so the
-rows of a second question in a table can change the ranking. An extractor variant names a prompt and a model. Each fact carries
+`--memory-ranking fused`, the BM25 scores can depend on every row of the table, so the
+rows of a second question in a table can change the ranking. This was not measured. An extractor variant names a prompt and a model. Each fact carries
 the source `session:<hash>`, where the hash is the first 12 hex digits of the SHA-256 of
 the session id. The block shows the sources to the reader, and the id of an evidence
 session holds `answer`, so the source does not show the id. If an extractor reply reaches
@@ -120,7 +123,7 @@ the block shows the sources as one range, `session-<hash>-0001…<last>@1`. The 
 holds no run id, so a second run with another `--episodes` or `--recall-budget` replays
 `capture` from the cache. The result file lists the episode keys of each block in
 `episodes_in_block`, and the SHA-256 of each block in `block_sha256`. The result file is
-`bench/results/e2e-sample-<a or b>[-<tag>].json`, or `bench/results/e2e-smoke[-<tag>].json`
+`bench/results/e2e-sample-<a, b, or all>[-<tag>].json`, or `bench/results/e2e-smoke[-<tag>].json`
 for a smoke run, and it records each option.
 
 ## Faster runs
@@ -136,9 +139,9 @@ uv run --group bench --env-file .env python -m bench.e2e --run --arms memory --e
 ```
 
 With `--keep`, each question runs over a new local database of its own, and the database
-stays after the run. One database holds one question. With `--memory-ranking fused`, BM25
-ranks the whole table before the namespace filter, so the memory of a second question
-would change the block. The
+stays after the run. One database holds one question. With `--memory-ranking fused`, the
+BM25 scores can depend on every row of the table, so the memory of a second question can
+change the block. This was not measured. The
 name of the database is `hotmemory-kept-<sample>-<extractor><digest>-<cites>-<ranking>-<commit>-<question id>`:
 
 | Part | What it holds |
@@ -204,7 +207,11 @@ The command runs `capture` again with the ranking, the `k`, the `budget`, and th
 variant that the result file records. The replay calls no model, and it stops at the first
 reply that the cache does not hold. If the result file names kept databases, from a run
 with `--keep` or `--reuse`, the command reads the memory of each question from its kept
-database and does not run `capture`. GPT-4o marks the stored facts that hold each answer.
+database and does not run `capture`. If the result file names a background database, from
+a run with `--background`, the command captures again in that database, recalls over the
+background as the run did, and records whether the block has the SHA-256 of the run.
+`--ids` limits the diagnosis to the listed misses. A result file written before the runner
+recorded `chunk_chars` needs `--chunk-chars`. GPT-4o marks the stored facts that hold each answer.
 Each miss then gets one of four causes:
 
 | Cause | Meaning |

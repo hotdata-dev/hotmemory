@@ -2,7 +2,8 @@
 
 This page reports the numbers of hotmemory on LongMemEval-S, a public benchmark of 500
 questions over long chat histories. Each number on this page was observed on 2026-10-10,
-except where a section gives another date. Each section names the result file that a run wrote into `bench/results/`, with its
+except where a section gives another date. The section "The full benchmark" gives the score
+on all 500 questions. Each section names the result file that a run wrote into `bench/results/`, with its
 numbers, its configuration, and the commit of hotmemory that ran it. Git ignores that
 folder, so this page is the record of the numbers. [bench/README.md](../bench/README.md)
 gives the commands that repeat each run and write the files again.
@@ -73,9 +74,11 @@ number on S compares with this table.
 ### Every question in one table
 
 A second run kept the episodes of all 419 questions in the same tables, 19,864 rows, and
-searched each question inside its own namespace. BM25 in the fused ranking takes its top
-rows from the whole table before the namespace filter applies, so this run tests that
-limit. On the local stack, the fused ranking scored higher at the top 5 and slightly lower
+searched each question inside its own namespace. This run was planned to test whether BM25
+loses rows of the namespace, because it was thought to rank the whole table before the
+filter. On 2026-10-21, a check showed that the engine applies the filter inside
+`bm25_search`, so BM25 loses no rows of the namespace. The cause of the small differences
+below was not measured. On the local stack, the fused ranking scored higher at the top 5 and slightly lower
 at the top 10. At the top 10, 1 more question had no evidence session. The vector ranking
 gave the same sessions in the same order in both runs. File:
 `retrieval-hotdata-local-shared-fused-vector.json`.
@@ -605,11 +608,242 @@ The retrieval score with the vector ranking, rerun on the 419 questions at the s
 gave the same sessions in the same order as the vector ranking of the ablation, on 419 of
 419 questions: `recall_all@10` 0.9928. File: `retrieval-hotdata-local-isolated-vector.json`.
 
+## The full benchmark
+
+On 2026-10-22, the best configuration of phase 10 ran on all 500 questions of
+LongMemEval-S, the memory arm only. Each worker had a new local database of its own, as in
+phase 10. File: `e2e-sample-all-p11-full-chunks1000-16k.json`.
+
+| Item | Value |
+|---|---|
+| Data | `longmemeval_s_cleaned.json`, all 500 questions, 30 of them abstention questions |
+| Capture | Each session in date order, stored as chunks of at most 1,000 characters, and the facts that the extractor writes from the whole session |
+| Extractor | `gpt-4o-mini-2024-07-18`, the `detail` prompt, up to 4,000 output tokens, one call for each session |
+| Embedder | `text-embedding-3-small`, 1,536 dimensions |
+| Ranking | The vector ranking, an exact scan, no vector index |
+| Recall | k of 30 for the facts, then `episodes="search"` with k of 30 for the chunks, and `as_of` at 23:59:59 on the date of the question |
+| Budget | 16,000 characters. The block had 15,561 characters at the median. |
+| Reader input | 4,346 tokens at the median and 4,588 at the 95th percentile, with the prompt |
+| Reader and judge | `gpt-4o-2024-08-06`, temperature 0, the prompts of the reference code |
+| Engine | The local stack, RuntimeDB image `sha256:75403e84eb47` |
+
+The budget is in characters, not tokens. Compare it with another system by the reader
+input in tokens.
+
+| Question type | Questions | Correct | Accuracy | Samples A and B, phase 10 |
+|---|---|---|---|---|
+| single-session-user | 70 | 68 | 97.1% | 18 of 18 |
+| single-session-assistant | 56 | 56 | 100.0% | 18 of 18 |
+| single-session-preference | 30 | 22 | 73.3% | 13 of 18 |
+| multi-session | 133 | 103 | 77.4% | 15 of 18 |
+| knowledge-update | 78 | 67 | 85.9% | 14 of 18 |
+| temporal-reasoning | 133 | 123 | 92.5% | 16 of 18 |
+| All | 500 | 439 | 87.8% | 94 of 108 |
+
+The abstention questions scored 27 of 30. Phases 8 to 10 chose the configuration on
+samples A and B. The 392 questions outside the two samples scored 345, 88.0%, and the 108
+questions of the samples scored 94, 87.0%. The 95% confidence interval of a score of 87.8%
+on 500 questions is about 2.9 points on each side. This is one run.
+
+The model calls cost $14.84: $2.23 with 4 workers for the first 80 questions, and $12.61
+with 8 workers for the other 420. 77,703 texts missed the embedding cache, and their cost
+was not measured. The run took 80 minutes with 4 workers and 16,189 s with 8 workers. The
+run was stopped once to change the number of workers, and `--resume` kept the 80 finished
+questions. 7 sessions reached the token limit of the extractor and gave no facts.
+
+The run used `src/hotmemory` at `a00cc4d` with the change of the sorted index of phase 11,
+not yet committed. Before the run, a replay of samples A and B on new databases called no
+model and gave 48 and 46 again, with the same blocks. Files:
+`e2e-sample-a-p11-fresh-replay.json` and `e2e-sample-b-p11-fresh-replay.json`.
+
+## A large memory store
+
+Phase 11 measured recall from one store that holds many memories. Each number below was
+observed on 2026-10-21. The local runs used the RuntimeDB image `sha256:75403e84eb47`,
+built on 2026-10-19, unless a paragraph names another. The cloud run used
+`api.hotdata.dev`.
+
+### The scale test
+
+`bench/scale.py` fills one store with the sessions of LongMemEval-S as chunks of 1,000
+characters, as `capture` stores them. Each session is stored once, with no copy of a row.
+The pool holds 19,195 sessions and 254,025 chunks. The evidence sessions of samples A and
+B come first, so every size holds them. Each session goes into one of 100 namespaces, so a
+scope of one namespace holds about 1 percent of the rows, and a scope of ten about 10
+percent. The run searches the 85 scored questions of samples A and B in each scope, by each
+ranking, with k of 10. Over the whole store, it scores `recall_any@k` against the evidence
+sessions. So every other session of the pool is a distractor, also the sessions of other
+questions. For the vector ranking, it compares each top 10 with a ranking by brute force in
+numpy over the same rows. The store has no vector index, the default of phase 11.
+
+Local stack, file `scale-local-local-new-engine-436c7217.json`. Times are the median.
+
+| Rows | Flush of 1,000 rows | Vector search, 1 / 10 / 100 percent | Fused search, 1 / 10 / 100 percent | `recall_any@10`, vector / fused |
+|---|---|---|---|---|
+| 10,000 | 1.3 s | 37 / 42 / 45 ms | 102 / 111 / 119 ms | 0.8588 / 0.8824 |
+| 50,000 | 3.4 s | 52 / 99 / 116 ms | 146 / 242 / 286 ms | 0.6588 / 0.6941 |
+| 100,000 | 5.4 s | 93 / 157 / 276 ms | 216 / 418 / 504 ms | 0.5647 / 0.6000 |
+| 254,025 | 14.3 s | 199 / 421 / 1,486 ms | 498 / 899 / 1,297 ms | 0.4235 / 0.4824 |
+
+Cloud, file `scale-cloud-cloud-no-vector-index-ec9d7e68.json`. Times are the median.
+
+| Rows | Flush of 1,000 rows | Vector search, 1 / 10 / 100 percent | Fused search, 1 / 10 / 100 percent | `recall_any@10`, vector / fused |
+|---|---|---|---|---|
+| 10,000 | 7.8 s | 342 / 341 / 353 ms | 677 / 710 / 696 ms | 0.8588 / 0.8824 |
+| 50,000 | 9.9 s | 344 / 452 / 461 ms | 778 / 805 / 822 ms | 0.6588 / 0.6941 |
+| 100,000 | 13.1 s | 354 / 362 / 412 ms | 722 / 841 / 809 ms | 0.5647 / 0.6000 |
+
+These results lead to five conclusions.
+
+- The vector ranking is exact at every size. In both runs, no top 10 differed from the
+  brute-force ranking. Some differed only in the order of rows with the same distance: 12
+  of 85 at 50,000 rows, 19 at 100,000, and 36 at 254,025, over the whole store.
+- Recall falls as the store grows, because more sessions compete with the evidence. Over
+  the whole store, `recall_any@10` of the vector ranking went from 0.8588 at 10,000 rows
+  to 0.4235 at 254,025. The cloud and the local stack gave the same scores.
+- The fused ranking keeps more recall at each size above 10,000 rows. At 254,025 rows it
+  scored 0.4824, against 0.4235 for the vector ranking. On the small histories of
+  LongMemEval-S, the vector ranking scored higher.
+- A scoped search stays fast. In a scope of 1 percent at 254,025 rows, a vector search
+  took 199 ms locally. A search over the whole store took 1,486 ms, with a p95 of
+  2,396 ms. In the cloud, each search stayed near the cost of one request up to 100,000
+  rows.
+- A flush gets slower as the table grows. The read of the current revisions before each
+  flush took 0.2 s at 10,000 rows and 1.4 s at 254,025 rows. The rest of the flush grew
+  too. The cause was not measured.
+
+The cloud run retried 9 flushes after a transient upload failure, `the upload transfer to
+storage failed before any response`. No flush failed three times.
+
+On the local image of 2026-10-08, the engine returned fewer than k rows for some searches
+over 50,000 rows or more, when the query selected `content`. For one question at 100,000
+rows, `LIMIT 10` returned 7 rows, and a query of `id` and the distance alone returned 10.
+The image of 2026-10-19 and the cloud did not show it.
+
+### The cost of a vector index on writes
+
+A probe loaded 1,000 rows of 1,536 dimensions at a time into one table, and timed the load
+call alone, without the upload. Local is the image of 2026-10-08.
+
+| Index on the table | Local, table of 10,000 rows | Cloud, table of 10,000 rows |
+|---|---|---|
+| None | 0.1 to 0.2 s | 0.8 to 1.3 s |
+| BM25 | 0.2 to 0.3 s | not measured |
+| Plain cosine vector | 6.4 to 7.7 s | 8.2 to 8.9 s |
+
+Upsert and append loads cost the same. No query of `HotdataStore` reads the vector index,
+because a filtered search through it misses rows loaded after its build. So phase 11 made
+the vector indexes an experimental option, `vector_index=True`, off by default.
+
+### The cost of the BM25 and sorted indexes on writes
+
+On 2026-10-22, a probe filled four tables with the same 188,893 chunks of 1,000 characters
+and built a different set of indexes on each. Then it wrote 1, 5, and 12 new rows into
+each table by SQL `INSERT`, by upsert load, and by append load, twice for each size. The
+time is that of the `INSERT` statement or of the load call. File:
+`probe-insert-local-task6.json`.
+
+| Index on the table | `INSERT` | Upsert load | Append load | Full build of the index |
+|---|---|---|---|---|
+| None | 0.38 s | 0.38 s | 0.33 s | |
+| BM25 on `content` | 1.43 s | 1.36 s | 1.42 s | 3.3 s |
+| Sorted on `created_at` | 11.8 s | 14.1 s | 12.0 s | 22.2 s |
+| BM25 and sorted | 11.7 s | 13.1 s | 12.0 s | 2.9 s and 17.8 s |
+
+The times are the median over the three sizes and the two trials. A write of 1 row cost
+about the same as a write of 12 rows. After each of the 72 writes, a read by id, a
+newest-first query, and `bm25_search` for a word of the new rows returned every new row at
+once. So the engine keeps the BM25 and sorted indexes complete after each write, and the
+write pays for that by the size of the table, not by its own size. That is inferred from
+the times, not observed in the engine. A first probe on 2026-10-21 gave the same result
+for loads of 12 rows: 7.9 to 20.1 s with the sorted index, 1.2 to 2.1 s with BM25 alone,
+and 0.11 to 0.21 s with no index. File: `probe-index-local-task6.json`.
+
+No query of `HotdataStore` needs the sorted index. So phase 11 made it an option,
+`sorted_index=True`, off by default. Over the 188,893 chunks, a vector search, a fused
+search, and a newest-first `list` of 100 records had the same times with and without the
+sorted index, within the spread of three runs: 340 to 426 ms, 771 to 1,305 ms, and 61 to
+89 ms at the median.
+
+### Retrieval on LongMemEval-M
+
+LongMemEval-M has the same 500 questions as LongMemEval-S, with the same evidence
+sessions, and a history of 472 sessions at the median for each question. The other
+sessions differ from those of LongMemEval-S. The run is the retrieval run above with the
+file `longmemeval_m_cleaned.json`, SHA-256 `9d79e552...`. Each question has its own
+namespace, one at a time. File: `retrieval-m-hotdata-local-isolated-fused-vector.json`.
+It took 1,057 s for 419 questions. 31,832 session texts missed the embedding cache.
+
+| Ranking | Split | `recall_any@5` | `recall_all@5` | `recall_any@10` | `recall_all@10` | `ndcg_any@10` |
+|---|---|---|---|---|---|---|
+| fused | M | 0.9189 | 0.7637 | 0.9451 | 0.8616 | 0.8128 |
+| vector | M | 0.9045 | 0.7589 | 0.9451 | 0.8616 | 0.7952 |
+| fused | S | 0.9690 | 0.9045 | 0.9928 | 0.9570 | 0.9311 |
+| vector | S | 0.9833 | 0.9475 | 1.0000 | 0.9928 | 0.9479 |
+
+On M, the fused ranking scored higher at the top 5 and on `ndcg_any@10`, and the two
+rankings tied at the top 10. On S, the vector ranking scored higher on every metric. A
+search took 116 ms fused and 43 ms by vector at the median. A write of the sessions of one
+question took 2.0 s at the median.
+
+| Question type | Questions | fused `recall_all@10` | vector `recall_all@10` |
+|---|---|---|---|
+| knowledge-update | 72 | 0.986 | 0.931 |
+| multi-session | 121 | 0.777 | 0.835 |
+| single-session-assistant | 5 | 1.000 | 1.000 |
+| single-session-preference | 30 | 0.733 | 0.833 |
+| single-session-user | 64 | 1.000 | 0.938 |
+| temporal-reasoning | 127 | 0.827 | 0.811 |
+
+### Samples A and B over a prefilled store
+
+This test answers samples A and B from one store that holds many other memories. A
+background namespace, `background/lme_s`, held the chunks of 1,000 characters of the 14,343
+sessions of LongMemEval-S that no history of samples A and B holds: 188,893 rows, with
+each session date as `observed_at`. The sessions of the questions themselves stayed out,
+so the background holds no copy of their evidence. The fill took 468 s in flushes of
+1,000 rows, without the sorted index. File: `prefill-local-task6-nosorted-a424b237.json`.
+
+Each question ran as in phase 10, in the same database: `capture` wrote only the namespace
+of the question, and the final `recall` read that namespace and the background. The
+namespace of the question was emptied after it. Observed on 2026-10-21 and 2026-10-22.
+
+| Sample | Fresh store, phase 10 | Over the prefilled store | File |
+|---|---|---|---|
+| A | 48 of 54 | 39 of 54 | `e2e-sample-a-p11-prefilled-chunks1000-16k.json` |
+| B | 46 of 54 | 35 of 54 | `e2e-sample-b-p11-prefilled-chunks1000-16k.json` |
+
+The two runs cost $1.53, with each `capture` from the extractor cache. A question took
+96 s on sample A and 125 s on sample B at the median, and a write 1.1 s and 1.3 s. With
+the sorted index, two questions of sample A took 719 s and 704 s, and a write 9.9 s and
+9.2 s at the median.
+
+Each history of LongMemEval is a different simulated user. So the background holds the
+facts of other users about "the user", and some of them contradict the facts of a
+question. 761 of the background sessions are evidence sessions of other questions. A real
+store keeps each user in a scope of its own, so this test is harder than one large memory
+of one user.
+
+The diagnosis covered the 23 questions that the prefilled store lost against phase 10,
+and 2 other misses with a short block. It ran `capture` again in the same database and
+recalled again, and each of the 25 blocks had the SHA-256 of its run. Files: the result
+files above with `-diagnosis` before `.json`. They cost $0.16, after a first try of $0.14
+that was wrong and was repeated.
+
+- In 16 of the 25 questions, the top 30 chunks held no chunk of the question. In the other
+  9, 1 to 4 of them did.
+- In 13 questions, no fact held the answer, and the chunks of the evidence were out of the
+  block. In 2 more, the fact that held the answer ranked below k.
+- In 10 questions, the block held facts with the answer, 6 of them with every value that
+  the answer needs, and the reader still gave another answer.
+- In 3 questions, only 3, 4, and 7 of the top 30 chunks were valid at `as_of`, so the block
+  used about half of its budget. `recall` applies `as_of` after the search takes its top k.
+
 ## Known limits
 
-- The end-to-end numbers come from samples of 54 questions, so one question moves an arm
-  by 1.9 points. The memory arm differs by 14.8 points between sample A and sample B. A
-  run on all 500 questions waits for the owner's agreement.
+- Most end-to-end numbers come from samples of 54 questions, so one question moves an arm
+  by 1.9 points. The memory arm differs by 14.8 points between sample A and sample B in
+  phase 5. Only the memory arm of phase 10 ran on all 500 questions, once.
 - The full-context arm gives the reader every session. The reference code keeps the last
   50 sessions, so the two differ for histories longer than 50 sessions.
 - The memory arm tried one extractor model, `gpt-4o-mini-2024-07-18`, with two prompts. A
@@ -621,5 +855,7 @@ gave the same sessions in the same order as the vector ranking of the ablation, 
 - In the runs of phase 8, the local engine refused one fused search once, because it
   found a BM25 index of `memory_v1` stale against its table. A second try of the same run
   did not show the error. The cause was not found.
+- `recall` applies `as_of` after the search takes its top k. In a store with many records
+  dated after `as_of`, the block can hold fewer records than the budget allows.
 - `recall` keeps the records that are valid at `as_of`, and a search over history does not
   exist yet. A question about a value before it changed can need a superseded record.

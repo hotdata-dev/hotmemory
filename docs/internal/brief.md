@@ -65,9 +65,10 @@ These come from measurements against Hotdata between 2026-08-27 and 2026-09-18.
 
 - A write is a file load in every released engine and in production. The caller uploads
   parquet and calls a keyed load in replace, append, upsert, update, or delete mode.
-  [measured] On RuntimeDB main since 2026-09-25, a SQL write path exists behind the
-  `[engine] sql_writes` flag, off by default, and production does not set it. INSERT and
-  CREATE TABLE, CREATE TABLE AS, and DROP TABLE are implemented. An INSERT is an append
+  [measured] On RuntimeDB main since 2026-09-25, a SQL write path exists. It ran behind
+  the `[engine] sql_writes` flag until 2026-10-18, and runs for every instance after.
+  The cloud accepted INSERT on 2026-10-21. [measured, M4] INSERT and CREATE TABLE, CREATE
+  TABLE AS, and DROP TABLE are implemented. UPDATE and DELETE are refused. An INSERT is an append
   load whose source is a query: the planned rows are staged as parquet and appended through
   the same locked load path, so it holds the same per-table lock and maintains indexes the
   same way. A SQL write needs the read and write claims and can target only the database's
@@ -235,7 +236,9 @@ Retrieval runs in one SQL query over the `memory` table, in three stages.
    a provider-backed vector ranking alone, not both. `bm25_search` ranks the whole table
    and the filters of stage 1 apply after it, so the BM25 fetch depth must be wide enough
    to survive the filters.
-3. A sorted index on `created_at` for recency ordering and for the sweeper.
+3. A sorted index on `created_at` for recency ordering and for the sweeper. Since phase 11
+   it is an option, `sorted_index=True`, because a write into a table of 188,893 rows took
+   8 to 20 s with it and about 1.4 s without it. [measured, local, 2026-10-22]
 
 `cues` is the part that is not in any surveyed system and is cheap here. A cue is the
 question a record answers, written at capture time by the extractor or by the caller. A
@@ -252,7 +255,8 @@ request costs about 400 ms at every size, and that floor hides the saving up to 
 one hundred thousand rows. Only the sorted index on `created_at` showed a cloud gain, 695 ms
 to 407 ms at one hundred thousand rows. The driver therefore builds the BM25 index whatever
 the size, because `bm25_search` needs it, and treats the vector and sorted indexes as an
-optimisation that matters from about ten thousand rows. [measured, M5]
+optimisation that matters from about ten thousand rows. [measured, M5] Phase 11 found the
+cost of that optimisation on writes, so both are options, off by default.
 
 ## 4. The memory contract
 
@@ -320,7 +324,7 @@ because the bare container refuses managed tables. All six were run on 2026-10-0
   index still returns it.
 - M3. Run two processes that load the same table at once with the serialized writer in
   each. Record how many 409s occur and whether the retry bound of the driver is enough.
-- M4. With `RUNTIMEDB_ENGINE__SQL_WRITES=true`, time one hundred single-row INSERT
+- M4. With SQL writes on, time one hundred single-row INSERT
   statements and one hundred single-row upload-plus-load calls into the same table shape.
   Record both per-call costs.
 - M5. Load one thousand, ten thousand, and one hundred thousand rows into the `memory`

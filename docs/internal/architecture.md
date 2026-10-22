@@ -10,7 +10,7 @@ the SQL, and the loads that carry them out.
 
 Each claim has one of these sources:
 
-- The code of hotmemory at the commit that adds this page. Such a claim has no mark.
+- The code of hotmemory at commit `a0145ee`, the merge of phase 10. Such a claim has no mark.
 - A measurement in [contracts.md](../contracts.md) or [guarantees.md](../guarantees.md), marked
   [measured] with its date.
 - A look at the local stack on 2026-10-12, marked [observed, local].
@@ -66,7 +66,7 @@ token. [local.md](../local.md) describes the local stack.
 | Concurrent writes | One lock in each store, and a retry on `409 RESOURCE_LOCKED` | Locks a table for each load, and refuses a second load with 409. [measured] |
 | Expiry | Hides a record past `forget_after` in SQL, and deletes it in `sweep` | Deletes nothing. [measured] |
 | Rows on disk | Builds each batch of rows as a parquet file | Stores the rows as parquet files and records them in DuckLake metadata. [observed, local] |
-| Indexes | Asks for seven indexes at provision | Builds and stores them. [observed, local] |
+| Indexes | Asks for two BM25 indexes at provision, two more sorted indexes with `sorted_index=True`, and three vector indexes with `vector_index=True` | Builds and stores them. [observed, local] |
 | Queries | Writes every SQL query, with values as literals | Plans and runs the SQL. |
 
 ## Where the data lives
@@ -87,8 +87,8 @@ erDiagram
         int64 revision
         string kind "fact, profile, or procedure"
         string content "BM25 index"
-        list_float content_embedding "vector index, cosine"
-        timestamp created_at "sorted index"
+        list_float content_embedding "vector index, cosine, with vector_index"
+        timestamp created_at "sorted index, with sorted_index"
         string superseded_by
         timestamp valid_from
         timestamp valid_until
@@ -99,12 +99,12 @@ erDiagram
         string id PK
         string kind "episode"
         string content "BM25 index"
-        list_float content_embedding "vector index, cosine"
-        timestamp created_at "sorted index"
+        list_float content_embedding "vector index, cosine, with vector_index"
+        timestamp created_at "sorted index, with sorted_index"
     }
     cue_v1 {
         string id PK "the id of a record row"
-        list_float cues_embedding "vector index, cosine"
+        list_float cues_embedding "vector index, cosine, with vector_index"
     }
     meta_v1 {
         string id PK "meta"
@@ -121,9 +121,9 @@ UTC to the microsecond.
 
 | Table | Rows | Indexes |
 |---|---|---|
-| `memory_v1` | The records of kind `fact`, `profile`, and `procedure` | BM25 on `content`, plain cosine vector on `content_embedding`, sorted on `created_at` |
-| `episode_v1` | The records of kind `episode` | The same three |
-| `cue_v1` | One row for each record that has cues: its id and the vector of its cues | Plain cosine vector on `cues_embedding` |
+| `memory_v1` | The records of kind `fact`, `profile`, and `procedure` | BM25 on `content`, with `sorted_index=True` sorted on `created_at`, and with `vector_index=True` plain cosine vector on `content_embedding` |
+| `episode_v1` | The records of kind `episode` | The same |
+| `cue_v1` | One row for each record that has cues: its id and the vector of its cues | None, or with `vector_index=True` plain cosine vector on `cues_embedding` |
 | `meta_v1` | One row: the schema version, the embedding model name, and the vector size | None |
 
 Every table has the key column `id`. A keyed load replaces or deletes rows by this column.
@@ -157,13 +157,13 @@ flowchart TD
     start["provision(name)"] --> list["List the managed databases<br/>and keep those whose description is name"]
     list --> count{"How many?"}
     count -- "more than one" --> dup["Raise LayoutError<br/>and create nothing"]
-    count -- "one" --> check["Check the tables, the columns,<br/>the seven indexes, and the meta row"]
+    count -- "one" --> check["Check the tables, the columns,<br/>the indexes, and the meta row"]
     check --> same{"Same layout, model,<br/>and vector size?"}
     same -- "yes" --> open["Return the store"]
     same -- "no" --> bad["Raise LayoutError"]
     count -- "none" --> create["Create the database<br/>with four tables keyed by id"]
     create --> seed["Load one seed row into<br/>memory_v1, episode_v1, and cue_v1"]
-    seed --> index["Build the seven indexes"]
+    seed --> index["Build the two BM25 indexes,<br/>and the optional ones"]
     index --> unseed["Delete the seed rows"]
     unseed --> meta["Load the meta row into meta_v1"]
     meta --> open
@@ -199,7 +199,7 @@ sequenceDiagram
         F->>S: PUT the parquet file
         F->>API: finish the upload, then load it
     end
-    loop seven indexes
+    loop two BM25 indexes, and the sorted and vector indexes when asked
         P->>F: create_index(table, column, type, metric)
         F->>API: submit the index build
         F->>API: poll every 0.2 s until it is done
@@ -222,6 +222,12 @@ name and the vector size must equal the arguments.
 
 Two processes that provision the same new name at the same moment can both create a
 database. The platform has no conditional create, and the driver does not prevent this.
+
+`list_managed_databases` of `hotdata-framework` 0.14.1 reads only the first page of the
+list, newest first, and a page holds at most 100 databases. [read from source, not
+observed] The issue is hotdata-dev/sdk-python-framework#89. So `provision` does not use
+it. It pages the list of the SDK with the name as the search text, keeps each database
+whose name is exactly the name, and reads each of those by its id.
 
 ## A write
 
@@ -297,14 +303,19 @@ key in one flush write revisions n+1 and n+2.
 ### The loads
 
 The new rows and the superseded rows of one table go into one parquet file and one upsert
-load. The cue vectors of the new rows go into a second load, on `cue_v1`. The loads of one
+load. The cue vectors of the new rows go into a second load, on `cue_v1`. A table whose
+rows are all new, at most 5 of them, gets a SQL `INSERT` in place of the load. So a `put`
+of a new fact with cues sends two `INSERT` statements and no upload. The `INSERT` selects
+its rows from a `VALUES` list, and keeps only the ids that the table does not hold, so a
+retried `INSERT` writes no row twice. The loads of one
 batch run at the same time, one thread for each load. They are not atomic. If the cue load
 fails, the record has no cue row. If the record load fails, a cue row is left without a
 record, and the search drops it.
 
 Each load uploads its file once, and then calls the load API. Only the load call is
-retried on 409. A load costs about 2.1 seconds in the cloud, and the cost does not change
-with row count. [measured] So hotmemory buffers puts in a writer, and each flush pays for
+retried on 409. A load of rows with no vector costs about 2.1 seconds in the cloud, and
+the cost does not change with row count. [measured] With 1,536-dimension vectors, a load
+of 100 rows took 2.5 s, and 1,000 rows 8.3 s. [measured, M4, 2026-10-21] So hotmemory buffers puts in a writer, and each flush pays for
 one load for each table, not one load for each record.
 
 If a load takes more than 10 seconds, the framework asks the API to run it as a job, and
@@ -312,8 +323,9 @@ then polls the job. [read from source, not observed] The engine then writes the 
 object storage and records them in the catalog. The order of those two steps was not
 observed.
 
-hotmemory never sends `INSERT`, `UPDATE`, or `DELETE` in SQL. Every change to a row is a
-keyed load. The cloud refuses SQL writes. [measured]
+hotmemory sends `INSERT` only for a small write of new rows. Every other change to a row
+is a keyed load. The cloud accepts `INSERT` and refuses `UPDATE` and `DELETE`. One row by
+`INSERT` took 531 ms in the cloud, against 1,682 ms by load. [measured, M4, 2026-10-21]
 
 ## Remember and capture
 
@@ -335,7 +347,7 @@ sequenceDiagram
     end
     C->>M: capture(text, scope, extractor, actor, observed_at)
     M->>H: search(text, [scope], kinds fact, profile, procedure, k=10)
-    H->>API: one vector SELECT on memory_v1
+    H->>API: one SELECT with the ranking of the store
     API-->>H: ranked rows
     H-->>M: hits
     Note over M: recall keeps the lines that fit in 2,000 characters
@@ -393,19 +405,25 @@ flowchart TD
     eps -- "no" --> out["Return the records and the block"]
     eps -- "cited" --> get["get each episode that the facts<br/>of the block name in sources"]
     eps -- "search" --> find["search the episodes,<br/>kind episode, top k"]
-    get --> whole["Add whole episodes while they fit<br/>in what the facts left"]
-    find --> whole
+    get --> epasof{"as_of given?"}
+    find --> epasof
+    epasof -- "yes" --> epkeep["Keep the episodes valid at as_of"]
+    epasof -- "no" --> whole
+    epkeep --> whole["Add whole episodes while they fit<br/>in what the facts left"]
     whole --> out
 ```
 
-With `episodes="cited"`, `recall` sends one `get` for each distinct source that is an
-episode id in the allowed scopes. With `episodes="search"`, it sends a second search with
+With `episodes="cited"`, `recall` sends one `get` for each distinct source that is a
+valid record id in an allowed scope. Then it drops each record of another kind than
+`episode`. With chunks, a fact cites every chunk of its session, so a fact that cites 11
+chunks costs 11 `get` calls. With `episodes="search"`, it sends a second search with
 the filter `kind` = `episode`, so that search reads `episode_v1`. With chunks, each chunk
 is an episode, so that search ranks each chunk on its own. The episodes that `capture` and
 `load` write have no cues, so the fused ranking of that search is BM25 and the content
 vector.
 
-The `as_of` filter runs in the process, after the search. Thus `recall` with `as_of` can
+The `as_of` filter runs in the process, after the search. It runs on the facts, and then
+on the episodes. Thus `recall` with `as_of` can
 return fewer than k records. The search keeps k records before the filter, so a record that
 is valid at `as_of` but ranks below k is missing.
 
@@ -465,9 +483,17 @@ the table at the build of the index. [measured, local, 2026-10-08] The query nam
 table with an alias and names the distance, and that form makes the engine scan.
 [measured, local, 2026-10-08]
 
-BM25 needs its index. `bm25_search` refuses to run on a table without one. [measured] It
-fetches its top rows from the whole table before the filters apply. So a narrow scope can
-leave BM25 with fewer than k rows, while the vector rankings still rank every row in scope.
+With `vector_index=True`, each vector ranking sends one subquery for each table with no
+alias, the filters in its `WHERE`, and `ORDER BY cosine_distance(...) LIMIT n`. That is
+the form that the engine serves from the vector index. The test that every later write
+is found through the index is marked as an expected failure, so it fails when the engine
+fixes the filtered search.
+
+BM25 needs its index. `bm25_search` refuses to run on a table without one. [measured] The
+engine applies the filters inside `bm25_search`, so BM25 fetches its top rows from the
+rows in scope. In a table of 2,020 rows, a depth of 100 in a scope of 20 rows returned all
+20, although each scored below the 2,000 other rows. [measured, local and cloud,
+2026-10-21] Whether the rows of other scopes change the BM25 scores was not measured.
 
 BM25 ranks each record table on its own, because the BM25 scores of two tables do not
 compare. A fused search with an `episode` filter and another kind thus has four rankings.
@@ -602,7 +628,7 @@ sequenceDiagram
         else a new or changed chunk
             Note over M: The episode id is known before the write:<br/>scope/key@next revision
             M->>H: search for the chunk (as capture does)
-            H->>API: vector SELECT on memory_v1
+            H->>API: one SELECT with the ranking of the store
             M->>X: extractor(chunk, observed_at, current records)
             X-->>M: facts
             Note over M: Add the episode id to the sources of each fact
@@ -664,5 +690,6 @@ These claims on this page come from reading source, or were not measured:
 - The order in which the engine writes parquet files and records them in the catalog.
 - Whether each load writes exactly one parquet file.
 - Where the cloud keeps the catalog, the parquet files, and the index files.
-- Whether the sorted index on `created_at` serves `list` and `sweep`.
 - The cost of a whole document `load` in the cloud.
+- `provision` in a workspace with more than 100 databases. An offline test proves the
+  paging against a fake listing.

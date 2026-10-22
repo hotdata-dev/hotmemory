@@ -35,9 +35,10 @@ A row that no test proves yet names the phase that will prove it.
 | After a synchronous `put` returns, does `list` see the record? | Yes. A read after a write was never stale in 30 trials. | answered [measured] | `test_synchronous_put_is_visible_to_list` |
 | After a synchronous `put` returns, does `search` see the record? | Yes. Without an index, the retrieval query scans the table. With a provider-backed vector index or a BM25 index, the first search after the load returned the new row. | answered [measured], M1 | `test_synchronous_put_is_visible_to_search` |
 | After a buffered `put` returns, is the record visible? | No. It is visible after the writer flushes. The writer records the ids that it flushed. | answered | `test_buffered_put_is_visible_after_flush` |
+| Can a retried `INSERT` write a row twice? | No. `HotdataStore` sends an `INSERT` only for at most 5 new rows of one table, and the statement keeps only the ids that the table does not hold. A second run of the same statement wrote 0 rows. If the engine refuses the `INSERT` for a reason other than a lock, the store writes by upsert load from then on. | answered [measured, local] 2026-10-21 | `test_a_second_insert_writes_nothing`, `test_a_refused_insert_falls_back_to_the_load_from_then_on` |
 | Two processes write to the same table. What happens? | The engine refuses the second load with 409 `RESOURCE_LOCKED`. The driver retries up to 8 attempts, with a backoff from 0.25 seconds that doubles to at most 4 seconds, and then raises the error. Inside one process, the store sends one load at a time for each table. The integration test runs two stores in one process, which the engine cannot tell apart from two processes. | answered [measured], M3 | `test_two_stores_write_one_database_at_once`, `test_a_locked_load_retries_with_a_doubling_backoff`, `test_a_load_stops_after_the_last_attempt` |
 | Two writers in one process put the same key. What happens? | The last writer wins at the row level. Revisions are new rows, so both revisions exist and the later one is current. This holds inside one process only. The next row gives the rule for two processes. | answered | `test_last_writer_wins_on_one_key`, `test_one_store_serializes_writes_on_one_key` |
-| Can two processes write to one database? | Not safely. Two processes that put the same key can both read the same current revision. Both then write the same next revision, and the later load replaces the earlier row, so one revision is lost. One process writes to a database. Other processes can read it. This rule stays until the engine has a conditional write. | answered | `test_one_store_serializes_writes_on_one_key` |
+| Can two processes write to one database? | Not safely. Two processes that put the same key can both read the same current revision. Both then write the same next revision, with the same id, so one revision is lost. For the first revision of a new key, in a write of at most 5 new rows, the guarded `INSERT` keeps the earlier row. For a later revision, or a write of more than 5 rows, the upsert load keeps the later row. One process writes to a database. Other processes can read it. This rule stays until the engine has a conditional write. | answered | `test_one_store_serializes_writes_on_one_key` |
 | Does `delete` remove retained revisions and their embeddings? | Yes. The content vector is a column of its row, and `HotdataStore` deletes the cue rows of every revision with the record rows. After a keyed delete, neither a provider-backed vector index nor a BM25 index returned the deleted row. | answered [measured], M2 | `test_delete_removes_every_revision`, `test_delete_removes_rows_and_cues` |
 | Which filters work in `list` and `search`? | Equality on `kind`, `subject`, `tags`, and `actor`. `kind` also takes a tuple of kinds and matches any kind named. A range on `valid_from`, `valid_until`, `created_at`, and `expired_at`. A prefix on namespace labels. Any other filter raises an error. | answered | `test_filter_matches_by_equality`, `test_filter_kind_tuple_matches_any_kind_named`, `test_filter_matches_a_time_range`, `test_unknown_filter_key_raises`, `test_prefix_matches_whole_labels` |
 | Does a higher score mean more relevant? | The store returns a distance, and a lower distance is closer. The memory contract returns records in order, with no score. An adapter that needs a score converts the distance. | answered | `test_search_returns_distance_closest_first` |
@@ -51,8 +52,9 @@ A row that no test proves yet names the phase that will prove it.
 | A record is past its `forget_after`. Does a `put` of the same content write it again? | Yes. Deduplication applies only to a current revision that `list` can return. The put writes a new revision, and `list` and `search` return it. | answered | `test_put_after_forget_after_writes_a_new_revision` |
 | Can a caller change a stored record? | No. A record is frozen, and the store copies `payload` on the way in and on the way out. A change to a dict that the caller holds does not reach the store. | answered | `test_stored_record_cannot_change` |
 | Where does `HotdataStore` keep an episode? | A `put` of kind `episode` writes to `episode_v1`, and every other kind writes to `memory_v1`. `get`, `history`, `list`, `search`, `delete`, `sweep`, and `list_namespaces` read both tables. The cue vector of a record of either table is a row in `cue_v1`. | answered | `test_episode_goes_to_its_own_table`, `test_key_cannot_cross_the_episode_line` |
-| Is `provision` safe to run again? | Yes. If one database has the name, `provision` opens it after a check of its tables, columns, indexes, and the recorded model and vector size. If more than one database has the name, or the one found has another layout, it raises `LayoutError` and creates nothing. Two processes that provision the same new name at the same moment can both create a database, because the platform has no conditional create. | answered | `test_provision_again_opens_the_same_database`, `test_provision_refuses_a_duplicate_name`, `test_provision_refuses_another_layout`, `test_provision_refuses_another_embedding_model` |
-| Does a plain vector index serve rows loaded after its build? | Only without a filter. With a `WHERE` filter in the same query, the engine searched the index and returned only the rows that were there at the build. So the vector rankings of `HotdataStore` do not use the index. They filter first and rank every row in scope by a scan, so a search in a narrow scope returns the top k rows of that scope. At 100,000 rows of 64 dimensions, a search in a scope of 1 percent of the rows took a median of 97 ms fused and 26 ms by content vector alone. | answered [measured, local] 2026-10-08 | `test_filtered_search_finds_every_later_write`, `test_search_in_a_narrow_scope_returns_its_top_k` |
+| Is `provision` safe to run again? | Yes. If one database has the name, `provision` opens it after a check of its tables, columns, indexes, and the recorded model and vector size. If more than one database has the name, or the one found has another layout, it raises `LayoutError` and creates nothing. Two processes that provision the same new name at the same moment can both create a database, because the platform has no conditional create. `provision` reads every page of the database list, so a workspace with more than 100 databases does not get a second database with the name. An offline test proves the paging against a fake listing. No workspace with more than 100 databases was tried. | answered | `test_named_follows_the_cursor`, `test_provision_again_opens_the_same_database`, `test_provision_refuses_a_duplicate_name`, `test_provision_refuses_another_layout`, `test_provision_refuses_another_embedding_model` |
+| Does a plain vector index serve rows loaded after its build? | Only without a filter. With a `WHERE` filter in the same query, the engine searched the index and returned only the rows that were there at the build. So the vector rankings of `HotdataStore` do not use the index. They filter first and rank every row in scope by a scan, so a search in a narrow scope returns the top k rows of that scope. At 100,000 rows of 64 dimensions, a search in a scope of 1 percent of the rows took a median of 97 ms fused and 26 ms by content vector alone. `provision` builds no vector index by default. With the experimental `vector_index=True`, the vector rankings search through the index, and a test marked as an expected failure checks that they find every later write. | answered [measured, local] 2026-10-08 | `test_filtered_search_finds_every_later_write`, `test_search_in_a_narrow_scope_returns_its_top_k`, `test_a_search_through_the_vector_index_finds_every_later_write` |
+| Does BM25 rank the rows of a narrow scope in a shared table? | Yes. The engine applies the scope filter inside `bm25_search`, before its depth. In a table of 2,020 rows, a depth of 100 in a scope of 20 rows returned all 20, although each scored below the other 2,000 rows. Whether rows of other scopes change the BM25 scores was not measured. | answered [measured, local and cloud] 2026-10-21 | `test_bm25_applies_the_scope_filter_before_its_depth` |
 | Does `HotdataStore` agree with `MemoryStore`? | Ranked by content vector alone, it returns the same records in the same order, with distances equal within 1e-6. With the fused ranking, it returns the same set when k covers every record. On the test fixture, the largest distance difference was 4.0e-8. | answered [measured, local] 2026-10-08 | `test_vector_ranking_matches_the_oracle`, `test_fused_ranking_returns_the_oracle_set` |
 | What does `load` store for a document? | One episode for each chunk, under the key `<document>-<n>`, with the first heading and the heading path at the top. Each fact that the extractor returns names the episode of its chunk in `sources`. A fact with no `valid_from` is valid from the `observed_at` of the load. A heading inside a fenced code block does not start a chunk, and no chunk body is longer than `chunk_chars`, unless one line is. | answered | `test_load_stores_each_chunk_as_an_episode_and_links_its_facts`, `test_a_loaded_fact_is_valid_from_the_observed_time`, `test_a_heading_inside_a_fence_is_not_a_heading`, `test_every_body_fits_the_size`, `test_a_cut_table_repeats_its_header` |
 | Does a second `load` of the same text write anything? | No. A chunk whose episode is current with the same content is skipped, and the extractor is not called for it, so this holds for an extractor that calls a model. A changed chunk writes the next revision of its episode. | answered | `test_a_second_load_of_the_same_text_writes_nothing_new`, `test_load_of_an_edited_chunk_writes_its_next_revision` |
@@ -132,9 +134,35 @@ alone.
 
 ### M4. What does a SQL INSERT cost against a file load?
 
-With `RUNTIMEDB_ENGINE__SQL_WRITES=true`, time one hundred single-row INSERT statements and
-one hundred single-row upload-and-load calls into the same table shape. Record the cost per
-call of each.
+Time one hundred single-row INSERT statements and one hundred single-row upload-and-load
+calls into the same table shape. Record the cost per call of each. From 2026-10-21, also
+time five flushes of 1, 10, 100, and 1,000 rows with 1,536-dimension vectors, by INSERT
+and by upload and load. Run it with `scripts/measure_local.py --only m4`.
+
+Cloud result, 2026-10-21, `api.hotdata.dev`: the engine accepted INSERT. The engine ran
+SQL writes without a setting from 2026-10-18. Two runs gave the same picture, and the
+table gives the second. Each value is the median.
+
+| Write | By INSERT | By upload and load |
+|---|---|---|
+| One row, no vector, 100 calls | 494 ms | 1,693 ms |
+| One row with a vector, 5 calls | 531 ms | 1,682 ms |
+| 10 rows with vectors, 5 calls | 1,744 ms | 1,811 ms |
+| 100 rows with vectors, 5 calls | 13,338 ms | 2,526 ms |
+| 1,000 rows with vectors, 5 calls | refused, `Payload Too Large` | 8,323 ms |
+
+The vectors go into the SQL text as array literals. So a flush of 100 rows is 3.2 MB of
+SQL, against 1.0 MB of parquet, and a flush of 1,000 rows is 32 MB, over the size limit of
+a query request. An INSERT is about three times faster than a load for one row, the same
+for 10 rows, and slower above that. Every table held the expected row count after the
+calls.
+
+Local result, 2026-10-21, the local stack with an engine image of 2026-10-08: one row by
+INSERT took a median of 22 ms, against 30 ms by load. A flush of 100 rows with vectors
+took 874 ms by INSERT and 93 ms by load. A flush of 1,000 rows by INSERT was refused with
+`Payload Too Large`, and took 248 ms by load.
+
+The results of 2026-10-05 follow.
 
 Cloud result, 2026-10-05, `api.hotdata.dev`: the engine refused the first INSERT with
 `Bad Request`. Production does not turn on SQL writes, so this is the expected result. One
@@ -148,7 +176,7 @@ of 29 ms, and a mean of 24 ms. Both tables held 101 rows after the calls.
 
 Locally, a load costs about 24 ms, against 2,136 ms in the cloud. So almost all of the
 cloud cost is outside the engine. An INSERT is about 30 percent cheaper than a load
-locally, but production does not accept it.
+locally, but production did not accept it on 2026-10-05.
 
 ### M5. At what size does an index beat a scan?
 
@@ -186,7 +214,10 @@ dominates.
 These results lead to four conclusions.
 
 - The only clear gain is the sorted index on `created_at`. It cut the newest-first filter
-  scan at one hundred thousand rows from 695 ms to 407 ms.
+  scan at one hundred thousand rows from 695 ms to 407 ms. Phase 11 found that a load into
+  a table with this index takes longer as the table grows: 7.9 to 20.1 s for 12 rows into
+  188,893 rows, locally. So `provision` builds it only with `sorted_index=True`.
+  [measured, local, 2026-10-21]
 - The vector index gave no gain at any size. A scan of one hundred thousand vectors of 64
   dimensions is already inside the 400 ms floor.
 - `bm25_search` refuses to run without a BM25 index, so the fused query cannot run without

@@ -9,6 +9,13 @@ does not hold:
     uv run --group bench --env-file .env python -m bench.e2e --replay --arms memory
     uv run --group bench --env-file .env python -m bench.e2e --run --smoke --arms memory
 
+With `--background <database>`, every question runs in that local database, which
+`python -m bench.scale --prefill` filled, and the memory arm recalls over the namespace of
+the question and the namespace `BACKGROUND`. Capture still reads and writes only the
+namespace of the question. Each row records the time of each write of the memory arm.
+
+With `--sample all`, it runs every question of the data file, in file order.
+
 With `--smoke`, it runs the 18 questions of `bench/sample-smoke.json` on `MemoryStore`, one
 store in each worker. With `--keep`, it keeps the memory of each question, and `--reuse`
 recalls from it with no `capture`. It appends the row of each finished question to a rows
@@ -75,6 +82,7 @@ KEPT_RUN = "kept"
 COST_LIMIT = 50.0
 EXTRACT_OVERHEAD = 700
 ACTOR = "longmemeval-extractor"
+BACKGROUND = ("background", "lme_s")
 Models = Callable[..., Reply]
 
 
@@ -141,6 +149,8 @@ SAMPLES = {
     "b": Sample("bench/sample-b.json", 20261013, excludes=("a",)),
 }
 SMOKE = Sample("bench/sample-smoke.json", 20261016)
+ALL = "all"
+"""The name of the run over every question of the data file, in file order."""
 SMOKE_PER_TYPE = 3
 
 
@@ -304,12 +314,14 @@ def run_question(
     arms: Sequence[str] = ARMS,
     config: Config = BASELINE,
     capture: bool = True,
+    background: Sequence[str] | None = None,
 ) -> dict[str, Arm]:
     """Run each arm on `question`, and empty its namespaces after.
 
     `stores` maps each ranking to a store, and every store holds the same records. Without
     `capture`, the memory arm recalls from the records that its namespace holds already,
-    and its count of facts written and of sessions at the limit is None.
+    and its count of facts written and of sessions at the limit is None. With
+    `background`, the final recall of the memory arm also reads that namespace.
     """
     result: dict[str, Arm] = {}
     if "full" in arms:
@@ -338,7 +350,7 @@ def run_question(
                 )
         records, block = memory.recall(
             question.question,
-            [namespace],
+            [namespace] if background is None else [namespace, background],
             as_of=question.as_of,
             budget=config.budget,
             k=config.k,
@@ -573,6 +585,7 @@ class Job:
     reuse: bool = False
     smoke: bool = False
     rows_file: Path | None = None
+    background: str | None = None
 
 
 @dataclass(frozen=True)
@@ -657,6 +670,43 @@ def row_of(question: Question, result: dict[str, Arm]) -> dict[str, Any]:
     }
 
 
+class WriteTimer:
+    """Records the seconds and the drafts of each `_write_many` call of a HotdataStore."""
+
+    def __init__(self, store: Store) -> None:
+        self.writes: list[tuple[int, float]] = []
+        write = store._write_many  # type: ignore[attr-defined]
+
+        def timed(drafts: Sequence[Any]) -> list[str]:
+            started = time.perf_counter()
+            try:
+                ids: list[str] = write(drafts)
+                return ids
+            finally:
+                self.writes.append((len(drafts), time.perf_counter() - started))
+
+        store._write_many = timed  # type: ignore[attr-defined]
+
+    def take(self) -> dict[str, Any]:
+        """Return a summary of the writes since the last call, and forget them.
+
+        The summary holds the count of writes, the count of drafts, and the p50, p95,
+        highest, and sum of the seconds.
+        """
+        writes, self.writes = self.writes, []
+        seconds = sorted(s for _, s in writes)
+        if not seconds:
+            return {"count": 0}
+        return {
+            "count": len(seconds),
+            "drafts": sum(n for n, _ in writes),
+            "p50_s": round(seconds[len(seconds) // 2], 3),
+            "p95_s": round(seconds[min(len(seconds) - 1, int(len(seconds) * 0.95))], 3),
+            "highest_s": round(seconds[-1], 3),
+            "sum_s": round(sum(seconds), 3),
+        }
+
+
 def run_shard(job: Job, shard: Shard) -> Done:
     """Run the questions of `shard` in order, over a new local database of its own.
 
@@ -668,7 +718,9 @@ def run_shard(job: Job, shard: Shard) -> Done:
     opens its own model cache, embedder, and store, so it can run in its own process. It
     prints one line for each question, and appends the row of each finished question to
     `job.rows_file`. A question that raises is listed in `failed`, its namespaces are
-    emptied, and the next question runs. CacheMiss stops the shard.
+    emptied, and the next question runs. CacheMiss stops the shard. With `job.background`,
+    the questions run in that database, which is never deleted, and each row holds the
+    writes of the memory arm and the time of the question.
     """
     from bench.models import Offline, Remote
 
@@ -677,8 +729,12 @@ def run_shard(job: Job, shard: Shard) -> Done:
     rows: list[dict[str, Any]] = []
     failed: list[str] = []
 
-    def finish(question: Question, result: dict[str, Arm]) -> None:
+    def finish(
+        question: Question, result: dict[str, Arm], timing: dict[str, Any] | None = None
+    ) -> None:
         rows.append(row_of(question, result))
+        if timing is not None:
+            rows[-1]["timing"] = timing
         if job.rows_file is not None:
             append_row(job.rows_file, rows[-1])
         marks = " ".join(
@@ -715,6 +771,34 @@ def run_shard(job: Job, shard: Shard) -> Done:
                     clean(empty, shard.run_id, question)
                     continue
                 finish(question, result)
+        elif job.background is not None:
+            with local_store(job.url, job.background, embedder, "never") as (stores, emptied):
+                timer = WriteTimer(stores[job.config.memory_ranking])
+                for question in shard.questions:
+                    started = time.perf_counter()
+                    try:
+                        result = run_question(
+                            question,
+                            models,
+                            stores,
+                            emptied,
+                            shard.run_id,
+                            job.arms,
+                            job.config,
+                            background=BACKGROUND,
+                        )
+                    except CacheMiss:
+                        raise
+                    except Exception as error:
+                        timer.take()
+                        fail(question, error)
+                        clean(emptied, shard.run_id, question)
+                        continue
+                    timing = {
+                        "writes": timer.take(),
+                        "question_s": round(time.perf_counter() - started, 1),
+                    }
+                    finish(question, result, timing)
         elif job.kept is not None:
             delete: Delete = "never" if job.reuse else "on_error"
             for question in shard.questions:
@@ -799,7 +883,12 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     parser.add_argument(
         "--limit", type=int, default=None, help="the first N questions of the sample"
     )
-    parser.add_argument("--sample", choices=tuple(SAMPLES), default="a", help="the sample to run")
+    parser.add_argument(
+        "--sample",
+        choices=(*SAMPLES, ALL),
+        default="a",
+        help="the sample to run, or all for every question",
+    )
     parser.add_argument(
         "--smoke",
         action="store_true",
@@ -855,6 +944,11 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         action="store_true",
         help="skip the questions that the rows file of an earlier run of this command holds",
     )
+    parser.add_argument(
+        "--background",
+        default=None,
+        help="a local database that bench.scale --prefill filled: run in it, and recall over it",
+    )
     parser.add_argument("--tag", default="", help="a suffix for the name of the result file")
     parser.add_argument("--url", default="http://localhost:3000")
     args = parser.parse_args(argv)
@@ -867,6 +961,10 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         parser.error("pass --keep or --reuse, not both")
     if args.smoke and (args.keep or args.reuse or args.sample != "a"):
         parser.error("--smoke runs alone: no --keep, --reuse, or --sample")
+    if args.background is not None and (args.keep or args.reuse or args.smoke):
+        parser.error("--background runs alone: no --keep, --reuse, or --smoke")
+    if args.background is not None and arms != ("memory",):
+        parser.error("--background needs --arms memory")
     if (args.keep or args.reuse) and arms != ("memory",):
         parser.error(f"--{'keep' if args.keep else 'reuse'} needs --arms memory")
     try:
@@ -889,6 +987,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     all_questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
     if args.smoke:
         sample = smoke_ids(list(all_questions.values()))
+    elif args.sample == ALL:
+        sample = list(all_questions)
     else:
         sample = sample_ids(args.sample, list(all_questions.values()))
     questions = [all_questions[question_id] for question_id in sample][: args.limit]
@@ -929,6 +1029,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         "kept": kept,
         "reuse": args.reuse,
     }
+    if args.background is not None:
+        header["background"] = args.background
     earlier: list[dict[str, Any]] = []
     if args.resume:
         if not rows_file.exists():
@@ -962,6 +1064,9 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 print(f"deleted {len(partial)} kept databases of questions that did not finish")
         print(f"{'keeping' if args.keep else 'reusing'} the memory as {kept}-<question id>")
 
+    if args.background is not None and not existing_databases(args.url, [args.background]):
+        parser.error(f"the local database {args.background} does not exist")
+
     commit = _commit()
     started = datetime.now(UTC)
     run_id = f"{started:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
@@ -980,6 +1085,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
         args.reuse,
         args.smoke,
         rows_file,
+        args.background,
     )
     if len(shards) <= 1:
         done = [run_shard(job, shard) for shard in shards]
@@ -1017,6 +1123,8 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                     "from": SAMPLES["a"].file,
                 }
                 if args.smoke
+                else {"name": ALL, "questions": len(all_questions), "order": "data file"}
+                if args.sample == ALL
                 else {
                     "name": args.sample,
                     "file": SAMPLES[args.sample].file,
@@ -1054,8 +1162,14 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                 "fact_sources": config.fact_sources,
                 "session_episodes": config.session_episodes,
                 "episodes": config.episodes,
+                "chunk_chars": config.chunk_chars,
                 "kept": kept,
                 "reused": args.reuse,
+                "background": (
+                    None
+                    if args.background is None
+                    else {"database": args.background, "namespace": "/".join(BACKGROUND)}
+                ),
             },
             "arms": {
                 "full": "every session of the question",

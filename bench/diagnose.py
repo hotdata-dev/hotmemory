@@ -12,22 +12,31 @@ the block held an evidence session as an episode, from the episode keys of the r
 If the result file names kept databases (a run with `--keep` or `--reuse`), this reads the
 memory of each question from its kept database and does not run `capture`.
 
+If the result file names a background database (a run with `--background`), this runs
+`capture` again in that database and recalls over the namespace of the question and
+`BACKGROUND`, as the run did. The block is the block of that recall, and each row records
+whether its SHA-256 equals the one of the run, and how many episodes the search found, kept
+after `as_of`, and showed, from the question and from the background. `--ids` limits the
+diagnosis to the listed misses.
+
     uv run --group bench --env-file .env python -m bench.diagnose --result <file>
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import uuid
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from bench.data import DATA_DIR, DATA_FILE, QUESTION_TYPES, Question, load
 from bench.e2e import (
+    BACKGROUND,
     BASELINE,
     KEPT_RUN,
     RECALL_BUDGET,
@@ -44,7 +53,7 @@ from bench.embed import CACHE_DIR
 from bench.models import JUDGE, CachedModels, Offline, Remote
 from bench.retrieval import RANKINGS, RESULTS_DIR, _commit
 from hotmemory import Filter, Memory, Record, Store
-from hotmemory.contract import RECALLED_KINDS, fit_lines, is_valid_at, render_line
+from hotmemory.contract import RECALLED_KINDS, Episodes, fit_lines, is_valid_at, render_line
 
 NOT_EXTRACTED = "not extracted"
 BELOW_K = "extracted, ranked below k"
@@ -115,16 +124,22 @@ def verdict(holding: set[str], best_rank: int | None, block: set[str], k: int = 
     return BELOW_K
 
 
-def memory_config(result: dict[str, Any]) -> Config:
+def memory_config(result: dict[str, Any], chunk_chars: int | None = None) -> Config:
     """Return the configuration of the memory arm that a result file records.
 
     A result file of phase 5 records no `memory` section, and its run used `BASELINE`. A
     result file of phase 6 records no `fact_sources`, and its facts carried no source. A
-    result file before phase 8 records no `session_episodes` and no `episodes`.
+    result file before phase 8 records no `session_episodes` and no `episodes`. A result
+    file before phase 11 records no `chunk_chars`, and `chunk_chars` gives it. Raises
+    ValueError if the run stored chunks and neither gives their size.
     """
     found = result["config"].get("memory")
     if found is None:
         return BASELINE
+    size = found.get("chunk_chars", chunk_chars)
+    described = result["config"].get("arms", {}).get("memory", "")
+    if size is None and "in chunks of" in described:
+        raise ValueError("the run stored chunks of a size that the file does not record")
     return Config(
         memory_ranking=found["ranking"],
         k=found["k"],
@@ -133,7 +148,7 @@ def memory_config(result: dict[str, Any]) -> Config:
         fact_sources=found.get("fact_sources", False),
         session_episodes=found.get("session_episodes", False),
         episodes=found.get("episodes", "none"),
-        chunk_chars=found.get("chunk_chars"),
+        chunk_chars=size,
     )
 
 
@@ -186,12 +201,26 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--result", type=Path, default=RESULTS_DIR / "e2e-sample-a.json")
     parser.add_argument("--url", default="http://localhost:3000")
+    parser.add_argument("--ids", default="", help="comma-separated misses; all if empty")
+    parser.add_argument(
+        "--chunk-chars", type=int, default=None, help="the chunk size of a run that lacks it"
+    )
     args = parser.parse_args(argv)
     commit = _commit()
 
     result = json.loads(args.result.read_text())
-    config = memory_config(result)
+    try:
+        config = memory_config(result, args.chunk_chars)
+    except ValueError as error:
+        parser.error(f"{error}: pass --chunk-chars")
     missed = [row["id"] for row in result["questions"] if not row["arms"]["memory"]["correct"]]
+    if args.ids:
+        wanted = [question_id for question_id in args.ids.split(",") if question_id]
+        unknown = sorted(set(wanted) - set(missed))
+        if unknown:
+            parser.error(f"not a miss of the result file: {', '.join(unknown)}")
+        missed = [question_id for question_id in missed if question_id in wanted]
+    saved = {row["id"]: row["arms"]["memory"].get("block_sha256") for row in result["questions"]}
     in_block = {
         row["id"]: row["arms"]["memory"].get("episodes_in_block", []) for row in result["questions"]
     }
@@ -199,10 +228,20 @@ def main(argv: Sequence[str] | None = None) -> Path:
     replay = CachedModels(Offline(), CACHE_DIR / "replies.sqlite")
     marker = CachedModels(Remote(), CACHE_DIR / "replies.sqlite")
     kept: str | None = result["config"].get("memory", {}).get("kept")
+    background: dict[str, str] | None = result["config"].get("memory", {}).get("background")
     rows: list[dict[str, Any]] = []
 
-    def diagnosed(question: Question, stores: dict[str, Store], namespace: tuple[str, ...]) -> None:
-        rows.append(diagnose(question, stores, namespace, config, marker, in_block[question.id]))
+    def diagnosed(
+        question: Question,
+        stores: dict[str, Store],
+        namespace: tuple[str, ...],
+        recalled: Sequence[Record] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        rows.append(
+            diagnose(question, stores, namespace, config, marker, in_block[question.id], recalled)
+            | (extra or {})
+        )
         print(
             f"{len(rows)}/{len(missed)} {question.id} {group(rows[-1])} {rows[-1]['best_rank']}",
             flush=True,
@@ -218,6 +257,36 @@ def main(argv: Sequence[str] | None = None) -> Path:
             with local_store(args.url, name, delete="never") as (stores, _):
                 namespace: tuple[str, ...] = ("bench", "lme_s", KEPT_RUN, "memory", question_id)
                 diagnosed(questions[question_id], stores, namespace)
+    elif background is not None:
+        if not existing_databases(args.url, [background["database"]]):
+            parser.error(f"the background database {background['database']} does not exist")
+        run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
+        with local_store(args.url, background["database"], delete="never") as (stores, empty):
+            memory = Memory(stores[config.memory_ranking])
+            for question_id in missed:
+                question = questions[question_id]
+                namespace = ("bench", "lme_s", run_id, "memory", question.id)
+                try:
+                    for session in question.sessions:
+                        capture_session(memory, namespace, session, replay, config, [])
+                    records, block = memory.recall(
+                        question.question,
+                        [namespace, BACKGROUND],
+                        as_of=question.as_of,
+                        budget=config.budget,
+                        k=config.k,
+                        episodes=None
+                        if config.episodes == "none"
+                        else cast(Episodes, config.episodes),
+                    )
+                    sha = hashlib.sha256(block.encode()).hexdigest()
+                    extra = {"block_reproduced": sha == saved[question.id]}
+                    extra |= episode_counts(
+                        stores[config.memory_ranking], question, namespace, records, config.k
+                    )
+                    diagnosed(question, stores, namespace, records, extra)
+                finally:
+                    empty(namespace)
     else:
         run_id = f"diagnose-{datetime.now(UTC):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         with local_store(args.url, f"hotmemory-bench-{run_id}") as (stores, empty):
@@ -243,8 +312,11 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 "fact_sources": config.fact_sources,
                 "session_episodes": config.session_episodes,
                 "episodes": config.episodes,
+                "chunk_chars": config.chunk_chars,
             },
             "kept": kept,
+            "background": background,
+            "ids": args.ids or None,
             "marker": JUDGE,
             "hotmemory_commit": commit,
             "spent_usd": round(marker.spent, 4),
@@ -268,10 +340,12 @@ def diagnose(
     config: Config,
     marker: CachedModels,
     shown: Sequence[str],
+    recalled: Sequence[Record] | None = None,
 ) -> dict[str, Any]:
     """Return the diagnosis of one miss, from the memory that `namespace` holds.
 
-    `shown` holds the episode keys that the block of the run held.
+    `shown` holds the episode keys that the block of the run held. With `recalled`, the
+    records of a block from `Memory.recall`, the facts of the block are those records.
     """
     sessions = {fact_source(session.id): session.id for session in question.sessions}
     sessions |= {episode_key(session.id): session.id for session in question.sessions}
@@ -284,8 +358,11 @@ def diagnose(
         ranked = _search(stores[name], question.question, namespace, len(facts))
         found = [n for n, r in enumerate(ranked, start=1) if r.id in holding]
         ranks[name] = found[0] if found else None
-    top = _search(store, question.question, namespace, config.k)
-    block = block_ids(top, question.as_of, config.k, config.budget)
+    if recalled is None:
+        top = _search(store, question.question, namespace, config.k)
+        block = block_ids(top, question.as_of, config.k, config.budget)
+    else:
+        block = {record.id for record in recalled if record.kind != "episode"}
     cause = verdict(holding, ranks[config.memory_ranking], block, config.k)
     present = None
     if cause == RECALLED:
@@ -304,6 +381,35 @@ def diagnose(
         "evidence_in_block": (
             None if config.episodes == "none" else evidence_in_block(question, shown)
         ),
+    }
+
+
+def episode_counts(
+    store: Store,
+    question: Question,
+    namespace: tuple[str, ...],
+    recalled: Sequence[Record],
+    k: int,
+) -> dict[str, Any]:
+    """Return the episodes of the search of `recall`, of those valid at `as_of`, and of the
+    block, each counted from the namespace of the question and from the background."""
+
+    def split(records: Sequence[Record]) -> dict[str, int]:
+        own = sum(record.namespace == namespace for record in records)
+        return {"own": own, "background": len(records) - own}
+
+    found = [
+        hit.record
+        for hit in store.search(
+            question.question, [namespace, BACKGROUND], Filter(kind="episode"), k=k
+        )
+    ]
+    valid = [record for record in found if is_valid_at(record, question.as_of)]
+    shown = [record for record in recalled if record.kind == "episode"]
+    return {
+        "episodes_found": split(found),
+        "episodes_valid": split(valid),
+        "episodes_shown": split(shown),
     }
 
 

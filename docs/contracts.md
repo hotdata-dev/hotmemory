@@ -17,7 +17,9 @@ API owns and loads from files. The facts below shape the contracts. A fact marke
 2026-09-18.
 
 - A write is a file load. The caller uploads parquet and calls a keyed load in replace,
-  append, upsert, update, or delete mode. [measured]
+  append, upsert, update, or delete mode. [measured] From 2026-10-18, a SQL `INSERT`
+  appends rows too. It is about three times faster than a load for one row, and slower
+  above 10 rows. [measured, 2026-10-21] The engine refuses SQL `UPDATE` and `DELETE`.
 - A write costs about 2.1 seconds per call, and the cost does not change with row count.
   One row costs 1.75 seconds. Ten thousand rows cost 2.5 seconds. Call count is the only
   cost that a caller controls. [measured]
@@ -170,9 +172,9 @@ Version 1 ships two drivers.
   with. `records()` returns every revision that a store holds, so a caller can save a
   store and build it again. `MemoryStore` ranks by the cosine distance between the query
   and `content` only. It does not rank by BM25 or by `cues`.
-- `HotdataStore` uses one managed database, keyed loads, a lock for its writes, and the
-  retrieval query below. It needs the `hotdata` extra. With the local RuntimeDB stack, it
-  is also the development driver. The section on `HotdataStore` below gives the details.
+- `HotdataStore` uses one managed database, keyed loads and small SQL inserts, a lock
+  for its writes, and the retrieval query below. It needs the `hotdata` extra. With the
+  local RuntimeDB stack, it is also the development driver. The section on `HotdataStore` below gives the details.
 
 ### Tables and retrieval
 
@@ -213,6 +215,8 @@ with that name, or creates it. It is safe to run again.
 - Two processes that provision the same new name at the same moment can both create a
   database, because the platform has no conditional create. The driver does not prevent
   this.
+- `provision` reads every page of the database list, so it finds a database with the name
+  in a workspace with more than 100 databases.
 
 `HotdataStore.open(database_id, ...)` opens a database by its id, after the same checks.
 `client` is a `HotdataClient` from `hotdata-framework`, and defaults to
@@ -232,28 +236,51 @@ timestamp in UTC to the microsecond. The embedding model and the vector size are
 each database. If an embedder returns a vector of another size, the write or search raises
 `ValueError`, and a write sends nothing.
 
-`provision` builds three indexes in each record table: BM25 on `content`, plain cosine
-vector on `content_embedding`, and sorted on `created_at`. In `cue_v1`, it
-builds a plain cosine vector index on `cues_embedding`. The engine refuses an index on an
-empty table. So `provision` loads one seed row into each table, builds the indexes, and
-deletes the seed rows. The vector indexes stay built, but no ranking uses them until the
-engine fixes the filtered search through the index.
+`provision` builds one index in each record table: BM25 on `content`. The engine refuses
+an index on an empty table. So `provision` loads one seed row into each table, builds the
+indexes, and deletes the seed rows.
+
+`sorted_index=True`, in `provision` and `open`, also builds a sorted index on `created_at`
+in each record table. No query of `HotdataStore` needs it. Each load into a table with it
+takes longer as the table grows: a load of 12 rows into a table of 188,893 episodes took
+7.9 to 20.1 s with it, 1.2 to 2.1 s with BM25 alone, and 0.1 to 0.2 s with no index, on
+the local stack. [measured, 2026-10-21] In the cloud, M5 found that the sorted index cut a
+newest-first filter scan at 100,000 rows from 695 ms to 407 ms. [measured 2026-10-05] A
+database that has the sorted indexes opens without the option too.
+
+`vector_index=True`, in `provision` and `open`, is experimental. With it, `provision` also
+builds a plain cosine vector index on `content_embedding` in each record table, and on
+`cues_embedding` in `cue_v1`. The vector rankings then search through these indexes, with
+the filters inside the search. The engine can miss rows loaded after the index build in a
+filtered search, so such a search can miss recent writes. Each vector index also makes
+each write slower: a load of 1,000 rows into a table of 10,000 rows took about 8.5 s with
+the index and about 1 s without it in the cloud. [measured, 2026-10-21] A database that has
+the vector indexes opens without the option too, and its vector rankings then scan. A
+database without them raises `LayoutError` with the option.
 
 A `put` reads the current revision, then writes the new row and the superseded row in one
-load. If the record has cues, a second load writes its cue row into `cue_v1` at the same
-time. The two loads are not atomic. If the cue load fails, the record has no cue row, and
+load. If the record has cues, a second write puts its cue row into `cue_v1` at the same
+time. A table whose rows in the write are all new, at most 5 of them, gets one SQL
+`INSERT` and not a load. The `INSERT` writes only the ids that the table does not hold, so
+a second try writes no row twice. A store whose engine refuses the `INSERT` writes by
+upsert load from then on. The two writes are not atomic. If the cue load fails, the record has no cue row, and
 the cue ranking misses it until a retry. If the record load fails, the cue row is left,
-and the search drops it. A writer sends one load per table at each flush. `delete` and
+and the search drops it. A writer sends one write per table at each flush. `delete` and
 `sweep` delete the rows of every revision from the record table and from `cue_v1`.
 
 A store holds a lock across the read and the load of each write, so one store writes in
 order. One process writes to a database. Two processes that put the same key can both read
-the same current revision and both write the next one. Then the later load replaces the
-earlier row. This rule stays until the engine has a conditional write.
+the same current revision and both write the next one, with the same id. Which row stays
+depends on how the store writes it. The first revision of a new key, in a write of at most
+5 new rows, goes by the guarded `INSERT`, so the earlier write stays and the later one
+writes nothing. A later revision rewrites the row of the revision before it, so it goes by
+upsert load, and so does a write of more than 5 rows: then the later load replaces the
+earlier row. In both cases one of the two writes is lost. This rule stays until the engine
+has a conditional write.
 
-If the engine refuses a load with `409 RESOURCE_LOCKED`, the driver tries it again, up to
-8 attempts in all. The wait starts at 0.25 seconds and doubles to at most 4 seconds. After
-the last attempt, the driver raises the error.
+If the engine refuses a load or an `INSERT` with `409 RESOURCE_LOCKED`, the driver tries
+it again, up to 8 attempts in all. The wait starts at 0.25 seconds and doubles to at most
+4 seconds. After the last attempt, the driver raises the error.
 
 A `search` with query text runs one SQL query over both record tables, and over `cue_v1`
 with `ranking="fused"`. If
@@ -278,8 +305,8 @@ With `ranking="fused"`, the query has three parts.
    `forget_after`, and the `Filter`. The two vector rankings apply the filters first and
    then rank every row that is left by a scan. Thus a narrow scope keeps its recall. They do
    not use the vector index, because a filtered search through the index misses rows
-   loaded after its build. BM25 fetches its top rows from the whole table and then
-   applies the filters. Thus a narrow filter can leave BM25 with fewer rows than k.
+   loaded after its build. The engine applies the filters inside the BM25 search, so BM25
+   fetches its top rows from the rows that the filters keep.
 3. Reciprocal rank fusion adds `1 / (60 + rank)` from each ranking, and the query returns
    the k rows with the highest sum. Ties go to the smaller content distance, then to the
    newer row.
@@ -293,8 +320,7 @@ index saves engine time from about ten thousand rows. In the cloud, one request 
 400 ms at every size. That cost hides the saving up to at least one hundred thousand rows.
 [measured 2026-10-05] The fused query costs more than that. On LongMemEval-S in the cloud,
 a fused search took 998 ms at p50, and a vector search took 361 ms. About 50 rows were in
-scope. [measured 2026-10-10, [docs/benchmarks.md](benchmarks.md)] Whether the sorted index on `created_at` serves `list` and `sweep`
-was not observed.
+scope. [measured 2026-10-10, [docs/benchmarks.md](benchmarks.md)]
 
 ## The memory contract
 

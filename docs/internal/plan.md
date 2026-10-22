@@ -5,7 +5,8 @@ Status: agreed, 2026-10-13. The owner agreed to each decision and to the target 
 three phases after it: faster evaluation, the ranking with episode chunks, and a large
 memory store. The later phases moved to 12 to 15. Phase 9 closed on 2026-10-16 with PR
 #28. Phase 10 closed on 2026-10-19 with PR #30. On 2026-10-19 the owner paused this
-workstream before phase 11, to work on other things first, so no phase is open. This file
+workstream before phase 11, to work on other things first. On 2026-10-21 the owner
+resumed it with phase 11, a large memory store. This file
 holds the phases still to come, 11 to 15. Each phase becomes one GitHub issue and one pull request, worked in task order. When a phase closes, `roadmap.md` gets
 its paragraph, and this file keeps only the phases still open. The plan of phase 5 is in
 git history, at commit `4a6fb36`. The plan of phase 6, with the decisions taken during
@@ -128,41 +129,154 @@ The owner agreed to each item on 2026-10-13.
 
 ## Phase 11. A large memory store
 
-Goal: numbers for hotmemory at 10,000, 100,000, and 1,000,000 memories: the time of a
-write and of a search, and the accuracy of retrieval when the store is large. The owner
-asked for it on 2026-10-16. Phase 10 closed on 2026-10-19, and the owner paused the
-workstream before this phase. The tasks are planned when the owner resumes it.
+Status on 2026-10-22: open, on the branch `phase-11-large-store` from `main`. Tasks 1 to 6
+are done, and the full LongMemEval-S run is done. The numbers are in `docs/benchmarks.md`,
+in the sections "The full benchmark" and "A large memory store". The work so far goes into
+one pull request. No issue exists for this phase. The next task is task 7, the large store
+on LongMemEval-M, in the form that the owner chose on 2026-10-22.
 
-The parts discussed so far:
+Goal: proof that hotmemory keeps its accuracy when the memory layer is large. The owner set
+the aim on 2026-10-21. A large store means many sensible memories in the layer, from
+100,000 to 1,000,000, that recall can reach, and new memories added to it during the run.
+It does not mean only many questions. The test that answers it runs samples A and B as in
+phase 10, over a store that is filled first, and compares the scores with the phase 10
+scores of 48 of 54 and 46 of 54 from a fresh store. The full LongMemEval sets add variety to
+the evaluation, and the scale test is the volume test of the layer.
 
-- A synthetic scale test, with no reader model: load 10,000, 100,000, and 1,000,000
-  records, from the facts and sessions that the benchmark already extracted. Measure the
-  rate of writes with table loads, and with native DML when the engine has it. Measure
-  search time at p50 and p95 for the fused and the vector ranking, for scopes that hold 1,
-  10, and 100 percent of the rows, on the local stack and in the cloud.
-- The index check. Today the vector rankings filter first and scan, because a filtered
-  search through the vector index misses rows loaded after the build. When the engine
-  fixes that, the vector rankings move to the index, and tests prove that every write,
-  revision, and delete is found through the vector index and the BM25 index.
-- Retrieval at scale: LongMemEval-M, about 500 sessions for each question, scored by
-  `recall_any@k` with no reader model.
-- Recall over a narrow scope in a shared table. BM25 ranks the whole table before the
-  namespace filter, so a scope that holds a small share of the rows can lose BM25 hits.
-  Phase 9 found this in the benchmark runner. Measure the score at each scope size.
-- A comparison with other memory layers in one harness, such as MemoryBench, with the
-  same questions, reader, and judge. It needs accounts for each service and the owner's
-  yes on its cost.
+Two hypotheses to test. The owner's: hotmemory does well at 100,000 to 1,000,000 memories
+now that the engine accepts SQL writes. The second: cues help retrieval on facts. In phase
+10, the fused ranking lost to the vector ranking on episodes, which have no cues.
 
-What phase 10 changed for this phase:
+### Decisions of the owner on 2026-10-21
 
-- The default ranking is the vector ranking. The loss of BM25 hits in a narrow scope now
-  applies only with `ranking="fused"`.
-- With chunks, a session is many episode rows: about 11 for a session of 10,800
-  characters, in chunks of 1,000. A store with chunks reaches each size sooner.
-- `list_managed_databases` of `hotdata-framework` 0.14.1 reads only the first 100
-  databases, and `HotdataStore.provision` uses it. A run that makes many databases, or a
-  workspace that holds more than 100, can make `provision` miss a database and create a
-  second one with the same name. It is filed as hotdata-dev/sdk-python-framework#89.
+- The work runs on one branch, with the doc fixes after phase 10 as its first commit.
+- `provision` builds no vector index by default. `vector_index=True` is an experimental
+  option that builds the three vector indexes and searches through them. It stays, so the
+  index can come back when the engine updates an index as data arrives and fixes the
+  filtered search through it. Work on both is under way in the engine, by report.
+- The local stack runs the latest engine image, `sha256:75403e84eb47`, built 2026-10-19.
+- Task 6 changes from "capture every question into one database" to the prefilled store
+  below, because a namespace that recall never reads cannot change an answer.
+- The numbers go into the docs now, and the commit waits for the later numbers.
+
+### Decisions of the owner on 2026-10-22
+
+- The background of task 6 holds only chunks of sessions that no history of samples A and
+  B holds. The cached facts stay out, because they copy the facts of the questions.
+- `provision` builds no sorted index by default. `sorted_index=True` builds it.
+- LongMemEval-S runs in full, on new databases, as the comparable score.
+- The large store test moves to LongMemEval-M, where each question has one consistent user.
+  BEAM comes later.
+- The runs move to a Kubernetes namespace later, for a known and stable machine.
+
+### What the phase found
+
+Each item was observed on 2026-10-21 unless marked.
+
+- The cloud accepts SQL `INSERT`. One row with a vector took 531 ms by `INSERT` and
+  1,682 ms by load. At 10 rows they were equal. At 100 rows the load was five times
+  faster. At 1,000 rows the `INSERT` was refused with `Payload Too Large`, at 32 MB of SQL.
+  The engine refuses `UPDATE` and `DELETE`, and no work on them has started.
+- The engine applies the scope filter inside `bm25_search`, before its depth, locally and
+  in the cloud. So BM25 loses no rows of a narrow scope in a shared table. The plan of
+  phase 9 to measure that loss is void.
+- A plain vector index is the main cost of a write. A load of 1,000 rows into a table of
+  10,000 rows took about 8.5 s with the index and about 1 s without it, in the cloud.
+- The read of the current revisions before a write once sent one condition for each key.
+  On a flush of 2,020 rows, the local engine stopped with a stack overflow. The read now
+  uses lists of at most 500 keys.
+- A query result holds at most 10,000 rows. A load that is in flight when its process
+  dies still commits.
+- The local image of 2026-10-08 returned fewer than k rows for a vector search over 50,000
+  rows or more, when the query selected `content`. The image of 2026-10-19 and the cloud
+  did not.
+- The scale test, over one pool of every LongMemEval-S session as chunks, up to 254,025
+  rows: the vector ranking matched a brute-force ranking at every size. `recall_any@10`
+  over the whole pool fell from 0.8588 at 10,000 rows to 0.4235 at 254,025 by vector, and
+  to 0.4824 fused. A scoped search stayed fast: 199 ms at 1 percent of 254,025 rows. A
+  flush of 1,000 rows grew from 1.3 s to 14.3 s, and the cause past the read was not
+  measured.
+- LongMemEval-M retrieval, 419 questions, each in its own namespace of about 470 sessions:
+  `recall_any@5` 0.9189 fused and 0.9045 by vector. The two tied at `recall_any@10`, at
+  0.9451. On LongMemEval-S the vector ranking scored higher on every metric. So the fused
+  ranking gains as a store grows.
+- Transient upload failures, `the upload transfer to storage failed before any response`,
+  happened about once in every 100 cloud loads.
+- Observed on 2026-10-21 and 2026-10-22: the sorted index on `created_at` made each write
+  into a table of 188,893 rows take 8 to 20 s, for 1 row as for 12 rows. BM25 alone took
+  about 1.4 s, and no index about 0.4 s. SQL `INSERT` paid the same as a load. Every write
+  was visible at once to a read by id, a newest-first query, and `bm25_search`. So the
+  engine rebuilds the index after each write [inferred]. This was the cause of the growth
+  of a flush in the scale test.
+- Samples A and B over a store with 188,893 chunks of other sessions scored 39 and 35,
+  against 48 and 46 from a fresh store. Other users' chunks took the places of the
+  question's chunks, and contradicted its facts. `recall` applies `as_of` after the top k,
+  so 3 blocks were half empty.
+- LongMemEval-S in full: 439 of 500, 87.8%. The 392 questions outside the samples scored
+  88.0%.
+- One write into the episode table was refused with `RESOURCE_LOCKED` after 8 tries in
+  about 16 s, with one writer only. The cause was not found.
+
+### Tasks
+
+1. Done, `9e96753`. SQL writes in the cloud: `scripts/measure_local.py --only m4`, with
+   flushes of 1, 10, 100, and 1,000 rows. The results are in `docs/guarantees.md`, M4.
+2. Done, `59ac141`. `HotdataStore` writes a table by a guarded `INSERT` when its rows in
+   the write are all new and number at most 5 (`INSERT_ROWS`). The `INSERT` writes only
+   the ids that the table lacks, so a retry writes nothing twice. A refused `INSERT` makes
+   the store write by load from then on.
+3. Done, `129e501`. `provision` reads every page of the database list, so
+   hotdata-dev/sdk-python-framework#89 no longer affects it.
+4. Done, `d3300cc` and later. The scale harness, `bench/scale.py`. Results:
+   `scale-local-local-new-engine-436c7217.json` and
+   `scale-cloud-cloud-no-vector-index-ec9d7e68.json` in `bench/results/`.
+5. Done, `f25d7ea`. Retrieval on LongMemEval-M: `python -m bench.retrieval --data m`. The
+   file is in `bench/data/`, 2.74 GB, SHA-256 `9d79e552...`, and the loader keeps only the
+   user turns. Result: `retrieval-m-hotdata-local-isolated-fused-vector.json`.
+6. Done. The prefilled store: `bench/scale.py --prefill`, `bench/e2e.py --background`,
+   the time of each write in each row, and `bench/diagnose.py` for a background run. The
+   sorted index became an option. Samples A and B scored 39 and 35, and a diagnosis of 25
+   misses explains the loss. Cost $1.56 for the runs and $0.30 for the diagnosis.
+7. Done. LongMemEval-S in full: `bench/e2e.py --sample all`, after a replay of samples A
+   and B on new databases that gave 48 and 46 at $0. 439 of 500. Cost $14.84.
+8. Next. The large store on LongMemEval-M. Two arms on samples A and B, each question with
+   its own namespace of about 500 sessions: the chunks alone, with no extracted facts, and
+   the full memory arm on sample A only. The full arm on both samples costs about $46 in
+   extractor calls [extrapolated], too close to the cap of $50. Write the cost and time
+   estimates before each run.
+9. The cue test on facts. Compare the fused ranking, with cues, and the vector ranking on
+   facts only, on samples A and B. Up to about $2 for each sample if the fused ranking
+   changes the capture prompt.
+10. Record the numbers in `docs/benchmarks.md`, `docs/guarantees.md`, and
+    `docs/internal/architecture.md`, close the phase in `roadmap.md`, and commit.
+
+### How to run and check
+
+- `make local-up` starts the local stack with a random `RUNTIMEDB_SECRET_KEY`. The engine
+  image of 2026-10-19 refuses an empty key. To swap only the engine, run
+  `RUNTIMEDB_SECRET_KEY="$(openssl rand -base64 32)" docker compose up -d --no-deps runtimedb`.
+- Scale: `uv run --group bench --env-file .env python -m bench.scale --sizes 10000,100000`,
+  with `--location cloud`, `--keep`, `--vector-index`, and `--tag`. It writes its result
+  file after each size, and retries a flush three times after a transient upload error.
+- Run one heavy job on the local engine at a time, or the timings mix.
+- Kill a run with SIGINT, so that it deletes its database. SIGKILL leaves the database. A
+  run started with `&` from a shell that is not interactive ignores SIGINT. Stop such a
+  run with SIGTERM to its process group, then delete its worker databases by name.
+- Ask the owner before you stop, restart, or delete anything that a run uses.
+- The local databases `agent-memory` and `local-memory` stay untouched. Each held one
+  memory row and one meta row before and after the engine upgrade.
+
+### Not in this phase
+
+These are under Deferred in `roadmap.md`:
+
+- The vector rankings on the vector index by default. They wait for the engine's fix of
+  the filtered search. When it lands, the expected failure
+  `test_a_search_through_the_vector_index_finds_every_later_write` fails, and the index can
+  become the default.
+- `UPDATE` and `DELETE` by SQL, until the engine has them.
+- The comparison with other memory layers, such as MemoryBench.
+- BEAM at 10 million tokens.
 
 ## Phase 12. Supersede in capture
 
@@ -296,8 +410,7 @@ Acceptance criteria:
 These wait, and `roadmap.md` lists them under Deferred:
 
 - Latency: a conditional write, text loaded only for ranked rows, and the per-request
-  time of the cloud. Native DML and the filtered vector index move to phase 11, where
-  they are measured at scale.
+  time of the cloud. Phase 11 measures SQL writes and the search at scale.
 - A model-backed extractor in an extra, and decision calls with a probability, such as a
   classifier that decides supersede or routes a recall.
 - The other ideas from the hindsight study of 2026-10-09: a chunk-hash delta on
@@ -315,5 +428,10 @@ These wait, and `roadmap.md` lists them under Deferred:
   diff for the names of private repositories and deployment details.
 
 ## Questions for the owner
+
+- Phase 11: the yes to build and run task 6, the prefilled store.
+- Phase 11: the cloud workspace for a run at 1,000,000 rows, and its cost limit apart
+  from the model spend. The cloud runs so far used the workspace of `.env`.
+- Phase 11: a target for the search time, such as p95 in the cloud at 1,000,000 rows.
 
 - Phase 15: the first version number, and whether to publish to TestPyPI first.

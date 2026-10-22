@@ -135,13 +135,19 @@ hotmemory ran LongMemEval-S, a public benchmark of 500 questions over long chat 
 on 2026-10-10. [docs/benchmarks.md](docs/benchmarks.md) gives every number with its
 configuration.
 
+On all 500 questions, on 2026-10-22, the memory arm scored 439 of 500 (87.8%). It ran
+`capture` with chunks of 1,000 characters and a `gpt-4o-mini` extractor, and `recall` with
+a budget of 16,000 characters, about 4,350 tokens of reader input. The reader and the judge
+were `gpt-4o-2024-08-06`. This is one run, and its 95% confidence interval is about 2.9
+points on each side. The 392 questions that no tuning used scored 88.0%.
+
 Retrieval needs no model except the embedder. The runner stored each session of a question
 as an episode in `HotdataStore` and searched with the question. The 419 scored questions
 had these results with the vector ranking. For 98.3% of them, an evidence session was in
 the top 5. For 99.3% of them, every evidence session was in the top 10.
 
-The end-to-end score ran on two samples of 54 questions, sample A on 2026-10-10 and
-sample B on 2026-10-14. Later rows give their own date. The reader and the judge were
+Before that run, the end-to-end score ran on two samples of 54 questions, sample A on
+2026-10-10 and sample B on 2026-10-14. Later rows give their own date. The reader and the judge were
 `gpt-4o-2024-08-06`.
 
 | What the reader got | Sample A | Sample B |
@@ -151,13 +157,16 @@ sample B on 2026-10-14. Later rows give their own date. The reader and the judge
 | The block of `recall`, after `capture` with a `gpt-4o-mini` extractor and the `baseline` prompt | 19 of 54 (35.2%) | 27 of 54 (50.0%) |
 | The same, on 2026-10-14, with the `detail` prompt and a session source on each fact | 31 of 54 (57.4%) | 32 of 54 (59.3%) |
 | The same, on 2026-10-15, with each session stored as an episode, and `recall` with `episodes="search"` and a budget of 64,000 characters, about 12,800 tokens | 45 of 54 (83.3%) | 45 of 54 (83.3%) |
+| The same, on 2026-10-18, with each session stored as chunks of 1,000 characters (`capture` with `chunk_chars=1000`), and `recall` with `episodes="search"` and a budget of 16,000 characters, about 4,300 tokens | 48 of 54 (88.9%) | 46 of 54 (85.2%) |
 
 Facts alone score below the full history. With the `baseline` prompt, the extractor did
 not store the answer in 19 of the 35 misses on sample A, and in 16 of the 27 misses on
 sample B. With the `detail` prompt, these counts are 16 of 23 and 14 of 22. With the
-episodes that a search adds after the facts, the memory arm scores above the full history
-and equal to the 10 sessions on sample A, with less than half of their tokens. With 54
-questions, each score can be about 10 points off. With the `baseline` prompt, the memory
+whole sessions that a search adds after the facts, the extractor did not store the answer
+in 5 misses on each sample. With chunks of 1,000 characters, this count is 2 on each
+sample. The chunk row scores above the full history on both samples. It scores 3 more
+than the 10 sessions on sample A and 2 less on sample B, with about one seventh of their
+tokens. With 54 questions, each score can be about 10 points off. With the `baseline` prompt, the memory
 arm differed by 14.8 points between the two samples. In the cloud, a search took 361 ms at
 p50 with the vector ranking, and 998 ms with the fused ranking.
 
