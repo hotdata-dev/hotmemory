@@ -270,8 +270,13 @@ and the search drops it. A writer sends one write per table at each flush. `dele
 
 A store holds a lock across the read and the load of each write, so one store writes in
 order. One process writes to a database. Two processes that put the same key can both read
-the same current revision and both write the next one. Then the later load replaces the
-earlier row. This rule stays until the engine has a conditional write.
+the same current revision and both write the next one, with the same id. Which row stays
+depends on how the store writes it. The first revision of a new key, in a write of at most
+5 new rows, goes by the guarded `INSERT`, so the earlier write stays and the later one
+writes nothing. A later revision rewrites the row of the revision before it, so it goes by
+upsert load, and so does a write of more than 5 rows: then the later load replaces the
+earlier row. In both cases one of the two writes is lost. This rule stays until the engine
+has a conditional write.
 
 If the engine refuses a load or an `INSERT` with `409 RESOURCE_LOCKED`, the driver tries
 it again, up to 8 attempts in all. The wait starts at 0.25 seconds and doubles to at most
