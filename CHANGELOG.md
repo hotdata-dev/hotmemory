@@ -11,6 +11,8 @@ New entries go under `## [Unreleased]`. A release moves them into a section name
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-23
+
 The first release. It needs Python 3.11 or later. The core package has no dependencies.
 
 ### Added
@@ -56,3 +58,4 @@ The first release. It needs Python 3.11 or later. The core package has no depend
     as an episode, and runs an extractor on each chunk.
 - `hotmemory.openai`, in the `openai` extra, with `OpenAIEmbedder`, an `Embedder` over the
   OpenAI embeddings API.
+
