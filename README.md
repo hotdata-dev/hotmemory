@@ -131,12 +131,13 @@ include it, so you copy it from the repository.
    pip install "hotmemory[hotdata,openai]"
    ```
 
-2. Copy the skill folder into the skills folder of the agent. For Claude Code, this is
-   `~/.claude/skills/` for every project, or `.claude/skills/` in one project:
+2. Copy the skill folder into the folder where your coding agent reads skills. Many agents
+   use `~/.<agent>/skills/` for every project, or `.<agent>/skills/` in one project. The
+   documentation of your agent gives the correct folder.
 
    ```sh
    git clone --depth 1 https://github.com/hotdata-dev/hotmemory
-   cp -r hotmemory/skills/hotmemory ~/.claude/skills/
+   cp -r hotmemory/skills/hotmemory <skills-folder-of-your-agent>/
    ```
 
 The agent runs the scripts from the skill folder. With `--memory-file`, they need no
