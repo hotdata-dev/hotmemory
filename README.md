@@ -118,7 +118,30 @@ episode = memory.store.get(("team", "alerts"), "disk-incident-0001")
 print(episode.content.splitlines()[0])  # # Disk incident
 ```
 
-[skills/hotmemory/SKILL.md] gives an agent the same operations as commands.
+## Use the skill
+
+[skills/hotmemory/SKILL.md] gives an agent the same operations as commands. The skill is
+a folder with the skill file and one script for each operation. The package does not
+include it, so you copy it from the repository.
+
+1. Install hotmemory in the Python that the agent runs. The extras are necessary only for
+   a Hotdata database:
+
+   ```sh
+   pip install "hotmemory[hotdata,openai]"
+   ```
+
+2. Copy the skill folder into the skills folder of the agent. For Claude Code, this is
+   `~/.claude/skills/` for every project, or `.claude/skills/` in one project:
+
+   ```sh
+   git clone --depth 1 https://github.com/hotdata-dev/hotmemory
+   cp -r hotmemory/skills/hotmemory ~/.claude/skills/
+   ```
+
+The agent runs the scripts from the skill folder. With `--memory-file`, they need no
+network and no key. With `--database`, they read the Hotdata and OpenAI keys from the
+environment.
 
 ## Store memory in Hotdata
 
