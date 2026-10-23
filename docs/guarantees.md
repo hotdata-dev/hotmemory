@@ -12,7 +12,7 @@ Each guarantee has one of two states.
 - To measure: a measurement must give the answer before the library relies on it.
 
 A guarantee marked [measured] was observed against a real Hotdata workspace. A guarantee
-marked [measured, local] was observed against the local stack in [local.md](local.md).
+marked [measured, local] was observed against the local stack that `make local-up` starts.
 
 The Test column names the tests that prove the guarantee. A test in
 `tests/test_conformance.py` proves a row of the storage contract against every driver. A
@@ -79,7 +79,7 @@ A row that no test proves yet names the phase that will prove it.
 ## Measurements
 
 Phase 0 runs six measurements. M1, M2, and M3 run against a throwaway cloud database that
-the run creates and deletes. M4, M5, and M6 were planned for a local RuntimeDB container.
+the run creates and deletes. M4, M5, and M6 were planned for a local engine container.
 The bare container refuses managed tables, so they also run against throwaway cloud
 databases, with `--cloud`. The scripts are `scripts/measure_cloud.py` and
 `scripts/measure_local.py`.
@@ -169,7 +169,7 @@ Cloud result, 2026-10-05, `api.hotdata.dev`: the engine refused the first INSERT
 hundred single-row upload-and-append loads took a median of 2,136 ms, a p95 of 2,614 ms, and
 a mean of 2,208 ms. This agrees with the 2.1 seconds per call measured earlier.
 
-Local result, 2026-10-05, the local stack in [local.md](local.md) with SQL writes turned
+Local result, 2026-10-05, the local stack with SQL writes turned
 on: one hundred single-row INSERT statements took a median of 17 ms, a p95 of 22 ms, and a
 mean of 18 ms. One hundred single-row upload-and-append loads took a median of 24 ms, a p95
 of 29 ms, and a mean of 24 ms. Both tables held 101 rows after the calls.
@@ -232,7 +232,7 @@ refused a provider-backed vector index beside them, with this error:
 Embedding-backed vector indexes cannot coexist with other indexes on the same table.
 ```
 
-Local result, 2026-10-05, the local stack in [local.md](local.md): a local request costs
+Local result, 2026-10-05, the local stack: a local request costs
 about 6 to 10 ms, so the cost of the engine shows. The vector index starts to pay between
 one thousand and ten thousand rows, and it pays clearly at one hundred thousand rows. The
 settings are the same as in the cloud run.
@@ -274,7 +274,7 @@ in CI, in place of a throwaway cloud database.
 Bare container result, 2026-10-05, with the `latest` image pulled on that day (digest
 `sha256:302371bb1923`): the first call fails. The container refuses to create a managed
 database, with `managed catalogs require ducklake.metadata_pg_url to be configured`.
-[local.md](local.md) explains the cause.
+The image keeps its catalog in SQLite, and a managed table needs a Postgres catalog.
 
 Cloud result, 2026-10-05, `api.hotdata.dev`: every call works. The calls create a
 database with two keyed tables and load it in replace, upsert, and delete mode. They build
@@ -283,7 +283,7 @@ a BM25 index and run `bm25_search`. They build a provider-backed vector index
 The row count after the loads was 3, as expected. This is the reference for the local
 result.
 
-Local result, 2026-10-05, the local stack in [local.md](local.md), with Postgres and
+Local result, 2026-10-05, the local stack, with Postgres and
 RustFS beside the engine: every call works except the provider-backed vector index. It
 fails with `Embedding provider 'sys_emb_openai' not found`, because the stack configures no
 embedding provider. The row count after the loads was 3. So the integration tests can run

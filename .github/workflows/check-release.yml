@@ -1,0 +1,21 @@
+name: check-release
+
+on:
+  pull_request:
+    paths:
+      - pyproject.toml
+      - CHANGELOG.md
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Check that a version change has a changelog section
+        run: python3 scripts/changelog.py check "origin/$GITHUB_BASE_REF"

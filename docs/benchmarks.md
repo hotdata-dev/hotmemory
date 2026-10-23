@@ -16,7 +16,7 @@ gives the commands that repeat each run and write the files again.
 | SHA-256 of the data file | `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442` |
 | Embedder | OpenAI `text-embedding-3-small`, 1,536 dimensions. Each text is cut to 8,191 tokens. |
 | Driver | `HotdataStore`, except in the driver check |
-| Engine, local | The local stack of [docs/local.md](local.md), RuntimeDB image `sha256:48046ae3bf22`, hotdata-framework 0.14.1 |
+| Engine, local | The local stack of `make local-up`, engine image `sha256:48046ae3bf22`, hotdata-framework 0.14.1 |
 
 Each question has its own history of 38 to 62 sessions. The runner sorts the sessions of a
 question by date, because 211 of the 500 histories are out of order in the file. Each
@@ -625,7 +625,7 @@ phase 10. File: `e2e-sample-all-p11-full-chunks1000-16k.json`.
 | Budget | 16,000 characters. The block had 15,561 characters at the median. |
 | Reader input | 4,346 tokens at the median and 4,588 at the 95th percentile, with the prompt |
 | Reader and judge | `gpt-4o-2024-08-06`, temperature 0, the prompts of the reference code |
-| Engine | The local stack, RuntimeDB image `sha256:75403e84eb47` |
+| Engine | The local stack, engine image `sha256:75403e84eb47` |
 
 The budget is in characters, not tokens. Compare it with another system by the reader
 input in tokens.
@@ -659,7 +659,7 @@ model and gave 48 and 46 again, with the same blocks. Files:
 ## A large memory store
 
 Phase 11 measured recall from one store that holds many memories. Each number below was
-observed on 2026-10-21. The local runs used the RuntimeDB image `sha256:75403e84eb47`,
+observed on 2026-10-21. The local runs used the engine image `sha256:75403e84eb47`,
 built on 2026-10-19, unless a paragraph names another. The cloud run used
 `api.hotdata.dev`.
 

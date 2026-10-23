@@ -4,14 +4,14 @@ This page tells you how hotmemory stores memory on Hotdata. It follows each oper
 the call of the consumer down to the engine, the catalog, and object storage. It also
 draws the line between the work that hotmemory does and the work that the platform does.
 
-The rules of each operation are in [contracts.md](../contracts.md), and their proofs are in
-[guarantees.md](../guarantees.md). This page does not repeat the rules. It shows the calls,
+The rules of each operation are in [contracts.md](contracts.md), and their proofs are in
+[guarantees.md](guarantees.md). This page does not repeat the rules. It shows the calls,
 the SQL, and the loads that carry them out.
 
 Each claim has one of these sources:
 
 - The code of hotmemory at commit `a0145ee`, the merge of phase 10. Such a claim has no mark.
-- A measurement in [contracts.md](../contracts.md) or [guarantees.md](../guarantees.md), marked
+- A measurement in [contracts.md](contracts.md) or [guarantees.md](guarantees.md), marked
   [measured] with its date.
 - A look at the local stack on 2026-10-12, marked [observed, local].
 - The source of `hotdata-framework` 0.14.1 and `hotdata` 0.11.0, the client libraries that
@@ -40,7 +40,7 @@ flowchart LR
     end
     subgraph platform["Hotdata platform"]
         api["Hotdata API"]
-        engine["RuntimeDB<br/>(the query engine)"]
+        engine["The Hotdata engine"]
         catalog[("Postgres catalog<br/>and DuckLake metadata")]
         objects[("Object storage<br/>parquet and index files")]
         api --> engine
@@ -51,10 +51,7 @@ flowchart LR
     framework -- "upload to a presigned URL" --> objects
 ```
 
-In the cloud, the API is at `api.hotdata.dev`. The source of `hotdata-framework` names a
-CDN and a gateway between the client and the engine. [read from source, not observed]
-Locally, the engine serves the API itself on port 3000 and accepts every request with no
-token. [local.md](../local.md) describes the local stack.
+In the cloud, the API is at `api.hotdata.dev`.
 
 ### Who does what
 
@@ -130,22 +127,6 @@ Every table has the key column `id`. A keyed load replaces or deletes rows by th
 A plain vector index covers a vector column that the caller fills. hotmemory fills each
 vector itself with the embedder of the caller.
 
-On the local stack, the platform keeps the data in two places. [observed, local]
-
-- The Postgres catalog holds the tables of RuntimeDB, for example `databases`, `uploads`,
-  `jobs`, and `indexes`. It also holds the DuckLake tables, for example
-  `ducklake_snapshot`, `ducklake_data_file`, and `ducklake_delete_file`. DuckLake metadata
-  records which parquet files make up each version of a table.
-- Object storage holds the rows of each table as parquet files under
-  `ducklake_data/<catalog>/public/<table>/`. It holds the index files under
-  `cache/<connection>/public/<table>/indexes/`: a `.tar.gz` file for BM25, a `.usearch` and
-  a `.feather` file for a vector index, and a parquet file for a sorted index. It also
-  holds query results as parquet files under `cache/_runtimedb_internal/runtimedb_results/`.
-
-The local `memory_v1` folder held hundreds of parquet files, one table with many loads
-behind it. Whether each load writes exactly one new file was not observed. Where the cloud
-keeps these files was not observed.
-
 ## Provision
 
 `HotdataStore.provision(name, embedder=..., model=..., dimensions=...)` opens the database
@@ -185,7 +166,7 @@ sequenceDiagram
         participant F as hotdata-framework
     end
     box Hotdata platform
-        participant API as Hotdata API and RuntimeDB
+        participant API as Hotdata API and engine
         participant S as Object storage
     end
     P->>F: list_managed_databases()
@@ -245,7 +226,7 @@ sequenceDiagram
         participant E as Embedder
     end
     box Hotdata platform
-        participant API as Hotdata API and RuntimeDB
+        participant API as Hotdata API and engine
         participant S as Object storage
     end
     C->>W: put(...) for each record
@@ -343,7 +324,7 @@ sequenceDiagram
         participant H as HotdataStore
     end
     box Hotdata platform
-        participant API as Hotdata API and RuntimeDB
+        participant API as Hotdata API and engine
     end
     C->>M: capture(text, scope, extractor, actor, observed_at)
     M->>H: search(text, [scope], kinds fact, profile, procedure, k=10)
@@ -516,7 +497,7 @@ over one database, one for each ranking.
 | Local stack | 130 ms | 42 ms | about 50 |
 | Cloud | 998 ms | 361 ms | about 50 |
 
-These are the LongMemEval-S numbers of [benchmarks.md](../benchmarks.md), measured on
+These are the LongMemEval-S numbers of [benchmarks.md](benchmarks.md), measured on
 2026-10-10. In the cloud, one request costs about 400 ms at every table size up to 100,000
 rows. [measured 2026-10-05]
 
@@ -536,7 +517,7 @@ sequenceDiagram
         participant H as HotdataStore
     end
     box Hotdata platform
-        participant API as Hotdata API and RuntimeDB
+        participant API as Hotdata API and engine
     end
     C->>M: supersede(scope, key, fact, valid_from)
     M->>H: get(scope, key)
@@ -603,7 +584,7 @@ measurement, and the vector rankings do not read it.
 ## Load
 
 `load` turns one Markdown document into episodes and facts. It cuts the document into
-chunks first, with no call to the platform. [contracts.md](../contracts.md) gives the four
+chunks first, with no call to the platform. [contracts.md](contracts.md) gives the four
 steps of the cut.
 
 ```mermaid
@@ -616,7 +597,7 @@ sequenceDiagram
         participant H as HotdataStore
     end
     box Hotdata platform
-        participant API as Hotdata API and RuntimeDB
+        participant API as Hotdata API and engine
     end
     C->>M: load(document, text, scope, extractor)
     Note over M: Cut the text into chunks.<br/>Chunk n gets the key document-000n.

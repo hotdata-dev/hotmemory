@@ -47,9 +47,9 @@ API owns and loads from files. The facts below shape the contracts. A fact marke
 - A provider-backed vector index cannot share its table with any other index. The engine
   refuses the second index. A plain vector index and a BM25 index can share a table.
   [measured 2026-08-18]
-- RuntimeDB, the Hotdata query engine, runs on a laptop with a Postgres container and an
-  S3-compatible storage container. The bare engine image alone refuses managed tables.
-  [measured 2026-10-05] [local.md](local.md) tells you how to start the stack.
+- The Hotdata engine runs on a laptop with a Postgres container and an S3-compatible
+  storage container. The bare engine image alone refuses managed tables.
+  [measured 2026-10-05] `make local-up` starts the stack.
 - The engine refuses a BM25 index or a plain vector index on an empty table. It allows
   one vector index per table. [measured, local, 2026-10-08]
 - A filtered search through a plain vector index returns only the rows that were in the
@@ -174,7 +174,7 @@ Version 1 ships two drivers.
   and `content` only. It does not rank by BM25 or by `cues`.
 - `HotdataStore` uses one managed database, keyed loads and small SQL inserts, a lock
   for its writes, and the retrieval query below. It needs the `hotdata` extra. With the
-  local RuntimeDB stack, it is also the development driver. The section on `HotdataStore` below gives the details.
+  local engine stack, it is also the development driver. The section on `HotdataStore` below gives the details.
 
 ### Tables and retrieval
 
@@ -496,5 +496,5 @@ These three rules apply to every operation:
   language, for extraction that must run centrally, or for scope enforcement above the API
   key.
 - Extraction on the server. `capture` and `load` take a callable and do nothing more.
-- A third driver. The local RuntimeDB stack covers offline development.
+- A third driver. The local engine stack covers offline development.
 - Access control beyond scope filtering.

@@ -4,8 +4,9 @@
 
 - [uv](https://docs.astral.sh/uv/) installs the development tools and runs the scripts.
 - GNU Make runs the targets below.
-- Docker Desktop runs the local RuntimeDB stack. You need it only for `make local-up` and
-  `make integration`.
+- Docker Desktop runs the local engine stack. You need it only for `make local-up` and
+  `make integration`. The engine image is private, so only the Hotdata team can start the
+  stack.
 
 ## The one command
 
@@ -35,8 +36,9 @@ passes in CI. It has no tiers, because the full check takes less than five secon
 | Target | What it does |
 |---|---|
 | `make verify` | Runs every check above. |
+| `make floor` | Runs the offline tests on Python 3.11 with the lowest version of each dependency that `pyproject.toml` allows. It needs the network to install them. |
 | `make integration` | Runs the tests marked `hotdata` against the local stack. Start the stack first with `make local-up`. To use another engine, set `HOTMEMORY_TEST_URL`. |
-| `make local-up` | Starts the local RuntimeDB stack: Postgres, RustFS, and the engine. [docs/local.md](docs/local.md) tells you how to point the library at it. |
+| `make local-up` | Starts the local engine stack: Postgres, RustFS, and the engine, on port 3000. |
 | `make local-down` | Stops the stack and deletes its data. |
 | `make local-pull` | Downloads newer images for the stack. |
 
@@ -76,8 +78,13 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   offline. `make integration` sets it to the local stack. A run provisions one database
   with a new name, empties its tables after each test, and deletes it at the end. They are
   the only tests that use the network.
-- CI runs two jobs on each pull request. `verify` runs `make verify`. `integration` starts
-  the local stack with `make local-up` and runs `make integration`.
+- CI runs three jobs on each pull request. `verify` runs `make verify` on Python 3.11,
+  3.12, 3.13, and 3.14. `floor` runs `make floor`. `integration` starts the local stack
+  with `make local-up` and runs `make integration`. If a pull request changes
+  `pyproject.toml` or `CHANGELOG.md`, `check-release` also runs. [RELEASING.md](RELEASING.md)
+  describes it.
+- Each workflow pins its actions by commit SHA. Dependabot opens a pull request each week
+  to update the pins and `hotdata-framework`.
 - No test calls a model. The tests pass a fake embedder. `capture` and `load` take an
   extractor callable, and the tests pass a fake extractor that returns fixed facts.
 - There is no coverage gate, no mutation-testing gate, and no report generator. The output
@@ -91,4 +98,3 @@ same pull request. If you change a public surface, add an entry to
 [CHANGELOG.md](CHANGELOG.md).
 
 No file in this repository names a private repository, a customer, or a deployment detail.
-This rule includes `docs/internal/`.
