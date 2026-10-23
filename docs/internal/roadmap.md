@@ -74,8 +74,8 @@ taken up now.
   `HotdataStore.provision` uses the first. It is filed as
   hotdata-dev/sdk-python-framework#89. Phase 11 works around it in `provision`.
 - The vector rankings on the vector index, from phase 2. A filtered search through the
-  vector index misses rows loaded after the build. The defect is reported to the engine
-  team. Until it is fixed, the vector rankings scan, and phase 11 measures that cost.
+  vector index misses rows loaded after the build. Until it is fixed, the vector rankings
+  scan, and phase 11 measures that cost.
 - SQL `UPDATE` and `DELETE`, from phase 11. The engine refuses them, so a closed
   revision, `forget`, and `sweep` stay on keyed loads.
 - The comparison with other memory layers in one harness, such as MemoryBench, from
@@ -110,8 +110,8 @@ A closed phase keeps its row above with the date it closed and the pull request.
   later phases in four ways. The engine allows one vector index per table, so the cue
   vectors have their own table. The engine refuses an index on an empty table, so
   `provision` builds over a seed row. A filtered search through a vector index misses rows
-  loaded after the build, so the vector rankings filter after their fetch. The defect is
-  reported to the engine team, and it reproduces in production. One process writes to a
+  loaded after the build, so the vector rankings filter after their fetch. The defect
+  also occurs in the cloud. One process writes to a
   database until the engine has a conditional write.
 - Phase 3 closed on 2026-10-08 with PR #9, which closed issue #8. It changed the plan for
   later phases in four ways. The vector rankings of `HotdataStore` filter first and rank

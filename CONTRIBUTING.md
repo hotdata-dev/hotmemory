@@ -82,6 +82,8 @@ model. The tests pass a fixed clock and a fake embedder to the store, from
   with `make local-up` and runs `make integration`. If a pull request changes
   `pyproject.toml` or `CHANGELOG.md`, `check-release` also runs. [RELEASING.md](RELEASING.md)
   describes it.
+- Each workflow pins its actions by commit SHA. Dependabot opens a pull request each week
+  to update the pins and `hotdata-framework`.
 - No test calls a model. The tests pass a fake embedder. `capture` and `load` take an
   extractor callable, and the tests pass a fake extractor that returns fixed facts.
 - There is no coverage gate, no mutation-testing gate, and no report generator. The output

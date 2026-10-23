@@ -122,8 +122,8 @@ GPT-4o is about 60%. A memory layer that scores below that adds nothing.
 ## 3. LoCoMo
 
 LoCoMo is ten long conversations between two speakers, with questions about them. The
-data is CC BY-NC 4.0, which forbids commercial use. An internal evaluation is likely
-inside that license. Nobody here asked a lawyer.
+data is CC BY-NC 4.0, which forbids commercial use. A run needs a
+check of the license first.
 
 | Item | Value |
 |---|---|
@@ -442,4 +442,3 @@ the sample works.
   paper PDF was not read.
 - The LongMemEval M split was not downloaded.
 - Whether Hotdata accepts reads in parallel during a load was not measured.
-- The license position of LoCoMo for internal use was not reviewed by a lawyer.

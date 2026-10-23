@@ -65,10 +65,8 @@ These come from measurements against Hotdata between 2026-08-27 and 2026-09-18.
 
 - A write is a file load in every released engine and in production. The caller uploads
   parquet and calls a keyed load in replace, append, upsert, update, or delete mode.
-  [measured] On RuntimeDB main since 2026-09-25, a SQL write path exists. It ran behind
-  the `[engine] sql_writes` flag until 2026-10-18, and runs for every instance after.
-  The cloud accepted INSERT on 2026-10-21. [measured, M4] INSERT and CREATE TABLE, CREATE
-  TABLE AS, and DROP TABLE are implemented. UPDATE and DELETE are refused. An INSERT is an append
+  [measured] The cloud accepted SQL INSERT on 2026-10-21. [measured, M4] INSERT and CREATE
+  TABLE, CREATE TABLE AS, and DROP TABLE are implemented. UPDATE and DELETE are refused. An INSERT is an append
   load whose source is a query: the planned rows are staged as parquet and appended through
   the same locked load path, so it holds the same per-table lock and maintains indexes the
   same way. A SQL write needs the read and write claims and can target only the database's
@@ -77,10 +75,9 @@ These come from measurements against Hotdata between 2026-08-27 and 2026-09-18.
   seconds, ten thousand rows cost 2.5 seconds. Batching is free. The only lever is call
   count. [measured]
 - There is no conditional write. No mode takes a predicate on the existing value and none
-  returns the affected row. Two writers on one key is last writer wins. [measured] This is
-  the constraint that will change: UPDATE and DELETE over row ids are open on RuntimeDB,
-  and an UPDATE with a WHERE clause that returns `rows_affected` is a conditional write.
-  The design below assumes today's engine.
+  returns the affected row. Two writers on one key is last writer wins. [measured] If the
+  engine adds UPDATE with a WHERE clause that returns `rows_affected`, that is a
+  conditional write. The design below assumes today's engine.
 - A load holds an exclusive lock on the whole table. A second concurrent load is refused
   with `409 RESOURCE_LOCKED`. Distinct keys buy no concurrency. [measured]
 - Read after write was never stale across 30 loads. A read costs 0.3 to 0.6 seconds. A cold

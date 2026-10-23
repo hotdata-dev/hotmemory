@@ -153,7 +153,7 @@ now that the engine accepts SQL writes. The second: cues help retrieval on facts
 - `provision` builds no vector index by default. `vector_index=True` is an experimental
   option that builds the three vector indexes and searches through them. It stays, so the
   index can come back when the engine updates an index as data arrives and fixes the
-  filtered search through it. Work on both is under way in the engine, by report.
+  filtered search through it.
 - The local stack runs the latest engine image, `sha256:75403e84eb47`, built 2026-10-19.
 - Task 6 changes from "capture every question into one database" to the prefilled store
   below, because a namespace that recall never reads cannot change an answer.
@@ -167,7 +167,7 @@ now that the engine accepts SQL writes. The second: cues help retrieval on facts
 - LongMemEval-S runs in full, on new databases, as the comparable score.
 - The large store test moves to LongMemEval-M, where each question has one consistent user.
   BEAM comes later.
-- The runs move to a Kubernetes namespace later, for a known and stable machine.
+- The runs move to a stable machine later.
 
 ### What the phase found
 
@@ -176,7 +176,7 @@ Each item was observed on 2026-10-21 unless marked.
 - The cloud accepts SQL `INSERT`. One row with a vector took 531 ms by `INSERT` and
   1,682 ms by load. At 10 rows they were equal. At 100 rows the load was five times
   faster. At 1,000 rows the `INSERT` was refused with `Payload Too Large`, at 32 MB of SQL.
-  The engine refuses `UPDATE` and `DELETE`, and no work on them has started.
+  The engine refuses `UPDATE` and `DELETE`.
 - The engine applies the scope filter inside `bm25_search`, before its depth, locally and
   in the cloud. So BM25 loses no rows of a narrow scope in a shared table. The plan of
   phase 9 to measure that loss is void.

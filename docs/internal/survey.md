@@ -142,7 +142,7 @@ run is a later proof that the layer is a general memory and not only one consume
 
 ## 3. The fork question
 
-Rohan asked whether forking mem0 onto a Hotdata backend gets the orchestration with fewer
+The owner asked whether forking mem0 onto a Hotdata backend gets the orchestration with fewer
 steps. The code answers no, and a provider is not worth it either.
 
 The vector store is pluggable without a fork. `VectorStoreBase` has eleven abstract methods
@@ -165,7 +165,7 @@ for the extractor contract, and nothing more.
 
 ## 4. Changes the survey proposes to the brief
 
-Eight changes, each tied to what was read. They are proposals until Rohan accepts them.
+Eight changes, each tied to what was read. They are proposals until the owner accepts them.
 
 1. Add `expired_at` to the record beside `valid_until`. `valid_until` is when the world
    changed and `expired_at` is when the store learned it. `supersede` sets both. (Graphiti)
