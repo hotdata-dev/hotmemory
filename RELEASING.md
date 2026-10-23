@@ -40,8 +40,8 @@ The publish uses PyPI trusted publishing. PyPI accepts the upload from the workf
 
 The tag starts the workflow `publish.yml`. It runs three jobs in order:
 
-1. `build` makes sure that the tag matches the version in `pyproject.toml` and that
-   `CHANGELOG.md` has a section for the version. Then it builds the wheel and the sdist with
+1. `build` makes sure that the tagged commit is on `main`, that the tag matches the
+   version in `pyproject.toml`, and that `CHANGELOG.md` has a section for the version. Then it builds the wheel and the sdist with
    `uv build` and checks them with `twine check --strict`.
 2. `pypi` uploads the wheel and the sdist to PyPI. It runs in the environment `pypi`.
 3. `github-release` creates the GitHub Release. The release notes are the changelog section
@@ -57,7 +57,8 @@ cannot be uploaded again. To fix a bad release, release a new version.
   `CHANGELOG.md` has no section for the new version, it fails.
 - If the Unreleased section is empty, `release.sh prepare` stops.
 - If the tag exists or the changelog section is missing, `release.sh publish` stops.
-- If the tag and the version differ, the `build` job stops.
+- If the tagged commit is not on `main`, or the tag and the version differ, the `build`
+  job stops.
 
 ## What the package contains
 
