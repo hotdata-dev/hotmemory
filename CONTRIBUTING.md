@@ -4,8 +4,9 @@
 
 - [uv](https://docs.astral.sh/uv/) installs the development tools and runs the scripts.
 - GNU Make runs the targets below.
-- Docker Desktop runs the local RuntimeDB stack. You need it only for `make local-up` and
-  `make integration`.
+- Docker Desktop runs the local engine stack. You need it only for `make local-up` and
+  `make integration`. The engine image is private, so only the Hotdata team can start the
+  stack.
 
 ## The one command
 
@@ -37,7 +38,7 @@ passes in CI. It has no tiers, because the full check takes less than five secon
 | `make verify` | Runs every check above. |
 | `make floor` | Runs the offline tests on Python 3.11 with the lowest version of each dependency that `pyproject.toml` allows. It needs the network to install them. |
 | `make integration` | Runs the tests marked `hotdata` against the local stack. Start the stack first with `make local-up`. To use another engine, set `HOTMEMORY_TEST_URL`. |
-| `make local-up` | Starts the local RuntimeDB stack: Postgres, RustFS, and the engine. [docs/local.md](docs/local.md) tells you how to point the library at it. |
+| `make local-up` | Starts the local engine stack: Postgres, RustFS, and the engine, on port 3000. |
 | `make local-down` | Stops the stack and deletes its data. |
 | `make local-pull` | Downloads newer images for the stack. |
 
@@ -97,4 +98,3 @@ same pull request. If you change a public surface, add an entry to
 [CHANGELOG.md](CHANGELOG.md).
 
 No file in this repository names a private repository, a customer, or a deployment detail.
-This rule includes `docs/internal/`.

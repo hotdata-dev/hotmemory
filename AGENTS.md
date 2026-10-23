@@ -9,7 +9,7 @@ rules, and points to the files that hold everything else.
 make verify       # the full check; run it before each commit
 make integration  # the hotdata tests and the conformance suite; needs make local-up
 make floor        # the offline tests at the lowest allowed dependency versions
-make local-up     # start the local RuntimeDB stack (Postgres, RustFS, engine)
+make local-up     # start the local engine stack (Postgres, RustFS, engine)
 make local-down   # stop it and delete its data
 cp .env.template .env            # then fill in .env; it is ignored by git
 uv run --env-file .env scripts/measure_cloud.py   # M1 to M3
@@ -19,14 +19,13 @@ uv run --env-file .env scripts/measure_local.py --cloud   # M4 to M6 in the clou
 
 ## Where things are
 
-- [docs/internal/plan.md](docs/internal/plan.md): the open workstream, the tasks of each phase,
-  and its stop conditions.
-- [docs/internal/roadmap.md](docs/internal/roadmap.md): every phase and its status.
+- `docs/internal/`: the notes of the owner. Git ignores this folder, so it exists only in
+  the owner's checkout. `plan.md` holds the open workstream, the tasks of each phase, and
+  its stop conditions. `roadmap.md` holds every phase and its status. `brief.md` holds the
+  design and its reasons. `local.md` tells you how to run against the local stack.
 - [docs/contracts.md](docs/contracts.md): the record and the operations.
 - [docs/guarantees.md](docs/guarantees.md): what a consumer can rely on, and the proof.
-- [docs/internal/architecture.md](docs/internal/architecture.md): how each operation runs on
-  the platform.
-- [docs/internal/brief.md](docs/internal/brief.md): the design and its reasons.
+- [docs/architecture.md](docs/architecture.md): how each operation runs on the platform.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the checks inside `make verify` and the test rules.
 - [CHANGELOG.md](CHANGELOG.md): each change to a public surface.
 - [RELEASING.md](RELEASING.md): how to publish a version to PyPI. Only the repository owner

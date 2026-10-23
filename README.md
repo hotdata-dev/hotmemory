@@ -11,8 +11,7 @@ the data of the consumer.
 Status: alpha. A minor version before 1.0 can change a public surface, and [CHANGELOG.md]
 lists each change. The storage contract exists in Python with two drivers. `MemoryStore`
 runs in process memory. `HotdataStore` keeps records in one Hotdata managed database. The
-memory contract, `Memory`, runs over either driver. [docs/internal/roadmap.md] lists the
-phases.
+memory contract, `Memory`, runs over either driver.
 
 The library has two layers:
 
@@ -142,8 +141,7 @@ print([hit.record.id for hit in store.search("disk", [("team",)])])
 ```
 
 One process writes to a database. [docs/contracts.md] gives the tables,
-the retrieval query, and the rules of the driver. [docs/local.md] tells you
-how to run it against a local engine.
+the retrieval query, and the rules of the driver.
 
 ## Benchmark
 
@@ -192,24 +190,18 @@ p50 with the vector ranking, and 998 ms with the fused ranking.
   operations, and the platform facts behind them.
 - [docs/guarantees.md]: each behavior that a consumer can rely on, its
   state, and its proof.
-- [docs/local.md]: how to run the library against a local RuntimeDB
-  container.
 - [docs/benchmarks.md]: the numbers of hotmemory on LongMemEval-S,
   each with its configuration. [bench/README.md] tells you how to run it.
 - [CONTRIBUTING.md]: the one command that checks a change, and the rules
   of the test suite.
 - [CHANGELOG.md]: each change to a public surface.
-- [docs/internal/][docs/internal/brief.md]: the design brief, the survey, the roadmap, the
-  plan for the open workstream, the research that chose the benchmarks, and the
-  architecture: how each operation runs on the Hotdata platform.
+- [docs/architecture.md]: how each operation runs on the Hotdata platform.
 
 [CHANGELOG.md]: https://github.com/hotdata-dev/hotmemory/blob/main/CHANGELOG.md
-[docs/internal/roadmap.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/internal/roadmap.md
 [docs/contracts.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/contracts.md
-[docs/local.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/local.md
 [docs/benchmarks.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/benchmarks.md
 [docs/guarantees.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/guarantees.md
 [bench/README.md]: https://github.com/hotdata-dev/hotmemory/blob/main/bench/README.md
 [CONTRIBUTING.md]: https://github.com/hotdata-dev/hotmemory/blob/main/CONTRIBUTING.md
-[docs/internal/brief.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/internal/brief.md
+[docs/architecture.md]: https://github.com/hotdata-dev/hotmemory/blob/main/docs/architecture.md
 [skills/hotmemory/SKILL.md]: https://github.com/hotdata-dev/hotmemory/blob/main/skills/hotmemory/SKILL.md

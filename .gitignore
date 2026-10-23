@@ -14,3 +14,7 @@ build/
 bench/data/
 bench/cache/
 bench/results/
+
+# Notes of the owner, kept out of git: the plan, the roadmap, the design brief, the
+# research, and the local stack.
+docs/internal/
