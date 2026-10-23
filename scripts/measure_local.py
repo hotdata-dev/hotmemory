@@ -2,10 +2,10 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "hotdata-framework>=0.14.1",
-#   "pyarrow>=14.0",
+#   "pyarrow>=16.0",
 # ]
 # ///
-"""Run measurements M6, M4, and M5 against a local RuntimeDB container or the cloud.
+"""Run measurements M6, M4, and M5 against a local engine container or the cloud.
 
 By default the script targets a running local container. It does not start the
 container. Start it with `make local-up`. With --cloud, it targets the Hotdata cloud API

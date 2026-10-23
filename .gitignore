@@ -15,6 +15,11 @@ bench/data/
 bench/cache/
 bench/results/
 
+# Local state of Claude Code. The rest of .claude/ (agents, skills, settings.json) is shared.
+.claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # Notes of the owner, kept out of git: the plan, the roadmap, the design brief, the
 # research, and the local stack.
 docs/internal/

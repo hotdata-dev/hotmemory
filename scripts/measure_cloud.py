@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "hotdata-framework>=0.14.1",
-#   "pyarrow>=14.0",
+#   "pyarrow>=16.0",
 # ]
 # ///
 """Run measurements M1, M2, and M3 against a throwaway Hotdata cloud database.
