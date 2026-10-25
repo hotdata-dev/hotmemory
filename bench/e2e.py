@@ -91,7 +91,8 @@ class Config:
     """The configuration of the retrieval arm and the memory arm.
 
     `retrieval_ranking` ranks the sessions of the retrieval arm. The memory arm captures
-    and recalls with `memory_ranking`, recalls `k` records into a block of at most
+    with `memory_ranking`, and recalls with `recall_ranking`, or with `memory_ranking` if
+    it is None. It recalls `k` records into a block of at most
     `budget` characters, and extracts with the variant `extractor` of `prompts.VARIANTS`.
     With `fact_sources`, each fact carries the source of its session from `fact_source`.
     With `session_episodes`, `capture` stores each session as an episode under the key
@@ -109,9 +110,10 @@ class Config:
     session_episodes: bool = False
     episodes: str = "none"
     chunk_chars: int | None = None
+    recall_ranking: str | None = None
 
     def __post_init__(self) -> None:
-        for ranking in (self.retrieval_ranking, self.memory_ranking):
+        for ranking in (self.retrieval_ranking, self.memory_ranking, self.recall_with):
             if ranking not in RANKINGS:
                 raise ValueError(f"ranking must be one of {', '.join(RANKINGS)}, got {ranking!r}")
         if self.extractor not in prompts.VARIANTS:
@@ -124,6 +126,11 @@ class Config:
             raise ValueError("episodes needs session_episodes")
         if self.chunk_chars is not None and (self.chunk_chars < 1 or not self.session_episodes):
             raise ValueError("chunk_chars must be at least 1, and needs session_episodes")
+
+    @property
+    def recall_with(self) -> str:
+        """Return the ranking of the memory recall."""
+        return self.memory_ranking if self.recall_ranking is None else self.recall_ranking
 
     @property
     def variant(self) -> prompts.Variant:
@@ -243,8 +250,9 @@ def extractor(
 ) -> Callable[[str, datetime | None, list[Record]], list[Fact]]:
     """Return the extractor callable of `capture`: one call to the variant's model per session.
 
-    With `source`, each fact carries it in `sources`. A reply that reached the token limit
-    gives no facts, and `source` is appended to `at_limit`.
+    With `source`, each fact carries it in `sources`. A variant with cues gives each fact
+    the cues of its reply. A reply that reached the token limit gives no facts, and
+    `source` is appended to `at_limit`.
     """
     sources = (source,) if source else ()
 
@@ -252,7 +260,7 @@ def extractor(
         date = observed_at.strftime("%Y/%m/%d (%a) %H:%M") if observed_at else "unknown"
         known = [f"- {record.content}" for record in current]
         prompt = prompts.extract(text, date, known, variant.prompt)
-        reply = models(variant.model, prompt, EXTRACTOR_MAX_TOKENS, prompts.EXTRACT_SCHEMA)
+        reply = models(variant.model, prompt, EXTRACTOR_MAX_TOKENS, variant.schema)
         if reply.stopped:
             if at_limit is not None:
                 at_limit.append(source)
@@ -263,6 +271,7 @@ def extractor(
                 kind="fact",
                 subject=item["subject"].strip(),
                 content=item["content"].strip(),
+                cues=tuple(cue.strip() for cue in item.get("cues", ()) if cue.strip()),
                 sources=sources,
             )
             for item in facts
@@ -348,7 +357,7 @@ def run_question(
                 written += len(
                     capture_session(memory, namespace, session, models, config, at_limit)
                 )
-        records, block = memory.recall(
+        records, block = Memory(stores[config.recall_with]).recall(
             question.question,
             [namespace] if background is None else [namespace, background],
             as_of=question.as_of,
@@ -896,6 +905,12 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
     )
     parser.add_argument("--retrieval-ranking", choices=RANKINGS, default="vector")
     parser.add_argument("--memory-ranking", choices=RANKINGS, default="vector")
+    parser.add_argument(
+        "--recall-ranking",
+        choices=RANKINGS,
+        default=None,
+        help="the ranking of the memory recall, if not that of --memory-ranking",
+    )
     parser.add_argument("--recall-k", type=int, default=RECALL_K, help="k of the memory recall")
     parser.add_argument(
         "--recall-budget", type=int, default=RECALL_BUDGET, help="characters of the memory block"
@@ -978,11 +993,14 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             session_episodes=args.session_episodes,
             episodes=args.episodes,
             chunk_chars=args.chunk_chars,
+            recall_ranking=args.recall_ranking,
         )
     except ValueError as error:
         parser.error(str(error))
     if args.smoke:
-        config = replace(config, retrieval_ranking="vector", memory_ranking="vector")
+        config = replace(
+            config, retrieval_ranking="vector", memory_ranking="vector", recall_ranking=None
+        )
 
     all_questions = {question.id: question for question in load(DATA_DIR / DATA_FILE)}
     if args.smoke:
@@ -1156,6 +1174,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
             "retrieval": {"ranking": config.retrieval_ranking, "sessions": RETRIEVED},
             "memory": {
                 "ranking": config.memory_ranking,
+                "recall_ranking": config.recall_with,
                 "k": config.k,
                 "budget": config.budget,
                 "extractor": config.extractor,
@@ -1184,7 +1203,7 @@ def main(argv: Sequence[str] | None = None) -> Path | None:
                         if config.chunk_chars is not None
                         else "extractor, then recall"
                     )
-                    + f" with the {config.memory_ranking} ranking, k "
+                    + f" with the {config.recall_with} ranking, k "
                     f"{config.k}, budget {config.budget} characters, episodes "
                     f"{config.episodes}, as_of the end of the question day"
                 ),

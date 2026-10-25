@@ -62,11 +62,14 @@ class FakeModels:
         self.prompts.append((model, prompt))
         if model == EXTRACTOR:
             session = prompt.split("Session:\n", 1)[1]
-            facts = [
+            facts: list[dict[str, Any]] = [
                 {"subject": "user", "content": line.removeprefix("user: ")}
                 for line in session.split("\n\n")
                 if line.startswith("user: ")
             ]
+            if schema is prompts.EXTRACT_CUES_SCHEMA:
+                for fact in facts:
+                    fact["cues"] = [f"What did the user say about {fact['content'][:20]}?", " "]
             return Reply(json.dumps({"facts": facts}), 10, 5)
         if prompt.startswith("I will give you a question") or "unanswerable" in prompt[:40]:
             return Reply("yes", 10, 1)
@@ -181,6 +184,35 @@ def test_config_refuses_unknown_values() -> None:
         Config(extractor="none")
     with pytest.raises(ValueError, match="at least 1"):
         Config(k=0)
+    with pytest.raises(ValueError, match="ranking"):
+        Config(recall_ranking="bm25")
+
+
+def test_recall_ranking_defaults_to_the_memory_ranking() -> None:
+    assert Config(memory_ranking="fused").recall_with == "fused"
+    assert Config(memory_ranking="fused", recall_ranking="vector").recall_with == "vector"
+
+
+def test_run_question_recalls_with_the_recall_ranking(questions: dict[str, Question]) -> None:
+    store = MemoryStore(embedder=fake_embedder, clock=FakeClock())
+    searched: list[str] = []
+
+    class Spy:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __getattr__(self, attribute: str) -> Any:
+            if attribute == "search":
+                searched.append(self.name)
+            return getattr(store, attribute)
+
+    stores: Any = {"fused": Spy("fused"), "vector": Spy("vector")}
+    config = Config(memory_ranking="vector", recall_ranking="fused")
+    run_question(
+        questions["q_one"], FakeModels(), stores, lambda _: None, "r1", ("memory",), config
+    )
+    assert searched[-1] == "fused"
+    assert set(searched[:-1]) == {"vector"}
 
 
 def test_run_question_follows_the_config(
@@ -306,6 +338,21 @@ def test_run_question_gives_each_fact_its_session(questions: dict[str, Question]
     assert f"[sources: {fact_source(late.id)}]" in block
     assert "[sources: none]" not in block
     assert "answer_" not in block
+
+
+def test_the_cue_variant_puts_cues_on_each_fact(questions: dict[str, Question]) -> None:
+    session = questions["q_one"].sessions[0]
+    text = prompts.session_text(session)
+    variant = prompts.VARIANTS["detail-cues"]
+    assert variant.schema is prompts.EXTRACT_CUES_SCHEMA
+    assert prompts.VARIANTS["detail"].schema is prompts.EXTRACT_SCHEMA
+    assert "Give `cues` as one to three short questions" in variant.prompt
+    before, after = prompts.EXTRACT_DETAIL.split("Return an empty list if")
+    assert variant.prompt.startswith(before) and variant.prompt.endswith(after)
+    cued = extractor(FakeModels(), variant)(text, session.date, [])
+    plain = extractor(FakeModels(), prompts.VARIANTS["detail"])(text, session.date, [])
+    assert cued and all(len(fact.cues) == 1 and fact.cues[0].startswith("What") for fact in cued)
+    assert all(fact.cues == () for fact in plain)
 
 
 def test_a_reply_at_the_limit_gives_no_facts(questions: dict[str, Question]) -> None:
