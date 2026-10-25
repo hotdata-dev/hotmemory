@@ -312,6 +312,7 @@ only. Both are in `bench/prompts.py`.
 |---|---|
 | `baseline` | The prompt of phases 5 and 6. |
 | `detail` | The `baseline` rules, with four more. Read every turn. Keep a fact that the user states in passing. Keep each item of a list as its own fact. Write each date as an absolute date. |
+| `detail-cues` | Added in phase 11. The `detail` rules, and one to three questions that each fact answers, as the cues of the fact. The section "Cues on facts" reports it. |
 
 From phase 7, each fact carries the source `session:<hash>`, with the first 12 hex digits
 of the SHA-256 of the session id. The block shows the sources to the reader, so each line
@@ -608,6 +609,62 @@ The retrieval score with the vector ranking, rerun on the 419 questions at the s
 gave the same sessions in the same order as the vector ranking of the ablation, on 419 of
 419 questions: `recall_all@10` 0.9928. File: `retrieval-hotdata-local-isolated-vector.json`.
 
+### Cues on facts
+
+Phase 11 asked whether cues make the fused ranking better than the vector ranking on
+facts. Until this test, the benchmark extractor wrote no cues, so the cue arm of every
+fused run was empty. The extractor variant `detail-cues` is `detail`, and it also asks for
+one to three questions that each fact answers. Those questions are the cues of the fact.
+
+Each memory was captured with the vector ranking, with `--session-episodes --chunk-chars
+1000`, and kept. Each kept memory was then recalled with the vector ranking and with the
+fused ranking, with `--recall-ranking`. The recall is facts only, `--episodes none`, with k
+of 30 and a budget of 16,000 characters. The reader and the judge are `gpt-4o-2024-08-06`.
+Observed on 2026-10-24, on the local stack, engine image `sha256:75403e84eb47`, with
+`src/hotmemory` at `8eccc8e`. The `detail` capture replayed from the cache.
+
+| Memory | Recall | Sample A, correct of 54 | Sample B, correct of 54 |
+|---|---|---|---|
+| `detail` | `vector` | 31 | 33 |
+| `detail` | `fused` | 26 | 32 |
+| `detail-cues` | `vector` | 28 | 32 |
+| `detail-cues` | `fused` | 30 | 34 |
+
+Files: `e2e-sample-<a or b>-p11-cue-<detail or cues>-<vector or fused>.json`.
+
+These results lead to four conclusions.
+
+- Cues help the fused ranking. With cues, the fused ranking gained 4 questions on sample
+  A and 2 on sample B, and it scored 2 more than the vector ranking over the same memory
+  on each sample.
+- No arm beat the configuration without cues. `detail-cues` with the fused ranking scored
+  1 less on sample A and 1 more on sample B than `detail` with the vector ranking. On
+  sample A it lost 3 questions and gained 2. On sample B it lost 5 and gained 6.
+- The cue prompt changed the facts. `detail-cues` wrote 199 facts at the median on sample
+  A and 201 on sample B, against 259 and 248 for `detail`. The vector ranking reads no
+  cues, so the loss of `detail-cues` with the vector ranking comes from these facts.
+- The ranking is rarely the cause of a miss on these samples. The diagnosis of sample B
+  found 0 of 20 misses ranked below k with the fused ranking, and 1 of 22 with the vector
+  ranking. In that miss, the fused ranking put the fact at 2, and the vector ranking at 46.
+  Most misses had no marked fact: 12 of 20 and 16 of 22.
+
+So the configuration stays `detail` with the vector ranking. A store where the answer
+competes with many more facts, such as a BEAM conversation, can give the ranking more to
+gain. This was not measured.
+
+| Diagnosis, sample B | Missed | Not extracted | Extracted, ranked below k | Recalled, all present | Recalled, some present |
+|---|---|---|---|---|---|
+| `detail-cues`, `fused` | 20 | 12 | 0 | 1 | 7 |
+| `detail-cues`, `vector` | 22 | 16 | 1 | 1 | 4 |
+
+Files: the result files with `-diagnosis` before `.json`. The two diagnoses read the same
+facts, but they marked a fact for some questions in one run and not in the other, as the
+known limits below describe.
+
+The four runs of each sample cost $3.33 on sample A and $3.33 on sample B, and the
+diagnoses $0.28. A capture with `detail-cues` took 1,955 s on sample A and 1,902 s on
+sample B, with 8 workers. Of 5,078 extractor calls, 1 reached the token limit.
+
 ## The full benchmark
 
 On 2026-10-22, the best configuration of phase 10 ran on all 500 questions of
@@ -846,7 +903,7 @@ that was wrong and was repeated.
   phase 5. Only the memory arm of phase 10 ran on all 500 questions, once.
 - The full-context arm gives the reader every session. The reference code keeps the last
   50 sessions, so the two differ for histories longer than 50 sessions.
-- The memory arm tried one extractor model, `gpt-4o-mini-2024-07-18`, with two prompts. A
+- The memory arm tried one extractor model, `gpt-4o-mini-2024-07-18`, with three prompts. A
   stronger extractor model was not measured.
 - The diagnosis marks the facts of a question in one model call, and it can miss facts in
   a long list. Its count of misses with no stored fact can be too high.

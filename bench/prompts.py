@@ -120,6 +120,12 @@ Session date: {date}
 
 Session:
 {session}"""
+EXTRACT_DETAIL_CUES = EXTRACT_DETAIL.replace(
+    "Return an empty list if",
+    'Give `cues` as one to three short questions that the fact answers, in the words that \
+the user can use later to ask for it, such as "What car does the user drive?". Return an \
+empty list if',
+)
 EXTRACT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -136,24 +142,55 @@ EXTRACT_SCHEMA = {
     "required": ["facts"],
     "additionalProperties": False,
 }
+EXTRACT_CUES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "facts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string"},
+                    "content": {"type": "string"},
+                    "cues": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["subject", "content", "cues"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["facts"],
+    "additionalProperties": False,
+}
 
 
 @dataclass(frozen=True)
 class Variant:
-    """An extractor variant: the prompt template and the model that reads it."""
+    """An extractor variant: the prompt template, the model that reads it, and its cues.
+
+    With `cues`, the reply schema is `EXTRACT_CUES_SCHEMA`, and each fact carries cues.
+    """
 
     prompt: str
     model: str
+    cues: bool = False
+
+    @property
+    def schema(self) -> dict[str, object]:
+        """Return the JSON schema of the reply."""
+        return EXTRACT_CUES_SCHEMA if self.cues else EXTRACT_SCHEMA
 
 
 VARIANTS = {
     "baseline": Variant(EXTRACT, EXTRACTOR),
     "detail": Variant(EXTRACT_DETAIL, EXTRACTOR),
+    "detail-cues": Variant(EXTRACT_DETAIL_CUES, EXTRACTOR, cues=True),
 }
 """The extractor variants by name. `baseline` is the extractor of phase 5.
 
 `detail` asks for each fact that the user states in passing, each item of a list that the
-assistant gives, and absolute dates.
+assistant gives, and absolute dates. `detail-cues` is `detail`, and also asks for one to
+three questions that each fact answers, as its cues.
 """
 
 

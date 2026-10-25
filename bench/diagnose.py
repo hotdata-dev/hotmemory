@@ -142,6 +142,7 @@ def memory_config(result: dict[str, Any], chunk_chars: int | None = None) -> Con
         raise ValueError("the run stored chunks of a size that the file does not record")
     return Config(
         memory_ranking=found["ranking"],
+        recall_ranking=found.get("recall_ranking"),
         k=found["k"],
         budget=found["budget"],
         extractor=found["extractor"],
@@ -269,7 +270,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 try:
                     for session in question.sessions:
                         capture_session(memory, namespace, session, replay, config, [])
-                    records, block = memory.recall(
+                    records, block = Memory(stores[config.recall_with]).recall(
                         question.question,
                         [namespace, BACKGROUND],
                         as_of=question.as_of,
@@ -282,7 +283,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                     sha = hashlib.sha256(block.encode()).hexdigest()
                     extra = {"block_reproduced": sha == saved[question.id]}
                     extra |= episode_counts(
-                        stores[config.memory_ranking], question, namespace, records, config.k
+                        stores[config.recall_with], question, namespace, records, config.k
                     )
                     diagnosed(question, stores, namespace, records, extra)
                 finally:
@@ -306,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             "source": str(args.result.resolve().relative_to(Path.cwd())),
             "memory": {
                 "ranking": config.memory_ranking,
+                "recall_ranking": config.recall_with,
                 "k": config.k,
                 "budget": config.budget,
                 "extractor": config.extractor,
@@ -349,7 +351,7 @@ def diagnose(
     """
     sessions = {fact_source(session.id): session.id for session in question.sessions}
     sessions |= {episode_key(session.id): session.id for session in question.sessions}
-    store = stores[config.memory_ranking]
+    store = stores[config.recall_with]
     facts = store.list(namespace, Filter(kind=RECALLED_KINDS), limit=10_000)
     marked = _mark(marker, question.question, question.answer, facts)
     holding = {facts[n - 1].id for n in marked}
@@ -363,7 +365,7 @@ def diagnose(
         block = block_ids(top, question.as_of, config.k, config.budget)
     else:
         block = {record.id for record in recalled if record.kind != "episode"}
-    cause = verdict(holding, ranks[config.memory_ranking], block, config.k)
+    cause = verdict(holding, ranks[config.recall_with], block, config.k)
     present = None
     if cause == RECALLED:
         listed = [fact.content for fact in facts if fact.id in holding & block]

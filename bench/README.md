@@ -85,10 +85,11 @@ The options are these:
 | `--sample` | `a`, `b`, or `all` for every question of the data file | `a` |
 | `--arms` | a comma-separated list of `full`, `retrieval`, and `memory` | every arm |
 | `--retrieval-ranking` | `vector` or `fused`, the ranking of the retrieval arm | `vector` |
-| `--memory-ranking` | `vector` or `fused`, the ranking of `capture` and `recall` | `vector` |
+| `--memory-ranking` | `vector` or `fused`, the ranking of `capture`, and of `recall` without `--recall-ranking` | `vector` |
+| `--recall-ranking` | `vector` or `fused`, the ranking of `recall` if it differs from `--memory-ranking`. With `--reuse`, a run recalls from the kept memory of a `--memory-ranking` run with another ranking. | the `--memory-ranking` |
 | `--recall-k` | the `k` of the memory recall | `30` |
 | `--recall-budget` | the `budget` of the memory recall, in characters | `8000` |
-| `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py` | `baseline` |
+| `--extractor` | a variant name in `VARIANTS` of `bench/prompts.py`: `baseline`, `detail`, or `detail-cues`, which is `detail` with one to three cues for each fact | `baseline` |
 | `--no-fact-sources` | write the facts with no session source, as phases 5 and 6 did | off |
 | `--session-episodes` | capture each session as an episode, with the facts citing it | off |
 | `--chunk-chars` | store each session as chunks of at most this many characters, with each fact citing every chunk; needs `--session-episodes` | off |
@@ -210,7 +211,8 @@ with `--keep` or `--reuse`, the command reads the memory of each question from i
 database and does not run `capture`. If the result file names a background database, from
 a run with `--background`, the command captures again in that database, recalls over the
 background as the run did, and records whether the block has the SHA-256 of the run.
-`--ids` limits the diagnosis to the listed misses. A result file written before the runner
+If the run recalled with `--recall-ranking`, the command decides the cause of each miss
+with that ranking. `--ids` limits the diagnosis to the listed misses. A result file written before the runner
 recorded `chunk_chars` needs `--chunk-chars`. GPT-4o marks the stored facts that hold each answer.
 Each miss then gets one of four causes:
 
