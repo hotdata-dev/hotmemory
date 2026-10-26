@@ -1,0 +1,27 @@
+[
+ {
+  "conversation": "1",
+  "domain": "Coding",
+  "windows": 74
+ },
+ {
+  "conversation": "4",
+  "domain": "Math",
+  "windows": 76
+ },
+ {
+  "conversation": "7",
+  "domain": "Writing Assistant & Learning",
+  "windows": 74
+ },
+ {
+  "conversation": "14",
+  "domain": "Asking Recommendation",
+  "windows": 58
+ },
+ {
+  "conversation": "19",
+  "domain": "Legal and Administrative",
+  "windows": 104
+ }
+]

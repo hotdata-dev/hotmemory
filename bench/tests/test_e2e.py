@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import uuid
 from collections.abc import Sequence
@@ -267,7 +269,13 @@ def test_estimate_counts_each_arm(questions: dict[str, Question]) -> None:
 def test_cached_models_call_once(tmp_path: Path) -> None:
     calls: list[str] = []
 
-    def complete(model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None) -> Reply:
+    def complete(
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None,
+        system: str | None = None,
+    ) -> Reply:
         calls.append(prompt)
         return Reply("yes", 1_000_000, 0)
 
@@ -277,6 +285,30 @@ def test_cached_models_call_once(tmp_path: Path) -> None:
     assert models(READER, "p", 11).text == "yes"
     assert calls == ["p", "p"]
     assert models.spent == pytest.approx(5.0)
+
+
+def test_a_system_message_is_passed_and_keys_the_cache(tmp_path: Path) -> None:
+    systems: list[str | None] = []
+
+    def complete(
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None,
+        system: str | None = None,
+    ) -> Reply:
+        systems.append(system)
+        return Reply(system or "none", 1, 1)
+
+    path = tmp_path / "replies.sqlite"
+    models = CachedModels(complete, path)
+    assert models(READER, "p", 10).text == "none"
+    assert models(READER, "p", 10, system="s").text == "s"
+    assert models(READER, "p", 10, system="s").text == "s"
+    assert systems == [None, "s"]
+    legacy = hashlib.sha256(json.dumps([READER, 10, None, "p"]).encode()).hexdigest()
+    keys = [row[0] for row in sqlite3.connect(path).execute("SELECT key FROM replies")]
+    assert legacy in keys
 
 
 def test_shards_deal_every_question_once(questions: dict[str, Question]) -> None:
@@ -368,7 +400,13 @@ def test_a_reply_at_the_limit_gives_no_facts(questions: dict[str, Question]) -> 
 
 
 def test_cached_models_keep_a_stopped_reply(tmp_path: Path) -> None:
-    def complete(model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None) -> Reply:
+    def complete(
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None,
+        system: str | None = None,
+    ) -> Reply:
         return Reply("{", 1, max_tokens, stopped=True)
 
     path = tmp_path / "replies.sqlite"

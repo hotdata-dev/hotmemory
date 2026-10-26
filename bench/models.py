@@ -16,11 +16,18 @@ EXTRACTOR = "gpt-4o-mini-2024-07-18"
 READER_MAX_TOKENS = 800
 JUDGE_MAX_TOKENS = 10
 EXTRACTOR_MAX_TOKENS = 4000
+BEAM_MINI = "gpt-4.1-mini-2025-04-14"
 PRICES = {
     READER: (2.50, 10.00),
     EXTRACTOR: (0.15, 0.60),
+    BEAM_MINI: (0.40, 1.60),
 }
-"""US dollars for one million input tokens and one million output tokens, read on 2026-10-10."""
+"""US dollars for one million input tokens and one million output tokens.
+
+The first two were read on 2026-10-10, and `gpt-4.1-mini` on 2026-10-26.
+"""
+EMBEDDING_PRICE = 0.02
+"""US dollars for one million tokens of `text-embedding-3-small`, read on 2026-10-26."""
 
 
 @dataclass(frozen=True)
@@ -43,17 +50,24 @@ class Reply:
 
 
 class Complete(Protocol):
-    """Sends one prompt to one model and returns the reply."""
+    """Sends one prompt to one model, after `system` as a system message if given, and returns
+    the reply."""
 
     def __call__(
-        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None
+        self,
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None,
+        system: str | None = None,
     ) -> Reply: ...
 
 
 class CachedModels:
     """Calls `complete` for each prompt that the cache does not hold, and keeps the reply.
 
-    The cache key is the SHA-256 of the model, the token limit, the schema, and the prompt.
+    The cache key is the SHA-256 of the model, the token limit, the schema, and the prompt,
+    and of the system message if there is one.
     `spent` sums the price of the replies that came from a model call in this process, and
     `calls` counts those calls.
     """
@@ -63,19 +77,25 @@ class CachedModels:
         self.calls = 0
         self._complete = complete
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, timeout=60)
+        self._db = sqlite3.connect(path, timeout=60, check_same_thread=False)
         self._db.execute("CREATE TABLE IF NOT EXISTS replies (key TEXT PRIMARY KEY, reply TEXT)")
 
     def __call__(
-        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None = None
+        self,
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None = None,
+        system: str | None = None,
     ) -> Reply:
-        key = hashlib.sha256(
-            json.dumps([model, max_tokens, schema, prompt], sort_keys=True).encode()
-        ).hexdigest()
+        parts: list[Any] = [model, max_tokens, schema, prompt]
+        if system is not None:
+            parts.append(system)
+        key = hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
         row = self._db.execute("SELECT reply FROM replies WHERE key = ?", (key,)).fetchone()
         if row is not None:
             return Reply(**json.loads(row[0]))
-        reply = self._complete(model, prompt, max_tokens, schema)
+        reply = self._complete(model, prompt, max_tokens, schema, system)
         self.calls += 1
         self.spent += reply.cost(model)
         with self._db:
@@ -98,7 +118,12 @@ class Offline:
     """
 
     def __call__(
-        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None
+        self,
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None,
+        system: str | None = None,
     ) -> Reply:
         raise CacheMiss(f"the cache holds no reply of {model} to this prompt: {prompt[:80]!r}")
 
@@ -123,8 +148,16 @@ class Remote:
         )
 
     def __call__(
-        self, model: str, prompt: str, max_tokens: int, schema: dict[str, Any] | None
+        self,
+        model: str,
+        prompt: str,
+        max_tokens: int,
+        schema: dict[str, Any] | None,
+        system: str | None = None,
     ) -> Reply:
+        messages: list[Any] = [{"role": "user", "content": prompt}]
+        if system is not None:
+            messages.insert(0, {"role": "system", "content": system})
         extra: dict[str, Any] = {}
         if schema is not None:
             extra["response_format"] = {
@@ -133,7 +166,7 @@ class Remote:
             }
         completion = self._openai.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             n=1,
             temperature=0,
             max_tokens=max_tokens,

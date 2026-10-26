@@ -1,0 +1,27 @@
+[
+ {
+  "conversation": "2",
+  "domain": "Coding",
+  "windows": 69
+ },
+ {
+  "conversation": "6",
+  "domain": "Writing Assistant & Learning",
+  "windows": 80
+ },
+ {
+  "conversation": "12",
+  "domain": "Philosophical or Ethical Discussion",
+  "windows": 128
+ },
+ {
+  "conversation": "17",
+  "domain": "Lifestyle",
+  "windows": 68
+ },
+ {
+  "conversation": "18",
+  "domain": "Therapy and Emotional Support",
+  "windows": 99
+ }
+]
