@@ -18,6 +18,7 @@ floor:
 		--python-version 3.11 --quiet --output-file "$$requirements" && \
 	uv run --isolated --no-project --python 3.11 --with-requirements "$$requirements" \
 		--with-editable . --with pytest --with pytest-socket --with tiktoken \
+		--with json-repair --with scipy \
 		pytest --disable-socket -q -p no:cacheprovider
 
 integration:
