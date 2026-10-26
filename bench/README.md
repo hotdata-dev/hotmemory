@@ -1,7 +1,8 @@
 # The benchmark runner
 
 This folder runs hotmemory on LongMemEval-S, a benchmark of 500 questions over long chat
-histories. It is not part of the hotmemory package. [docs/benchmarks.md](../docs/benchmarks.md)
+histories, and on BEAM, a benchmark of long conversations in many domains. It is not part
+of the hotmemory package. [docs/benchmarks.md](../docs/benchmarks.md)
 reports the numbers, and each number names the result file that it comes from.
 
 ## Before a run
@@ -187,6 +188,73 @@ the runner writes no result file. Run the same command again with `--resume`: it
 questions that the rows file holds. It refuses a rows file of another configuration, and a
 run without `--resume` refuses to start over a rows file. When every question has
 finished, the runner writes the result file and deletes the rows file.
+
+## BEAM
+
+BEAM (arXiv 2510.27246) holds conversations of about 100,000 to 1 million tokens, each
+with 20 probing questions, 2 for each of 10 abilities. `bench/beam.py` reads the splits
+`100K` and `1M` of the Hugging Face dataset `Mohammadta/BEAM` at a pinned revision, and
+checks the SHA-256 of each file. The data license is CC BY-SA 4.0, so the files stay in
+`bench/data/`, which git ignores. This command downloads a split and prints its counts:
+
+```sh
+uv run --group bench python -m bench.beam --split 1M
+```
+
+The loader cuts each batch of a conversation into windows of whole turn pairs, at most
+10,000 characters each, with the date of the batch. A turn pair longer than that is cut
+at blank lines. It strips the index markers, such as `->-> 1,1`, from the user turns.
+Samples A and B are 5 conversations each of the `100K` split, from 5 different domains,
+in `bench/sample-beam-a.json` and `bench/sample-beam-b.json`. The smoke sample is the
+conversation of sample A with the fewest windows.
+
+This command prints the cost estimate and the expected time of a run, and calls no model:
+
+```sh
+uv run --group bench --env-file .env python -m bench.beam_e2e --split 100K --sample a --workers 5
+```
+
+Add `--run` to run it. The options are these:
+
+| Option | Values | Default |
+|---|---|---|
+| `--split` | `100K` or `1M` | `100K` |
+| `--sample` | `smoke`, `a`, or `b` of the `100K` split, or `all` | `smoke` |
+| `--arms` | `memory`, `chunks`, or both, comma-separated | both |
+| `--readers` | `nano` (`gpt-4.1-nano`), `mini` (`gpt-4.1-mini`), or both | both |
+| `--workers` | conversations at a time, each in its own process | 1 |
+| `--reuse` | read from the kept databases, with no `capture` | off |
+| `--resume` | go on from the rows file of an earlier run | off |
+| `--replay` | call no model, and fail a conversation at a reply that the cache does not hold | off |
+| `--extract-rate`, `--window-seconds` | the rates of the estimate | $0.0005 and 8.3 s |
+| `--limit`, `--tag`, `--url` | as for `bench.e2e` | |
+
+Each conversation runs over one local database, named
+`hotmemory-kept-beam-<split>-<extractor><digest>-chunks1000-vector-<commit>-<conversation id>`.
+The database keeps the memory after the run, and the runner never deletes it. A worker
+takes the conversation with the most windows first. It captures each window in order with
+the `detail` extractor, as chunks of 1,000 characters. Then, for each probe, it builds one
+block of at most 16,000 characters for each arm:
+
+- `memory` calls `recall` with `k` 30 and `episodes="search"`.
+- `chunks` searches the chunks alone by vector, `k` 30, as the RAG baseline.
+
+Each reader answers from each block with the official RAG answer prompt of BEAM. The
+scoring follows the official code at commit `b2da22e`: one `gpt-4.1-mini` judge call for
+each nugget of the rubric, and for event ordering, the line match and Kendall tau-b. The
+official judge prompt does not see the question (upstream issue
+mohammadtavakoli78/BEAM#15). The prompts are copied in `bench/beam_prompts/` under their
+MIT license. The score of a split is the mean over the 10 abilities.
+
+The rows file holds one row for each captured conversation and one row for each finished
+probe. If a conversation fails, the others go on, and the runner writes no result file.
+Run the same command again with `--resume`. It skips the finished probes and the captured
+conversations, and a conversation that stopped during capture goes on over its kept
+database. `capture` skips each window whose chunks are stored, with no extractor call. A
+conversation stops when it spends twice its estimate. The result file is
+`bench/results/beam-<split>-<sample>[-<tag>].json`. Each probe row records the windows
+that hold its source turns, and the share of them that each block shows, in
+`source_coverage`.
 
 ## The checks of the results
 
