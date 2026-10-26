@@ -16,11 +16,20 @@ EXTRACTOR = "gpt-4o-mini-2024-07-18"
 READER_MAX_TOKENS = 800
 JUDGE_MAX_TOKENS = 10
 EXTRACTOR_MAX_TOKENS = 4000
+BEAM_NANO = "gpt-4.1-nano-2025-04-14"
+BEAM_MINI = "gpt-4.1-mini-2025-04-14"
 PRICES = {
     READER: (2.50, 10.00),
     EXTRACTOR: (0.15, 0.60),
+    BEAM_NANO: (0.10, 0.40),
+    BEAM_MINI: (0.40, 1.60),
 }
-"""US dollars for one million input tokens and one million output tokens, read on 2026-10-10."""
+"""US dollars for one million input tokens and one million output tokens.
+
+The first two were read on 2026-10-10, and the two `gpt-4.1` models on 2026-10-26.
+"""
+EMBEDDING_PRICE = 0.02
+"""US dollars for one million tokens of `text-embedding-3-small`, read on 2026-10-26."""
 
 
 @dataclass(frozen=True)
@@ -70,7 +79,7 @@ class CachedModels:
         self.calls = 0
         self._complete = complete
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, timeout=60)
+        self._db = sqlite3.connect(path, timeout=60, check_same_thread=False)
         self._db.execute("CREATE TABLE IF NOT EXISTS replies (key TEXT PRIMARY KEY, reply TEXT)")
 
     def __call__(

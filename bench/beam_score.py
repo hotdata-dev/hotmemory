@@ -28,7 +28,7 @@ from json_repair import repair_json
 from scipy.stats import kendalltau
 
 from bench.beam import ABILITIES, Probe
-from bench.models import Reply
+from bench.models import BEAM_MINI, Reply
 
 BEAM_COMMIT = "b2da22e"
 PROMPTS = Path(__file__).resolve().parent / "beam_prompts"
@@ -36,7 +36,7 @@ ANSWER_PROMPT = (PROMPTS / "answer.txt").read_text()
 JUDGE_PROMPT = (PROMPTS / "judge.txt").read_text()
 MATCH_SYSTEM = (PROMPTS / "match_system.txt").read_text()
 MATCH_USER = (PROMPTS / "match_user.txt").read_text()
-JUDGE = "gpt-4.1-mini-2025-04-14"
+JUDGE = BEAM_MINI
 JUDGE_MAX_TOKENS = 1000
 MATCH_MAX_TOKENS = 50
 EVENT_ORDERING = "event_ordering"
