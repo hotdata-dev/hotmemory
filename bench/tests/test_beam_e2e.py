@@ -25,7 +25,7 @@ from bench.beam_e2e import (
     summarize,
 )
 from bench.beam_score import JUDGE, MATCH_SYSTEM
-from bench.models import BEAM_NANO, EXTRACTOR, Reply
+from bench.models import BEAM_MINI, EXTRACTOR, Reply
 from bench.tests.test_beam import row
 from hotmemory import Memory, MemoryStore
 from tests.conftest import FakeClock, fake_embedder
@@ -36,6 +36,7 @@ class FakeModels:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.answers = 0
         self.lock = threading.Lock()
 
     def __call__(
@@ -58,8 +59,10 @@ class FakeModels:
             return Reply(json.dumps({"facts": facts}), 100, 10)
         if model == JUDGE and system == MATCH_SYSTEM:
             return Reply("NO", 10, 1)
-        if model == JUDGE:
+        if model == JUDGE and "RUBRIC CRITERION" in prompt:
             return Reply('{"score": 1.0, "reason": "ok"}', 100, 10)
+        with self.lock:
+            self.answers += 1
         return Reply("The answer.", 1000, 5)
 
 
@@ -71,7 +74,7 @@ def conversation() -> Conversation:
 def job(tmp_path: Path) -> Job:
     rows_file = tmp_path / "rows.jsonl"
     rows_file.write_text(json.dumps({"header": {"run": 1}}) + "\n")
-    return Job("", ("memory", "chunks"), ("nano", "mini"), False, "kept", rows_file)
+    return Job("", ("memory", "chunks"), ("mini",), False, "kept", rows_file)
 
 
 def store() -> MemoryStore:
@@ -95,7 +98,7 @@ def test_a_conversation_is_captured_once_and_every_probe_is_scored(
     assert [c["conversation"] for c in captures] == ["7"]
     assert len(probes) == 20
     first = probes[0]
-    assert set(first["combos"]) == {"memory/nano", "memory/mini", "chunks/nano", "chunks/mini"}
+    assert set(first["combos"]) == {"memory/mini", "chunks/mini"}
     assert first["arms"]["memory"]["facts_in_block"] == 3
     assert first["arms"]["chunks"]["facts_in_block"] == 0
     assert first["arms"]["chunks"]["episodes_in_block"]
@@ -105,10 +108,10 @@ def test_a_conversation_is_captured_once_and_every_probe_is_scored(
     ordering = [p for p in probes if p["ability"] == "event_ordering"]
     assert all(c["tau_norm"] is not None for p in ordering for c in p["combos"].values())
     assert fake.calls.count(EXTRACTOR) == 2
-    assert fake.calls.count(BEAM_NANO) == 40
-    summaries = summarize(probes, ("memory", "chunks"), ("nano", "mini"))
-    assert summaries["memory/nano"]["count"] == 20
-    assert summaries["memory/nano"]["by_domain"].keys() == {"Coding"}
+    assert fake.answers == 40
+    summaries = summarize(probes, ("memory", "chunks"), ("mini",))
+    assert summaries["memory/mini"]["count"] == 20
+    assert summaries["memory/mini"]["by_domain"].keys() == {"Coding"}
     models.close()
 
 
@@ -148,16 +151,16 @@ def test_a_second_capture_skips_the_stored_windows(
 
 def test_thread_models_sum_every_thread_and_stop_at_the_limit(tmp_path: Path) -> None:
     models = ThreadModels(FakeModels(), tmp_path / "replies.sqlite", limit=1.0)
-    threads = [threading.Thread(target=models, args=(BEAM_NANO, f"p{n}", 10)) for n in range(4)]
+    threads = [threading.Thread(target=models, args=(BEAM_MINI, f"p{n}", 10)) for n in range(4)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
     assert models.calls == 4
-    assert models.spent == pytest.approx(4 * (1000 * 0.10 + 5 * 0.40) / 1e6)
+    assert models.spent == pytest.approx(4 * (1000 * 0.40 + 5 * 1.60) / 1e6)
     big = ThreadModels(lambda *_, **__: Reply("x", 10_000_000, 0), tmp_path / "r2.sqlite", 0.5)
     with pytest.raises(SpendLimit):
-        big(BEAM_NANO, "p", 10)
+        big(BEAM_MINI, "p", 10)
     models.close()
     big.close()
 
@@ -189,13 +192,13 @@ def test_coverage_counts_the_source_windows_in_the_block(conversation: Conversat
 
 
 def test_the_estimate_counts_each_part(conversation: Conversation) -> None:
-    both = estimate([conversation], ("memory", "chunks"), ("nano", "mini"), 1)
+    both = estimate([conversation], ("memory", "chunks"), ("mini",), 1)
     assert both.parts["extraction"] == pytest.approx(2 * 0.0005)
     assert both.parts["readers"] > 0 and both.parts["judge"] > 0
     assert both.total == pytest.approx(sum(both.by_conversation.values()))
-    reused = estimate([conversation], ("memory",), ("nano",), 1, capture=False)
+    reused = estimate([conversation], ("memory",), ("mini",), 1, capture=False)
     assert reused.parts["extraction"] == reused.parts["embeddings"] == 0
-    assert reused.parts["judge"] == pytest.approx(both.parts["judge"] / 4)
+    assert reused.parts["judge"] == pytest.approx(both.parts["judge"] / 2)
 
 
 def test_the_longest_worker_takes_the_longest_jobs_first() -> None:

@@ -70,7 +70,6 @@ from bench.e2e import (
 from bench.embed import CACHE_DIR
 from bench.models import (
     BEAM_MINI,
-    BEAM_NANO,
     EMBEDDING_PRICE,
     EXTRACTOR_MAX_TOKENS,
     PRICES,
@@ -83,7 +82,7 @@ from hotmemory import Filter, Memory, Store
 from hotmemory.contract import render_episode
 
 ARMS = ("memory", "chunks")
-READERS = {"nano": BEAM_NANO, "mini": BEAM_MINI}
+READERS = {"mini": BEAM_MINI}
 READER_MAX_TOKENS = 2000
 CONFIG = Config(
     k=30,

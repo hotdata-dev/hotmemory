@@ -221,7 +221,7 @@ Add `--run` to run it. The options are these:
 | `--split` | `100K` or `1M` | `100K` |
 | `--sample` | `smoke`, `a`, or `b` of the `100K` split, or `all` | `smoke` |
 | `--arms` | `memory`, `chunks`, or both, comma-separated | both |
-| `--readers` | `nano` (`gpt-4.1-nano`), `mini` (`gpt-4.1-mini`), or both | both |
+| `--readers` | `mini` (`gpt-4.1-mini`), the one reader | `mini` |
 | `--workers` | conversations at a time, each in its own process | 1 |
 | `--reuse` | read from the kept databases, with no `capture` | off |
 | `--resume` | go on from the rows file of an earlier run | off |
