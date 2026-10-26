@@ -158,9 +158,18 @@ def test_thread_models_sum_every_thread_and_stop_at_the_limit(tmp_path: Path) ->
         thread.join()
     assert models.calls == 4
     assert models.spent == pytest.approx(4 * (1000 * 0.40 + 5 * 1.60) / 1e6)
-    big = ThreadModels(lambda *_, **__: Reply("x", 10_000_000, 0), tmp_path / "r2.sqlite", 0.5)
+    paid: list[str] = []
+
+    def costly(model: str, prompt: str, *_: Any, **__: Any) -> Reply:
+        paid.append(prompt)
+        return Reply("x", 10_000_000, 0)
+
+    big = ThreadModels(costly, tmp_path / "r2.sqlite", 0.5)
     with pytest.raises(SpendLimit):
         big(BEAM_MINI, "p", 10)
+    with pytest.raises(SpendLimit):
+        big(BEAM_MINI, "q", 10)
+    assert paid == ["p"]
     models.close()
     big.close()
 

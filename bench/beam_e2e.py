@@ -196,7 +196,7 @@ class ThreadModels:
     """A `CachedModels` for each thread, over one cache file, with a spend limit.
 
     `spent` and `calls` sum every thread. A call raises SpendLimit once `spent` passes
-    `limit`.
+    `limit`, and makes no model call after that.
     """
 
     def __init__(self, complete: Complete, path: Path, limit: float = float("inf")) -> None:
@@ -221,10 +221,14 @@ class ThreadModels:
             self._local.models = models
             with self._lock:
                 self._all.append(models)
+        self._check()
         reply = models(model, prompt, max_tokens, schema, system)
+        self._check()
+        return reply
+
+    def _check(self) -> None:
         if self.spent > self._limit:
             raise SpendLimit(f"spent ${self.spent:.2f}, over the limit of ${self._limit:.2f}")
-        return reply
 
     @property
     def spent(self) -> float:
