@@ -4,12 +4,16 @@ One row of a split is one conversation: dated batches of user and assistant turn
 probing questions, 2 for each of the 10 abilities. Print the counts of a split with:
 
     uv run --group bench python -m bench.beam --split 1M
+
+With `--split 100K --samples`, it also writes the files of samples A and B.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import json
+import random
 import re
 import statistics
 import urllib.request
@@ -20,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from bench.data import DATA_DIR, sha256
+
+HERE = Path(__file__).resolve().parent
 
 DATA_REVISION = "3205395e897e7318c7b094ef4e6047b9b82dbb03"
 DATA_URL = f"https://huggingface.co/datasets/Mohammadta/BEAM/resolve/{DATA_REVISION}/data/"
@@ -60,6 +66,8 @@ GOLD_FIELDS = {
 }
 """The field of each ability that holds the gold answer."""
 WINDOW_CHARS = 10_000
+SAMPLE_SPLIT = "100K"
+SAMPLE_SIZE = 5
 DATE_FORMAT = "%B-%d-%Y"
 _MARKER = re.compile(r"\s*->->\s*\d+\s*,\s*\d+\s*$")
 _PARAGRAPH = "\n\n"
@@ -337,6 +345,69 @@ def load_split(split: str, directory: Path = DATA_DIR) -> list[Conversation]:
     return load(download(split, directory), SPLITS[split][1])
 
 
+@dataclass(frozen=True)
+class Sample:
+    """A fixed sample of SAMPLE_SPLIT: its file, its seed, and the samples it leaves out."""
+
+    file: str
+    seed: int
+    excludes: tuple[str, ...] = ()
+
+
+SAMPLES = {
+    "a": Sample("bench/sample-beam-a.json", 20261026),
+    "b": Sample("bench/sample-beam-b.json", 20261027, excludes=("a",)),
+}
+
+
+def choose_sample(
+    conversations: Sequence[Conversation],
+    seed: int,
+    exclude: Sequence[str] = (),
+    size: int = SAMPLE_SIZE,
+) -> list[Conversation]:
+    """Return `size` conversations from `size` different domains, drawn with `seed`.
+
+    The draw first picks the domains, then one conversation of each, and leaves out the
+    ids in `exclude`. The result is sorted by id. Raises ValueError if fewer than `size`
+    domains are left.
+    """
+    rng = random.Random(seed)
+    left = [c for c in conversations if c.id not in set(exclude)]
+    domains = sorted({c.domain for c in left})
+    if len(domains) < size:
+        raise ValueError(f"only {len(domains)} domains are left, {size} needed")
+    chosen = []
+    for domain in rng.sample(domains, size):
+        chosen.append(rng.choice(sorted((c for c in left if c.domain == domain), key=_order)))
+    return sorted(chosen, key=_order)
+
+
+def _order(conversation: Conversation) -> tuple[int, str]:
+    """Sort by the conversation id as a number, then as text."""
+    return (int(conversation.id), "") if conversation.id.isdigit() else (0, conversation.id)
+
+
+def sample_ids(
+    name: str, conversations: Sequence[Conversation], root: Path = HERE.parent
+) -> list[str]:
+    """Return the conversation ids of sample `name`, and write its file first if it is missing.
+
+    The file lists each conversation with its domain and its window count. The draw of a
+    sample leaves out every id of the samples that it excludes.
+    """
+    sample = SAMPLES[name]
+    path = root / sample.file
+    if not path.exists():
+        exclude = [i for other in sample.excludes for i in sample_ids(other, conversations, root)]
+        chosen = choose_sample(conversations, sample.seed, exclude)
+        entries = [
+            {"conversation": c.id, "domain": c.domain, "windows": len(c.windows())} for c in chosen
+        ]
+        path.write_text(json.dumps(entries, indent=1) + "\n")
+    return [entry["conversation"] for entry in json.loads(path.read_text())]
+
+
 def counts(conversations: Sequence[Conversation], limit: int = WINDOW_CHARS) -> dict[str, Any]:
     """Return the counts of `conversations`: questions, nuggets, characters, and windows."""
     windows = [conversation.windows(limit) for conversation in conversations]
@@ -373,12 +444,23 @@ def counts(conversations: Sequence[Conversation], limit: int = WINDOW_CHARS) -> 
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Print the counts of one split."""
+    """Print the counts of one split, and write the sample files with `--samples`."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     parser.add_argument("--split", choices=sorted(SPLITS), required=True)
+    parser.add_argument(
+        "--samples",
+        action="store_true",
+        help=f"write the sample files from the {SAMPLE_SPLIT} split if they do not exist",
+    )
     args = parser.parse_args(argv)
-    for name, value in counts(load_split(args.split)).items():
+    conversations = load_split(args.split)
+    for name, value in counts(conversations).items():
         print(f"{name}: {value}")
+    if args.samples:
+        if args.split != SAMPLE_SPLIT:
+            parser.error(f"--samples needs --split {SAMPLE_SPLIT}")
+        for sample in SAMPLES:
+            print(f"sample {sample}: {', '.join(sample_ids(sample, conversations))}")
 
 
 if __name__ == "__main__":

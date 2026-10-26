@@ -9,10 +9,12 @@ from bench.beam import (
     ABILITIES,
     GOLD_FIELDS,
     Conversation,
+    choose_sample,
     counts,
     cut,
     load,
     parse_conversation,
+    sample_ids,
     strip_marker,
 )
 
@@ -175,3 +177,23 @@ def test_counts(conversation: Conversation) -> None:
     assert found["windows"] == 2
     assert found["long_pairs"] == 0
     assert found["domains"] == ["Coding"]
+
+
+def test_a_sample_takes_one_conversation_from_each_of_five_domains(tmp_path: Path) -> None:
+    domains = ["A", "A", "B", "B", "C", "C", "D", "D", "E", "E", "F", "F"]
+    conversations = [
+        parse_conversation({**row(str(i)), "conversation_seed": {"category": domain, "id": i}})
+        for i, domain in enumerate(domains, start=1)
+    ]
+    (tmp_path / "bench").mkdir()
+    a = sample_ids("a", conversations, tmp_path)
+    b = sample_ids("b", conversations, tmp_path)
+    by_id = {c.id: c for c in conversations}
+    assert len(a) == len(b) == 5
+    assert len({by_id[i].domain for i in a}) == 5
+    assert len({by_id[i].domain for i in b}) == 5
+    assert not set(a) & set(b)
+    assert a == sample_ids("a", conversations[::-1], tmp_path)
+    assert choose_sample(conversations, 1) == choose_sample(conversations[::-1], 1)
+    with pytest.raises(ValueError, match="domains are left"):
+        choose_sample(conversations[:8], 1)
